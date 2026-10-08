@@ -5,10 +5,12 @@
   ``version``、截图、``input``，加上只读诊断。界面层次优先写到固定文件
   ``/sdcard/chatx_like_hierarchy.xml`` 再 pull 回来；``--compressed`` 和
   ``dump /dev/tty`` 是回退。别的路径（含 ``window_dump.xml``）仍拒绝。
-  找赞前可以发一次媒体暂停（keyevent 127 / ``media_session dispatch pause``）
-  和画面上半部的轻点，用来让自动播放停下来。仅限 Facebook 的启动照旧。
-  改设置、开关流量、重启、卸载、force-stop 在目录里单独成类，默认拒绝。
-  参数列表、不经本机 shell、每条都有超时。
+  找赞前可以发一次媒体暂停（keyevent 127 / ``media_session dispatch pause``），
+  不再点画面。dump 之后如果前台已经离开信息流（帖子详情或全屏），再按一次返回。
+  仅限 Facebook 的启动照旧。``phone_app_restart`` 才能 force-stop
+  ``com.facebook.katana`` / ``com.facebook.lite``，而且要单独的
+  ``allow_app_restart`` 标志；其它包的 force-stop、改设置、开关流量、重启、卸载
+  仍默认拒绝。参数列表、不经本机 shell、每条都有超时。
 * 默认不拉起 adb server，也不停、不改端口、不改连接模式：先按清点同一套办法用 ``host:version``
   问现有 server；没有 server、或本机 adb 客户端版本和 server 不一致（会触发 server 重启）→ 拒绝。
   agent.json ``adb_manage_server: true``（默认关）时，仅当没有 server 在应答，才允许安装目录里
@@ -27,6 +29,7 @@ from __future__ import annotations
 import base64
 import math
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -47,8 +50,8 @@ from .phones import (
     is_excluded, normalize_excludes, parse_adb_devices, parse_client_version, prepare_adb,
 )
 from .protocol import (
-    CAP_PHONE_OPS_V1, PHONE_TASK_KINDS, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED, TASK_PHONE_KEY,
-    TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP, TASK_PHONE_TEXT,
+    CAP_PHONE_OPS_V1, PHONE_TASK_KINDS, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED, TASK_PHONE_APP_RESTART,
+    TASK_PHONE_KEY, TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP, TASK_PHONE_TEXT,
 )
 
 SCREENCAP_TIMEOUT_SEC = 15
@@ -72,15 +75,56 @@ RunFn = Callable[..., Any]
 
 
 def check_adb_args(args: Sequence[str], *, allow_guarded_writes: bool = False,
-                   allow_experimental_ussd: bool = False) -> None:
+                   allow_experimental_ussd: bool = False,
+                   allow_app_restart: bool = False) -> None:
     """Admit ``args`` or raise PhoneOpError.
 
-    The catalog lives in ``adb_allowlist``. Both extra flags default off.
+    The catalog lives in ``adb_allowlist``. The extra flags default off.
+    ``allow_app_restart`` admits only a Facebook force-stop.
     """
     from .adb_allowlist import admit_adb_args
 
     admit_adb_args(args, allow_guarded_writes=allow_guarded_writes,
-                   allow_experimental_ussd=allow_experimental_ussd)
+                   allow_experimental_ussd=allow_experimental_ussd,
+                   allow_app_restart=allow_app_restart)
+
+
+_FB_PACKAGES = ("com.facebook.katana", "com.facebook.lite")
+_OFF_FEED = (
+    "permalink", "immersive", "fullscreen", "fbchrome",
+    "storyviewer", "videoplayer", "fbshorts", "watchandbrowse",
+)
+_RESUMED_HINT = re.compile(r"mResumedActivity|topResumedActivity|mCurrentFocus|mFocusedApp")
+_COMPONENT = re.compile(r"([A-Za-z][\w.]*)/(\.?[A-Za-z][\w.$]*)")
+_PKG_CHARS = re.compile(r"^[A-Za-z][\w.]*\Z")
+
+
+def parse_resumed_component(text: str) -> Tuple[str, str]:
+    """Package and activity class from a dumpsys activity or window blob."""
+    lines = [line for line in (text or "").splitlines() if _RESUMED_HINT.search(line)]
+    chosen = lines or (text or "").splitlines()
+    found = ("", "")
+    for line in chosen:
+        match = _COMPONENT.search(line)
+        if match is None:
+            continue
+        package, activity = match.group(1), match.group(2)
+        if not _PKG_CHARS.fullmatch(package) or len(package) > 80 or len(activity) > 120:
+            continue
+        found = (package, activity)
+        if package in _FB_PACKAGES:
+            return found
+    return found
+
+
+def off_feed_page(package: str, activity: str) -> bool:
+    """True only when Facebook is positively off the feed (detail or fullscreen)."""
+    if package not in _FB_PACKAGES:
+        return False
+    low = (activity or "").casefold()
+    if not low or "fbmaintab" in low:
+        return False
+    return any(token in low for token in _OFF_FEED)
 
 
 _DUMP_NOISE = (
@@ -251,8 +295,9 @@ class PhoneOps:
         return [CAP_PHONE_OPS_V1] if self.enabled else []
 
     # ── adb ──
-    def _adb(self, adb: str, args: Sequence[str], timeout: float) -> bytes:
-        check_adb_args(args)
+    def _adb(self, adb: str, args: Sequence[str], timeout: float, *,
+             allow_app_restart: bool = False) -> bytes:
+        check_adb_args(args, allow_app_restart=allow_app_restart)
         proc = (self._run or subprocess.run)([adb, *args], **_run_kwargs(timeout))
         rc = int(getattr(proc, "returncode", 1) or 0)
         out = getattr(proc, "stdout", b"") or b""
@@ -371,6 +416,12 @@ class PhoneOps:
         except PhoneOpError:
             return dict(blank)
         self._settle_autoplay(adb, serial)
+        try:
+            return self._dump_plan(adb, serial)
+        finally:
+            self._recover_off_feed(adb, serial)
+
+    def _dump_plan(self, adb: str, serial: str) -> Dict[str, Any]:
         plan = (
             ("file", False, 0.0),
             ("file", False, 0.35),
@@ -408,11 +459,10 @@ class PhoneOps:
         }
 
     def _settle_autoplay(self, adb: str, serial: str) -> None:
-        """Pause an autoplaying feed once. Failures do not abort the dump.
+        """Pause an autoplaying feed with media keys only. Failures do not abort the dump.
 
-        Media keys often do nothing inside Facebook, so one light tap on the
-        upper-middle of the last screenshot is the practical pause. It is not
-        a Like tap: the action bar sits far lower.
+        A tap on the upper half of the last screenshot used to open a post, so
+        the next probe could not see the feed. That tap is gone.
         """
         commands = (
             ("-s", serial, "shell", "cmd", "media_session", "dispatch", "pause"),
@@ -420,19 +470,42 @@ class PhoneOps:
         )
         for args in commands:
             self._paced_capture(adb, serial, args, HIERARCHY_PAUSE_TIMEOUT_SEC)
-        size = self._screen.get(serial)
-        if size and len(size) == 2:
-            width, height = size
-            if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
-                x = width // 2
-                y = int(height * 0.28)
-                self._paced_capture(
-                    adb, serial,
-                    ("-s", serial, "shell", "input", "tap", str(x), str(y)),
-                    HIERARCHY_PAUSE_TIMEOUT_SEC,
-                )
         self._sleep(HIERARCHY_SETTLE_SEC)
         self._last_op[serial] = self._clock()
+
+    def _recover_off_feed(self, adb: str, serial: str) -> None:
+        """Press Back once when the dump left Facebook on a post or a fullscreen page.
+
+        The main tab, an unknown page, and a non-Facebook window are left alone.
+        One press only, after the dump retries, not between them.
+        """
+        try:
+            found = self.read_foreground(serial)
+        except Exception:
+            return
+        if off_feed_page(found.get("package") or "", found.get("activity") or ""):
+            self._paced_capture(
+                adb, serial, ("-s", serial, "shell", "input", "keyevent", "4"),
+                HIERARCHY_PAUSE_TIMEOUT_SEC,
+            )
+
+    def read_foreground(self, serial: str) -> Dict[str, str]:
+        """Resumed package and activity. Empty strings on failure.
+
+        Does not take the phone lock. A caller that already holds the lock
+        (a like flow that just failed its login check) may call this directly.
+        """
+        blank = {"package": "", "activity": ""}
+        try:
+            adb = self._ready_adb()
+        except PhoneOpError:
+            return dict(blank)
+        _rc, out, err = self._paced_capture(
+            adb, serial, ("-s", serial, "shell", "dumpsys", "activity", "activities"), 6.0,
+        )
+        text = _hierarchy_text(out) or _hierarchy_text(err)
+        package, activity = parse_resumed_component(text)
+        return {"package": package, "activity": activity}
 
     def _paced_capture(self, adb: str, serial: str, args: Sequence[str], timeout: float) -> Tuple[int, bytes, bytes]:
         self._pace(serial)
@@ -551,6 +624,68 @@ class PhoneOps:
         finally:
             if locked:
                 lock.release()
+            self._slots.release()
+
+    def execute_app_restart(self, payload: Any, target: Any) -> Tuple[str, Dict[str, Any], str]:
+        """Force-stop Facebook, then open its launcher. Never raises.
+
+        The caller (the agent) has already refused a live-stream host and the
+        seat machine. This still refuses a protected phone, an excluded phone,
+        and a phone that is not ``state=device``. Only katana and lite.
+        """
+        if not self.enabled:
+            return STATUS_REJECTED, {}, "phone_ops_disabled"
+        try:
+            serial = check_target((target or {}).get("serial") if isinstance(target, dict) else "")
+            if is_excluded(serial, self.excludes):
+                raise PhoneOpError("excluded_phone")
+            p = validate_payload(TASK_PHONE_APP_RESTART, payload)
+        except PhoneOpError as e:
+            return STATUS_REJECTED, {}, e.code
+        if not self._slots.acquire(timeout=LOCK_WAIT_SEC):
+            return STATUS_FAILED, {"serial": serial}, "node_busy"
+        lock = self._lock_for(serial)
+        try:
+            if not lock.acquire(timeout=LOCK_WAIT_SEC):
+                return STATUS_FAILED, {"serial": serial}, "phone_busy"
+            try:
+                from .adb_allowlist import facebook_force_stop_args, facebook_launch_args
+
+                adb = self._ready_adb()
+                self._device(adb, serial)
+                package = p["package"]
+                self._pace(serial)
+                t0 = self._clock()
+                try:
+                    self._adb(
+                        adb, ("-s", serial, "shell") + facebook_force_stop_args(package),
+                        INPUT_TIMEOUT_SEC, allow_app_restart=True,
+                    )
+                    self._last_op[serial] = self._clock()
+                    self._pace(serial)
+                    self._adb(
+                        adb, ("-s", serial, "shell") + facebook_launch_args(package),
+                        INPUT_TIMEOUT_SEC,
+                    )
+                finally:
+                    self._last_op[serial] = self._clock()
+                elapsed = int(max(0.0, self._clock() - t0) * 1000)
+                return STATUS_DONE, {
+                    "serial": serial, "package": package, "stopped": True, "launched": True,
+                    "elapsed_ms": elapsed,
+                }, "ok"
+            finally:
+                lock.release()
+        except PhoneOpError as e:
+            res: Dict[str, Any] = {"serial": serial, "package": p["package"]}
+            if getattr(e, "stderr", ""):
+                res["stderr"] = e.stderr  # type: ignore[attr-defined]
+            return (STATUS_FAILED if e.failed else STATUS_REJECTED), res, e.code
+        except subprocess.TimeoutExpired:
+            return STATUS_FAILED, {"serial": serial, "package": p["package"]}, "adb_timeout"
+        except Exception as e:  # noqa: BLE001 - never raise into the agent loop
+            return STATUS_FAILED, {"serial": serial, "package": p["package"]}, f"error:{type(e).__name__}"
+        finally:
             self._slots.release()
 
     def execute(self, kind: str, payload: Any, target: Any) -> Tuple[str, Dict[str, Any], str]:

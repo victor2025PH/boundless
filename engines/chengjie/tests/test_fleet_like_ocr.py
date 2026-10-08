@@ -12,7 +12,8 @@ import pytest
 
 from src.fleet.like_locate import (
     TEMPLATE_HIGH, TEMPLATE_MED, empty_phrase, extract_blobs, fuse_signals, like_state_changed,
-    label_hits, load_templates, locate_like_row, normalize_ocr_boxes, post_evidence, render_thumb, render_thumb_icon,
+    label_hits, load_templates, locate_like_row, normalize_ocr_boxes, post_evidence, region_hits,
+    render_thumb, render_thumb_icon,
     structure_hits, template_hits, templates_available, text_hits, write_default_templates,
 )
 from src.fleet.phone_flow_rules import validate_flow_payload
@@ -319,6 +320,60 @@ def test_position_needs_a_screenshot_signal():
     assert agreed is not None
     assert "position" in agreed["signals"] and "structure" in agreed["signals"]
     assert "label" not in agreed["signals"]
+
+
+def test_region_inside_the_action_bar_agrees_only_with_a_screenshot():
+    xml = (
+        "<hierarchy>"
+        '<node package="com.facebook.katana" class="android.view.View" clickable="true" '
+        'content-desc="Like" bounds="[48,770][60,800]" />'
+        '<node class="android.view.View" clickable="true" content-desc="Comment" bounds="[240,770][252,800]" />'
+        '<node class="android.view.View" clickable="true" content-desc="Share" bounds="[430,770][442,800]" />'
+        "</hierarchy>"
+    )
+    hits = region_hits(xml, "[40,760][520,820]", 1000, 1000)
+    assert len(hits) == 1 and hits[0]["source"] == "region"
+    assert label_hits(xml, 1000, 1000) == []
+    assert fuse_signals([], [], [], [], [], [], hits) is None
+    label = [_hit("label", hits[0]["x_pm"], hits[0]["y_pm"], label="like")]
+    assert fuse_signals([], [], [], [], label, [], hits) is None
+    position = [_hit("position", hits[0]["x_pm"], hits[0]["y_pm"])]
+    assert fuse_signals([], [], [], [], [], position, hits) is None
+    agreed = fuse_signals([], [], [_hit("structure", hits[0]["x_pm"], hits[0]["y_pm"])], [], [], [], hits)
+    assert agreed is not None and agreed["signals"] == "region+structure"
+
+
+def test_hierarchy_census_does_not_decide_a_tap():
+    xml = (
+        '<hierarchy><node package="com.facebook.katana" class="android.view.View" '
+        'clickable="true" bounds="[10,10][18,40]" />'
+        '<node class="android.widget.TextView" clickable="false" bounds="[20,10][28,40]" />'
+        "</hierarchy>"
+    )
+    loc = locate_like_row(_frame(), [], xml)
+    assert loc["target"] is None
+    census = loc["diag"]["hierarchy"]
+    assert census["node_count"] == 2
+    assert census["button_count"] == 0
+    assert census["clickable_count"] == 1
+    assert census["row_counts"] == []
+    assert census["top_package"] == "com.facebook.katana"
+    assert census["classes"][0] == "android.view.View"
+    assert loc["diag"]["region_matched"] is False
+    kept = sanitize_phone_result(TASK_PHONE_LIKE, {"like_probe": True, "like_diag": loc["diag"]})
+    assert kept["like_diag"]["hierarchy"]["top_package"] == "com.facebook.katana"
+    assert kept["like_diag"]["hierarchy"]["node_count"] == 2
+    dirty = sanitize_phone_result(TASK_PHONE_LIKE, {
+        "like_probe": True,
+        "like_diag": {
+            **loc["diag"],
+            "secret": "nope",
+            "hierarchy": {**census, "top_package": "com.facebook.katana/evil", "classes": ["not a class"]},
+        },
+    })
+    assert dirty["like_diag"]["hierarchy"]["top_package"] == ""
+    assert dirty["like_diag"]["hierarchy"]["classes"] == []
+    assert "secret" not in json.dumps(dirty["like_diag"])
 
 
 def test_painted_thumb_agrees_with_its_accessibility_label():
@@ -850,7 +905,7 @@ def test_like_probe_pairs_the_dump_label_with_the_template():
     assert "S1" not in json.dumps(diag)
 
 
-def test_dump_label_on_a_square_does_not_tap():
+def test_like_node_inside_the_bar_taps_once_and_still_needs_verification():
     frame = _icon_only_bar(thumb=False)
     xml = _hierarchy([("", "Like", "", "[16,242][46,272]")])
     adb = _HierarchyAdb(frame, xml)
@@ -859,13 +914,16 @@ def test_dump_label_on_a_square_does_not_tap():
     status, result, detail = flows.execute(
         TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0),
         {"serial": "S1"}, ops=ops)
-    assert (status, detail) == (STATUS_FAILED, "like_row_not_found"), detail
-    assert "like_x" not in result
+    assert (status, detail) == (STATUS_FAILED, "not_verified"), detail
+    assert "region" in result["like_signals"] and "structure" in result["like_signals"]
     assert "like_diag" not in result
+    tx = str(result["like_x"] * W // 1000)
+    ty = str(result["like_y"] * H // 1000)
+    assert sum(1 for a in _taps(adb.actions()) if (a[-2], a[-1]) == (tx, ty)) == 1
     assert all((a[-2], a[-1]) != _deprecated_tap() for a in _taps(adb.actions()))
 
 
-def test_like_probe_on_a_miss_names_the_label_and_the_weak_template():
+def test_like_probe_names_a_region_hit_without_tapping():
     frame = _icon_only_bar(thumb=False)
     xml = _hierarchy([("", "Like", "", "[16,242][46,272]")])
     adb = _HierarchyAdb(frame, xml)
@@ -874,8 +932,15 @@ def test_like_probe_on_a_miss_names_the_label_and_the_weak_template():
     status, result, detail = flows.execute(
         TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0, like_probe=True),
         {"serial": "S1"}, ops=ops)
-    assert (status, detail) == (STATUS_FAILED, "like_row_not_found"), detail
+    assert (status, detail) == (STATUS_DONE, "like_probe"), detail
+    assert "region" in result["like_signals"] and "structure" in result["like_signals"]
+    tx = str(result["like_x"] * W // 1000)
+    ty = str(result["like_y"] * H // 1000)
+    assert sum(1 for a in _taps(adb.actions()) if (a[-2], a[-1]) == (tx, ty)) == 0
     diag = result["like_diag"]
+    assert diag["region_matched"] is True
+    assert diag["hierarchy"]["node_count"] >= 1
+    assert diag["hierarchy"]["button_count"] >= 1
     assert diag["uiautomator"]["like_found"] is True
     assert diag["uiautomator"]["match"]["by"] == "content-desc"
     assert diag["uiautomator"]["match"]["label"] == "like"

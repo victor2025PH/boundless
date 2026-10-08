@@ -20,13 +20,13 @@ def test_catalog_examples_match_their_category():
     for row in CATALOG:
         found = classify_adb_args(row["example"])
         assert (found.category, found.family) == (row["category"], row["family"]), row["example"]
-        assert row["note"] and row["since"] in {"0.3.7", "0.3.18", "0.3.21"}
+        assert row["note"] and row["since"] in {"0.3.7", "0.3.18", "0.3.21", "0.3.23"}
         families.add(row["family"])
     for required in (
         "dumpsys", "uiautomator", "media_pause", "cmd_connectivity", "cmd_activity", "cmd_package", "settings_get",
         "pm_query", "ping", "connectivity_204", "getprop", "ip", "ifconfig", "wm",
         "am_start_facebook", "ussd_dial", "settings_put", "svc_radio", "reboot",
-        "pm_mutate", "force_stop", "airplane_mode",
+        "pm_mutate", "force_stop", "facebook_force_stop", "airplane_mode",
     ):
         assert required in families
 
@@ -56,7 +56,8 @@ def test_closed_forms_need_their_flag(row):
 @pytest.mark.parametrize("args", DENIED_FOREVER)
 def test_flags_do_not_open_unlisted_forms(args):
     with pytest.raises(PhoneOpError) as err:
-        check_adb_args(args, allow_guarded_writes=True, allow_experimental_ussd=True)
+        check_adb_args(args, allow_guarded_writes=True, allow_experimental_ussd=True,
+                       allow_app_restart=True)
     assert err.value.code == "adb_args_not_allowed"
 
 
@@ -85,8 +86,28 @@ def test_writes_stay_closed_by_default():
         ("-s", "S1", "reboot"),
         ("-s", "S1", "shell", "pm", "uninstall", "com.example.app"),
         ("-s", "S1", "shell", "pm", "clear", "com.example.app"),
-        ("-s", "S1", "shell", "am", "force-stop", "com.facebook.katana"),
+        ("-s", "S1", "shell", "am", "force-stop", "com.example.app"),
     ):
         with pytest.raises(PhoneOpError):
             check_adb_args(args)
         assert classify_adb_args(args).category == "guarded_write"
+
+
+def test_facebook_force_stop_needs_the_app_restart_flag():
+    katana = ("-s", "S1", "shell", "am", "force-stop", "com.facebook.katana")
+    lite = ("-s", "S1", "shell", "cmd", "activity", "force-stop", "com.facebook.lite")
+    other = ("-s", "S1", "shell", "am", "force-stop", "com.example.app")
+    for args in (katana, lite):
+        assert classify_adb_args(args).category == "app_restart"
+        assert classify_adb_args(args).family == "facebook_force_stop"
+        with pytest.raises(PhoneOpError):
+            check_adb_args(args)
+        with pytest.raises(PhoneOpError):
+            check_adb_args(args, allow_guarded_writes=True)
+        check_adb_args(args, allow_app_restart=True)
+    assert classify_adb_args(other).category == "guarded_write"
+    with pytest.raises(PhoneOpError):
+        check_adb_args(other)
+    with pytest.raises(PhoneOpError):
+        check_adb_args(other, allow_app_restart=True)
+    check_adb_args(other, allow_guarded_writes=True)

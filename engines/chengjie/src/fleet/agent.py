@@ -21,6 +21,7 @@
     0.3.19 Facebook 点赞/评论/关注/发帖按账号限速（compliance.yaml）。超出上限、间隔太短或不在活跃时段就跳过。like_probe 不计数。金丝雀版本是 0.3.19。
     0.3.20 like_probe 带回每个信号的诊断（无障碍标签、动作条属性、模板分、结构是否命中），只含节点文字属性，不含截图、不含序列号。图标动作条放宽标签 / resource-id / 最左按钮，仍要两个信号一致并且点完复核。手机任务的错误文字在回执前去掉原始序列号，改成壁纸号或打码。公开 latest 仍是 0.3.7。
     0.3.21 找赞前先让信息流停一下（媒体暂停加画面上半部一次轻点），uiautomator 改成写到固定文件再拉回来，失败就短退避重试，最后才用 --compressed 和 stdout。like_diag 多了 dump 报错首行、重试次数、文件还是 stdout、是否 compressed，以及 shape 分和动作条行 bounds。两信号一致才点、like_probe 只定位、dry_run 不碰手机都不变。公开 latest 仍是 0.3.7。
+    0.3.23 去掉 dump 前的上半部轻点，只留媒体暂停。dump 之后如果前台已经离开信息流，按一次返回。like_diag 增加层级计数，并用截图动作条里的节点作为第二路信号；两信号一致才点、点完复核、like_probe 只定位、dry_run 不碰手机都不变。新增 phone_app_restart：只对可操作池里的手机 force-stop 再打开 Facebook，直播机、173 和受保护手机拒绝。登录检查失败时回执带前台包名和 activity。公开 latest 仍是 0.3.7。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -73,7 +74,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .login_qr import safe_qr_data_url, start_payload as login_start_payload, valid_login_id, valid_platform
 from .detect import (
     LIVE_STREAM_PORTS, detect_instances, is_blocked_live_port, is_live_port_url, is_live_stream_host, is_loopback_url,
-    sanitize_instances, url_port,
+    is_seat_173, sanitize_instances, url_port,
 )
 from .identity import (
     ORIGIN_GENERATED, StateDirLockError, _is_reparse, assign_owner_admins, default_state_dir,
@@ -93,7 +94,7 @@ from .service import (
 from .updater import apply_upgrade
 from .protocol import (
     CAP_PHONE_FLOWS_V1, CAP_PHONE_FLOWS_V2, CAP_PHONE_OPS_V1, DEFAULT_HEARTBEAT_SEC, MAX_LONGPOLL_WAIT_SEC,
-    PHONE_FLOW_KINDS, PHONE_SESSION_KINDS,
+    PHONE_APP_KINDS, PHONE_FLOW_KINDS, PHONE_SESSION_KINDS,
     PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
     TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PING, TASK_PULL_OVERVIEW, TASK_PUSH_CONFIG,
     TASK_ENABLE_PHONE_ADB, TASK_NET_HEALTH, TASK_OPERATOR_ALERT_DIAG, TASK_RESTART_INSTANCE,
@@ -102,7 +103,7 @@ from .protocol import (
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.21"
+AGENT_VERSION = "0.3.23"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).
@@ -943,7 +944,28 @@ class NodeAgent:
                 cleaned[key] = scrub_phone_error_text(cleaned[key], serial=serial, wallpaper=wallpaper)
         if isinstance(cleaned.get("like_diag"), dict):
             cleaned["like_diag"] = scrub_phone_tree(cleaned["like_diag"], serial=serial, wallpaper=wallpaper)
+        if isinstance(cleaned.get("foreground"), dict):
+            cleaned["foreground"] = scrub_phone_tree(cleaned["foreground"], serial=serial, wallpaper=wallpaper)
         return cleaned, detail_out
+
+    def _audit_app_restart(self, target: Any, payload: Any, result: Any, detail: str) -> None:
+        """Who already lives on the task row. This line names the phone by wallpaper."""
+        serial = ""
+        if isinstance(target, dict):
+            serial = str(target.get("serial") or "").strip()
+        if not serial and isinstance(result, dict):
+            serial = str(result.get("serial") or "").strip()
+        wall = self._phone_wallpaper(target, result, serial)
+        phone = wall if wall else "[redacted]"
+        package = ""
+        for src in (result if isinstance(result, dict) else None, payload if isinstance(payload, dict) else None):
+            if isinstance(src, dict) and src.get("package") in ("com.facebook.katana", "com.facebook.lite"):
+                package = str(src["package"])
+                break
+        logger.info(
+            "[agent] app_restart phone=%s package=%s result=%s",
+            phone, package, str(detail or "")[:80],
+        )
 
     def _phone_caps(self) -> List[str]:
         """低层能力来自当前 phone_ops；社交能力只有两边都开着才加。"""
@@ -1100,6 +1122,18 @@ class NodeAgent:
             exp = float(task.get("expires_at") or 0)
             if exp and self.clock() > exp:
                 return STATUS_REJECTED, {}, "expired_on_arrival"
+            if kind in PHONE_APP_KINDS:
+                if is_live_stream_host(self.cfg.state_dir):
+                    self._audit_app_restart(target, payload, {}, "live_stream_host")
+                    return STATUS_REJECTED, {}, "live_stream_host"
+                if is_seat_173(host_name()):
+                    self._audit_app_restart(target, payload, {}, "seat_173")
+                    return STATUS_REJECTED, {}, "seat_173"
+                status, result, detail = self.phone_ops.execute_app_restart(payload, target)
+                self._note_phone_action(target, result, status)
+                result, detail = self._scrub_phone_report(target, result, detail)
+                self._audit_app_restart(target, payload, result, detail)
+                return status, result, detail
             if kind in PHONE_FLOW_KINDS or kind in PHONE_SESSION_KINDS:
                 status, result, detail = self.phone_flows.execute(kind, payload, target, ops=self.phone_ops)
                 self._note_phone_action(target, result, status)

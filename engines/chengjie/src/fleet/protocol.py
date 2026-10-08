@@ -299,3 +299,17 @@ TASK_KINDS = TASK_KINDS + ((TASK_NET_HEALTH,) if TASK_NET_HEALTH not in TASK_KIN
 TASK_PRIORITY.setdefault(TASK_NET_HEALTH, 8)
 
 __all__ += ["TASK_NET_HEALTH"]
+
+
+# ── 0.3.23 受控重启应用（进 REMOTE_PHONE_KINDS，仍要求已有 phone_ops_v1）──
+# 不进 PHONE_TASK_KINDS，避免塞进单步执行器。通用 /tasks 拒绝，只走手机端点。
+# 只停再打开 Facebook。直播机、173、受保护手机在主控和节点两侧都拒绝。
+TASK_PHONE_APP_RESTART = "phone_app_restart"
+PHONE_APP_KINDS = (TASK_PHONE_APP_RESTART,)
+
+TASK_KINDS = TASK_KINDS + tuple(k for k in PHONE_APP_KINDS if k not in TASK_KINDS)
+TASK_PRIORITY.update({k: 6 for k in PHONE_APP_KINDS})
+TASK_REQUIRED_CAPS.update({k: CAP_PHONE_OPS_V1 for k in PHONE_APP_KINDS})
+REMOTE_PHONE_KINDS = REMOTE_PHONE_KINDS + PHONE_APP_KINDS
+
+__all__ += ["TASK_PHONE_APP_RESTART", "PHONE_APP_KINDS"]

@@ -9,11 +9,16 @@ One catalog, two doors:
   that file only), and ``app_launch`` (``am start`` that only brings
   Facebook to the foreground).
 * **Closed unless the caller passes a flag**: ``guarded_write`` (settings
-  changes, radio toggles, reboot, uninstall/clear, force-stop) needs
-  ``allow_guarded_writes=True``. ``experimental_ussd`` (one USSD dial shape)
-  needs ``allow_experimental_ussd=True``. No fleet task passes the
-  guarded-write flag. ``net_health`` passes the USSD flag only when
-  ``net_health_ussd_enabled`` is JSON true, and it never passes the write flag.
+  changes, radio toggles, reboot, uninstall/clear, force-stop of any package
+  that is not Facebook) needs ``allow_guarded_writes=True``.
+  ``experimental_ussd`` (one USSD dial shape) needs
+  ``allow_experimental_ussd=True``. ``app_restart`` (``am force-stop`` of
+  ``com.facebook.katana`` or ``com.facebook.lite`` only) needs
+  ``allow_app_restart=True``. No fleet task passes the guarded-write flag.
+  ``phone_app_restart`` is the only task that passes the app-restart flag,
+  and only for those two packages. ``net_health`` passes the USSD flag only
+  when ``net_health_ussd_enabled`` is JSON true, and it never passes either
+  write flag.
 
 Everything else is denied, including when both flags are on. Arguments are
 matched as tuples. Callers must use ``shell=False`` so a matched form cannot
@@ -235,6 +240,13 @@ def _force_stop(args: Tuple[str, ...]) -> bool:
     return len(args) == 4 and args[:3] == ("cmd", "activity", "force-stop") and _pkg(args[3])
 
 
+def _facebook_force_stop(args: Tuple[str, ...]) -> bool:
+    """Force-stop of katana or lite only. Every other package stays guarded."""
+    if len(args) == 3 and args[0] == "am" and args[1] == "force-stop":
+        return args[2] in _FB
+    return len(args) == 4 and args[:3] == ("cmd", "activity", "force-stop") and args[3] in _FB
+
+
 def _component_ok(comp: str) -> bool:
     if comp.count("/") != 1:
         return False
@@ -348,6 +360,8 @@ def _classify_shell(args: Tuple[str, ...]) -> AdbClass:
         return AdbClass("guarded_write", "pm_mutate")
     if _cmd_package_write(args):
         return AdbClass("guarded_write", "cmd_package_mutate")
+    if _facebook_force_stop(args):
+        return AdbClass("app_restart", "facebook_force_stop")
     if _force_stop(args):
         return AdbClass("guarded_write", "force_stop")
     if args in _REBOOT:
@@ -421,11 +435,14 @@ def classify_adb_args(args: Sequence[str]) -> AdbClass:
 
 
 def admit_adb_args(args: Sequence[str], *, allow_guarded_writes: bool = False,
-                   allow_experimental_ussd: bool = False) -> AdbClass:
+                   allow_experimental_ussd: bool = False,
+                   allow_app_restart: bool = False) -> AdbClass:
     """Raise ``PhoneOpError('adb_args_not_allowed')`` unless ``args`` may run.
 
-    Guarded writes and the USSD dial stay closed unless the matching flag is
-    true. Flags do not admit forms that are not in the catalog.
+    Guarded writes, the USSD dial, and Facebook force-stop stay closed unless
+    the matching flag is true. ``allow_app_restart`` does not open
+    ``guarded_write``. ``allow_guarded_writes`` does not open Facebook
+    force-stop. Flags do not admit forms that are not in the catalog.
     """
     found = classify_adb_args(args)
     if found.category in _OPEN:
@@ -433,6 +450,8 @@ def admit_adb_args(args: Sequence[str], *, allow_guarded_writes: bool = False,
     if found.category == "guarded_write" and allow_guarded_writes is True:
         return found
     if found.category == "experimental_ussd" and allow_experimental_ussd is True:
+        return found
+    if found.category == "app_restart" and allow_app_restart is True:
         return found
     raise PhoneOpError("adb_args_not_allowed")
 
@@ -443,6 +462,13 @@ def facebook_launch_args(package: str) -> Tuple[str, ...]:
         raise PhoneOpError("adb_args_not_allowed")
     return ("am", "start", "-a", "android.intent.action.MAIN",
             "-c", "android.intent.category.LAUNCHER", "-p", package)
+
+
+def facebook_force_stop_args(package: str) -> Tuple[str, ...]:
+    """Exact ``am force-stop`` argv for katana or lite. No other package."""
+    if package not in _FB:
+        raise PhoneOpError("adb_args_not_allowed")
+    return ("am", "force-stop", package)
 
 
 # Concrete argv examples. Tests require classify_adb_args(example) to match.
@@ -661,11 +687,17 @@ CATALOG: Tuple[Dict[str, Any], ...] = (
      "example": ("-s", "S1", "shell", "cmd", "package", "clear", "com.example.app"),
      "note": "Clears a package via cmd. Closed by default."},
     {"since": "0.3.18", "category": "guarded_write", "family": "force_stop",
-     "example": ("-s", "S1", "shell", "am", "force-stop", "com.facebook.katana"),
-     "note": "Force-stops an app. Closed by default. Not used by net_health."},
+     "example": ("-s", "S1", "shell", "am", "force-stop", "com.example.app"),
+     "note": "Force-stops an app that is not Facebook. Closed unless allow_guarded_writes is true. No fleet task passes that flag."},
     {"since": "0.3.18", "category": "guarded_write", "family": "force_stop",
-     "example": ("-s", "S1", "shell", "cmd", "activity", "force-stop", "com.facebook.katana"),
-     "note": "Force-stop via cmd activity. Closed by default."},
+     "example": ("-s", "S1", "shell", "cmd", "activity", "force-stop", "com.example.app"),
+     "note": "Force-stop via cmd activity for a non-Facebook package. Closed by default."},
+    {"since": "0.3.23", "category": "app_restart", "family": "facebook_force_stop",
+     "example": ("-s", "S1", "shell", "am", "force-stop", "com.facebook.katana"),
+     "note": "Force-stops Facebook (katana or lite) only. Closed unless allow_app_restart is true. phone_app_restart is the only task that sets that flag. allow_guarded_writes does not open this form."},
+    {"since": "0.3.23", "category": "app_restart", "family": "facebook_force_stop",
+     "example": ("-s", "S1", "shell", "cmd", "activity", "force-stop", "com.facebook.lite"),
+     "note": "Force-stop of Facebook Lite via cmd activity. Same closed app_restart door. Other packages stay guarded_write."},
     {"since": "0.3.18", "category": "guarded_write", "family": "airplane_mode",
      "example": ("-s", "S1", "shell", "cmd", "connectivity", "airplane-mode", "enable"),
      "note": "Turns airplane mode on. The no-argument query is read-only; enable and disable are this closed family."},

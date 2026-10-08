@@ -110,6 +110,23 @@ def is_live_stream_host(state_dir: Optional[Path] = None) -> bool:
     return False
 
 
+_SEAT_173 = frozenset({"173", "yuyan-173", "192.168.0.173"})
+
+
+def is_seat_173(*labels: Any) -> bool:
+    """True for the seat machine 173.
+
+    Exact names are ``173``, ``yuyan-173``, and ``192.168.0.173``. A hostname
+    that ends with ``-173`` matches too. A longer name that only contains
+    those digits does not.
+    """
+    for raw in labels:
+        text = str(raw or "").strip().lower()
+        if text in _SEAT_173 or text.endswith("-173"):
+            return True
+    return False
+
+
 def sanitize_instances(items: Any, *, limit: int = 8) -> List[Dict[str, str]]:
     """给主控看的实例摘要：只有回环 URL，没有 token / 配置路径。"""
     out: List[Dict[str, str]] = []

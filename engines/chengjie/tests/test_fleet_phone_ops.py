@@ -266,14 +266,18 @@ def test_adb_allowlist_rejects_everything_else(args):
 class _DumpScript(FakeAdb):
     """One outcome per dump. A missing later step repeats the last one."""
 
-    def __init__(self, steps):
+    def __init__(self, steps, foreground=b""):
         super().__init__()
         self.steps = list(steps)
         self.dump_n = 0
         self.pending = None
+        self.foreground = foreground
 
     def __call__(self, cmd, **kw):
         args = tuple(cmd[1:])
+        if len(args) >= 6 and args[2:6] == ("shell", "dumpsys", "activity", "activities"):
+            self.calls.append(args)
+            return _NS(returncode=0, stdout=self.foreground, stderr=b"")
         if len(args) >= 5 and args[2:5] == ("shell", "uiautomator", "dump"):
             self.calls.append(args)
             step = self.steps[min(self.dump_n, len(self.steps) - 1)]
@@ -294,8 +298,8 @@ _HIER_XML = b"<hierarchy rotation=\"0\"></hierarchy>"
 _DUMPED_TO = b"UI hierchary dumped to: /sdcard/chatx_like_hierarchy.xml\n"
 
 
-def _read_hierarchy(steps, *, screen=(180, 400)):
-    adb = _DumpScript(steps)
+def _read_hierarchy(steps, *, screen=(180, 400), foreground=b""):
+    adb = _DumpScript(steps, foreground=foreground)
     ops, _fake, _slept = _ops(adb=adb)
     if screen:
         ops._screen["S1"] = screen
@@ -312,8 +316,32 @@ def test_hierarchy_pulls_the_fixed_file_and_pauses_once():
     assert sum(1 for c in adb.calls if c[2:] == ("shell", "input", "keyevent", "127")) == 1
     assert sum(1 for c in adb.calls if c[2:] == ("shell", "cmd", "media_session", "dispatch", "pause")) == 1
     taps = [c for c in adb.calls if len(c) > 4 and c[4] == "tap"]
-    assert taps == [("-s", "S1", "shell", "input", "tap", "90", "112")]
+    assert taps == []
     assert not any("rm" in c for c in adb.calls)
+
+
+def test_hierarchy_presses_back_once_when_the_page_left_the_feed():
+    permalink = b"mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.PermalinkActivity t9}\n"
+    got, adb = _read_hierarchy([{"out": _DUMPED_TO, "file": _HIER_XML}], foreground=permalink)
+    assert got["xml"].startswith("<hierarchy")
+    assert sum(1 for c in adb.calls if c[2:] == ("shell", "input", "keyevent", "4")) == 1
+    assert sum(1 for c in adb.calls if c[2:] == ("shell", "input", "keyevent", "127")) == 1
+    assert not any(len(c) > 4 and c[4] == "tap" for c in adb.calls)
+    idle = {"rc": 1, "err": b"ERROR: could not get idle state\n", "file": None}
+    _got, retried = _read_hierarchy([idle, idle, {"out": _DUMPED_TO, "file": _HIER_XML}], foreground=permalink)
+    assert sum(1 for c in retried.calls if c[2:] == ("shell", "input", "keyevent", "4")) == 1
+
+
+def test_hierarchy_does_not_press_back_on_the_feed_or_an_unknown_page():
+    feed = b"mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.FbMainTabActivity t9}\n"
+    _got, adb = _read_hierarchy([{"out": _DUMPED_TO, "file": _HIER_XML}], foreground=feed)
+    assert not any(c[2:] == ("shell", "input", "keyevent", "4") for c in adb.calls)
+    unknown = b"mResumedActivity: ActivityRecord{abc u0 com.facebook.katana/.SomeNewActivity t9}\n"
+    _got, adb = _read_hierarchy([{"out": _DUMPED_TO, "file": _HIER_XML}], foreground=unknown)
+    assert not any(c[2:] == ("shell", "input", "keyevent", "4") for c in adb.calls)
+    other = b"mCurrentFocus=Window{abc u0 com.android.systemui/.Something}\n"
+    _got, adb = _read_hierarchy([{"out": _DUMPED_TO, "file": _HIER_XML}], foreground=other)
+    assert not any(c[2:] == ("shell", "input", "keyevent", "4") for c in adb.calls)
 
 
 def test_hierarchy_keeps_xml_written_before_the_idle_error():
@@ -806,6 +834,112 @@ def test_actor_header_recorded_for_audit(st):
     audit = c.get(f"/api/fleet/tasks?node_id={nid}&kind={TASK_PHONE_TAP}", headers=OP).json()["tasks"]
     assert [(x["created_by"], x["target"]["serial"], x["payload"]) for x in audit] == [
         ("operator via zhituo:alicescript", "S1", {"x": 1, "y": 2})]
+
+
+def test_app_restart_endpoint_queues_only_facebook_on_an_operable_phone(st, caplog):
+    import logging
+
+    c = _client(st)
+    nid = _capable(st)
+    caplog.set_level(logging.INFO)
+    r = c.post(f"/api/fleet/nodes/{nid}/phones/S1/app_restart", headers=OP, json={})
+    assert r.status_code == 200, r.text
+    t = r.json()["task"]
+    assert t["kind"] == "phone_app_restart"
+    assert t["payload"] == {"package": "com.facebook.katana"}
+    assert t["target"] == {"serial": "S1"}
+    assert t["created_by"] == "operator"
+    logged = [rec.getMessage() for rec in caplog.records if rec.getMessage().startswith("app_restart")]
+    assert logged and "S1" not in logged[0] and "com.facebook.katana" in logged[0] and "[redacted]" in logged[0]
+    lite = c.post(f"/api/fleet/nodes/{nid}/phones/S1/app_restart", headers=OP,
+                  json={"package": "com.facebook.lite"}).json()["task"]
+    assert lite["payload"] == {"package": "com.facebook.lite"}
+    bad = c.post(f"/api/fleet/nodes/{nid}/phones/S1/app_restart", headers=OP, json={"package": "com.android.settings"})
+    assert (bad.status_code, bad.json()["detail"]) == (400, "bad_package")
+    generic = c.post(f"/api/fleet/nodes/{nid}/tasks", headers=OP, json={"kind": "phone_app_restart", "payload": {}})
+    assert (generic.status_code, generic.json()["detail"]) == (400, "phone_ops_use_phones_endpoint")
+
+
+def test_app_restart_refuses_a_phone_outside_the_operable_pool(st):
+    c = _client(st)
+    nid = _capable(st)
+    missing = c.post(f"/api/fleet/nodes/{nid}/phones/NOPE/app_restart", headers=OP, json={})
+    assert (missing.status_code, missing.json()["detail"]) == (409, "phone_not_reported")
+    offline = c.post(f"/api/fleet/nodes/{nid}/phones/U1/app_restart", headers=OP, json={})
+    assert (offline.status_code, offline.json()["detail"]) == (409, "phone_not_ready:unauthorized")
+    protected = c.post(f"/api/fleet/nodes/{nid}/phones/3B1F4KE5MS140P4X/app_restart", headers=OP, json={})
+    assert (protected.status_code, protected.json()["detail"]) == (403, "protected_phone")
+
+
+def test_app_restart_refuses_live_stream_and_seat_173(st):
+    c = _client(st)
+    live = _enroll(st, mid="m-live", group_name="直播")["node_id"]
+    import time as _t
+    st.heartbeat(live, {"agent_version": "0.3.23", "proto_version": 1, "caps": [CAP_PHONE_OPS_V1], "phones": PHONES_HB},
+                 now=_t.time())
+    st.set_remote_ops(live, True)
+    r = c.post(f"/api/fleet/nodes/{live}/phones/S1/app_restart", headers=OP, json={})
+    assert (r.status_code, r.json()["detail"]) == (409, "live_stream_host")
+    seat = _capable(st, mid="m-173")
+    st._conn.execute("UPDATE nodes SET host_name=? WHERE node_id=?", ("YUYAN-173", seat))
+    st._conn.commit()
+    r = c.post(f"/api/fleet/nodes/{seat}/phones/S1/app_restart", headers=OP, json={})
+    assert (r.status_code, r.json()["detail"]) == (409, "seat_173")
+
+
+def test_agent_app_restart_stops_then_launches_and_scrubs_the_serial(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from src.fleet import agent as agent_mod
+    from src.fleet.protocol import STATUS_DONE, STATUS_REJECTED
+
+    serial = "TESTSERIAL01"
+    monkeypatch.setattr(agent_mod, "is_live_stream_host", lambda state_dir=None: False)
+    monkeypatch.setattr(agent_mod, "host_name", lambda: "PC-A")
+    cfg = agent_mod.AgentConfig(tmp_path / "fleet")
+    cfg.data["wallpaper_map"] = {serial: "09"}
+    ag = agent_mod.NodeAgent(cfg, http=lambda *a, **k: (200, {}), app_version="t")
+    devices = (
+        "List of devices attached\n"
+        f"{serial}             device product:g model:23106RN0DA device:gale transport_id:1\n"
+    )
+    fake = FakeAdb(devices=devices)
+    ag.phone_ops = PhoneOps(run=fake, locate=lambda _p: "adb", server_version=lambda _port: 41,
+                            clock=lambda: 100.0, sleep=lambda _s: None)
+    caplog.set_level(logging.INFO)
+    status, result, detail = ag.execute({
+        "kind": "phone_app_restart",
+        "payload": {},
+        "target": {"serial": serial},
+    })
+    assert (status, detail) == (STATUS_DONE, "ok")
+    assert result["package"] == "com.facebook.katana" and result["stopped"] is True and result["launched"] is True
+    shells = [c[2:] for c in fake.actions()]
+    assert ("shell", "am", "force-stop", "com.facebook.katana") in shells
+    assert ("shell", "am", "start", "-a", "android.intent.action.MAIN",
+            "-c", "android.intent.category.LAUNCHER", "-p", "com.facebook.katana") in shells
+    logged = [rec.getMessage() for rec in caplog.records if "app_restart" in rec.getMessage()]
+    assert logged and serial not in " ".join(logged) and "09" in logged[-1]
+    n = len(fake.calls)
+    monkeypatch.setattr(agent_mod, "is_live_stream_host", lambda state_dir=None: True)
+    status, _result, detail = ag.execute({
+        "kind": "phone_app_restart", "payload": {"package": "com.facebook.katana"},
+        "target": {"serial": serial},
+    })
+    assert (status, detail) == (STATUS_REJECTED, "live_stream_host")
+    assert len(fake.calls) == n
+    monkeypatch.setattr(agent_mod, "is_live_stream_host", lambda state_dir=None: False)
+    monkeypatch.setattr(agent_mod, "host_name", lambda: "YUYAN-173")
+    status, _result, detail = ag.execute({
+        "kind": "phone_app_restart", "payload": {"package": "com.facebook.lite"},
+        "target": {"serial": serial},
+    })
+    assert (status, detail) == (STATUS_REJECTED, "seat_173")
+    assert len(fake.calls) == n
+    assert ag.phone_ops.execute_app_restart(
+        {"package": "com.facebook.katana"}, {"serial": "3B1F4KE5MS140P4X"},
+    )[2] == "protected_phone"
+    assert len(fake.calls) == n
 
 
 # ── 5) agent.json 热加载 / save 不盖手工改动 / 单文件孤儿进程 ──────────────────

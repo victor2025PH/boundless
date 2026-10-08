@@ -53,11 +53,12 @@ from src.fleet.protocol import (
 from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
 from src.fleet.social_pace import read_optional_labels
 from src.fleet.phone_rules import (
-    PhoneOpError, check_target, kind_for_op, sanitize_phone_result, scrub_phone_error_text, strip_png,
-    validate_payload,
+    PhoneOpError, app_restart_host_block, check_target, kind_for_op, sanitize_phone_result,
+    scrub_phone_error_text, strip_png, validate_payload,
 )
 from src.fleet.protocol import (
-    PHONE_FLOW_KINDS, PHONE_FLOW_TTL_SEC, PHONE_SESSION_KINDS, PHONE_TASK_KINDS, PHONE_TASK_TTL_SEC,
+    PHONE_APP_KINDS, PHONE_FLOW_KINDS, PHONE_FLOW_TTL_SEC, PHONE_SESSION_KINDS, PHONE_TASK_KINDS,
+    PHONE_TASK_TTL_SEC, TASK_PHONE_APP_RESTART,
 )
 from src.fleet.roompack import build_room_pack
 from src.fleet.store import FleetStore, get_store, resolve_download, resolve_fleet_cfg
@@ -333,7 +334,7 @@ def register_routes(app, ctx) -> None:
         result = body.get("result") if isinstance(body.get("result"), dict) else None
         detail = str(body.get("detail") or "")
         known = st.get_task(tid)
-        phone_kinds = (*PHONE_TASK_KINDS, *PHONE_FLOW_KINDS, *PHONE_SESSION_KINDS)
+        phone_kinds = (*PHONE_TASK_KINDS, *PHONE_FLOW_KINDS, *PHONE_SESSION_KINDS, *PHONE_APP_KINDS)
         phone_kind = known is not None and known.get("kind") in phone_kinds
         serial = ""
         wallpaper = ""
@@ -487,7 +488,7 @@ def register_routes(app, ctx) -> None:
         refusal = st.task_refusal(node_id, kind)
         if refusal.startswith("node_lacks_cap:"):
             raise HTTPException(status_code=409, detail=refusal)
-        if kind in PHONE_TASK_KINDS:
+        if kind in PHONE_TASK_KINDS or kind in PHONE_APP_KINDS:
             # 手机操作只走 /api/fleet/nodes/{id}/phones/{serial}/{op}：那里校验参数、目标和受保护手机
             raise HTTPException(status_code=400, detail="phone_ops_use_phones_endpoint")
         if kind in PHONE_FLOW_KINDS or kind in PHONE_SESSION_KINDS:
@@ -530,8 +531,17 @@ def register_routes(app, ctx) -> None:
         reason = phone_op_block_reason(node, target_serial)
         if reason:
             raise HTTPException(status_code=409, detail=reason)
+        if kind == TASK_PHONE_APP_RESTART:
+            host_block = app_restart_host_block(node)
+            if host_block:
+                raise HTTPException(status_code=409, detail=host_block)
         rec = st.enqueue(node_id, kind, payload=payload, target={"serial": target_serial},
                          ttl_sec=PHONE_TASK_TTL_SEC, created_by=_actor(request))
+        if kind == TASK_PHONE_APP_RESTART and rec is not None:
+            logger.info(
+                "app_restart actor=%s phone=%s package=%s task=%s",
+                rec.get("created_by") or "", "[redacted]", payload.get("package") or "", rec.get("task_id") or "",
+            )
         if rec is None:
             raise HTTPException(status_code=409, detail="enqueue_refused")
         return {"ok": True, "task": rec}
