@@ -216,7 +216,9 @@ _BASELINE = """
 /api/kb/duplicates	GET
 /api/kb/embed-all	POST
 /api/kb/embed-coverage	GET
+/api/kb/embed-health	GET
 /api/kb/embed-progress	GET
+/api/kb/embed-retry	POST
 /api/kb/embed-stats	GET
 /api/kb/entries	GET
 /api/kb/entries	POST
