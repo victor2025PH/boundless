@@ -86,7 +86,9 @@ class _TokenRedactFilter(logging.Filter):
                     record.exc_text = redact_token(exc)
                     record.exc_info = None   # 只留打码后的文本，防 handler 重新格式化出原文
         except Exception:
-            pass
+            # 打码自身出错时失败即关：丢弃原文（可能含 token），只留占位；不在 filter 里再打日志防递归
+            record.msg, record.args = "[telegram-bot] log message dropped (redaction failed)", ()
+            record.exc_info, record.exc_text = None, None
         return True
 
 
