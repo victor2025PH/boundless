@@ -539,8 +539,10 @@ def test_metrics_record():
     snap = ia.metrics_snapshot()
     assert snap["sent"] == before + 1 and snap["last_kind"] == "selfie"
     fb = int(ia.metrics_snapshot().get("fallback", 0))
+    reasons = ia.metrics_snapshot().get("fallback_reasons") or {}
+    before_stage = int(reasons.get("stage_failed") or 0)
     ia.record_image_fallback("stage_failed")
     assert ia.metrics_snapshot()["fallback"] == fb + 1
-    assert ia.metrics_snapshot()["fallback_reasons"].get("stage_failed") == 1
+    assert ia.metrics_snapshot()["fallback_reasons"].get("stage_failed") == before_stage + 1
     ia.record_image_fallback("deliver_failed", detail="timeout 30s")
     assert ia.metrics_snapshot()["last_failure_detail"] == "timeout 30s"
