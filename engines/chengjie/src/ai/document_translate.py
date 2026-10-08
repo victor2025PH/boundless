@@ -53,6 +53,7 @@ class DocumentTranslateService:
         source_lang: str = "",
         style: str = "chat",
         engine: str = "",
+        tier: str = "",
         progress: Optional[Callable[[int, int], None]] = None,
     ) -> Dict[str, Any]:
         src_text = str(text or "")
@@ -111,7 +112,7 @@ class DocumentTranslateService:
                 try:
                     res = await self._xlate.translate(
                         line, target_lang=target, source_lang=source,
-                        style=style, engine=engine,
+                        style=style, engine=engine, tier=tier,
                     )
                 except Exception:
                     logger.debug("[doc-xlate] 段翻译异常（回退原文）", exc_info=True)

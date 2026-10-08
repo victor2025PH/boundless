@@ -222,8 +222,9 @@ def test_tenant_card_fields_and_path():
     assert card["username"] == "admin"
     assert card["initial_password"] == "tok123"
     assert card["status"] == "running"
-    assert tl.tenant_card_path(plan["data_dir"]) == \
-        Path(r"D:\chengjie-instances\zhiliao_acme") / "tenant_card.json"
+    # 期望与 tenant_card_path 同一套分隔符归一：Linux 上 Path(r"D:\...") 不会拆反斜杠。
+    parent = str(plan["data_dir"]).replace("\\", "/").rsplit("/", 1)[0]
+    assert tl.tenant_card_path(plan["data_dir"]) == Path(parent) / "tenant_card.json"
 
 
 def test_tenant_card_credential_separation():

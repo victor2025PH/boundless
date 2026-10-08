@@ -11987,6 +11987,26 @@ ZH_HANT = {
     'kb2_vendor_purged': '已清空 {n} 條廠商預置條目',
     # ── kb2_vendor_view ──
     'kb2_vendor_view': '檢視',
+    # ── kb_emb_failed ──
+    'kb_emb_failed': '上次自動向量化有失敗（已自動重試），可點「重試」',
+    # ── kb_emb_last_fail ──
+    'kb_emb_last_fail': '上次失敗條數',
+    # ── kb_emb_ok ──
+    'kb_emb_ok': '啟用條目已全部向量化',
+    # ── kb_emb_pending ──
+    'kb_emb_pending': '條啟用條目還沒有向量，語義檢索找不到它們',
+    # ── kb_emb_queued ──
+    'kb_emb_queued': '已在後台開始向量化',
+    # ── kb_emb_retry ──
+    'kb_emb_retry': '重試',
+    # ── kb_emb_retrying ──
+    'kb_emb_retrying': '向量化失敗，正在自動重試',
+    # ── kb_emb_running ──
+    'kb_emb_running': '正在後台向量化…',
+    # ── kb_emb_title ──
+    'kb_emb_title': '向量覆蓋率（啟用條目）',
+    # ── kb_emb_unconfigured ──
+    'kb_emb_unconfigured': '未配置嵌入端點，無法自動向量化',
     # ── kb_js_001 ──
     'kb_js_001': '暫無知識條目，點選',
     # ── kb_js_002 ──

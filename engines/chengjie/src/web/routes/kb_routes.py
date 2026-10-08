@@ -308,7 +308,10 @@ def register_kb_routes(app, ctx):
     async def api_kb_health(request: Request, days: int = 7):
         """KB 自检（J-9 #184）：条目分来源计数 / 向量化数 / 7 天注入命中数 / 最近命中时刻。"""
         _api_auth(request)
-        return _kb_store.health(days=days)
+        out = _kb_store.health(days=days)
+        if isinstance(out, dict):
+            out["embedding"] = _embed_health()
+        return out
 
     @app.get("/api/kb/entries/{entry_id}")
     async def api_kb_get_entry(request: Request, entry_id: str):
@@ -401,6 +404,9 @@ def register_kb_routes(app, ctx):
         # P1-3：改了匹配面（触发词 / 标题 / 场景 / 回复）→ 旧向量已过期，后台重算这一条
         if ok and any(k in data for k in ("triggers", "title", "scenario", "steps", "example_reply_zh")):
             _embed_entry_bg(entry_id)
+        # 单条启用：停用期间不算覆盖率，启用后补向量（有失败走队列重试 + 健康页可见）
+        if ok and "enabled" in data and bool(data.get("enabled")):
+            _embed_queue_request("enable")
         return {"ok": ok,
                 "warnings": conflict_warnings if conflict_warnings else None}
 
@@ -661,6 +667,8 @@ def register_kb_routes(app, ctx):
             actor = request.session.get("username", "web_admin")
             audit_store.log(actor, "kb_import",
                             f"added={result['added']},updated={result['updated']}")
+        if not dry_run and (result.get("added") or result.get("updated")):
+            result["embed_scheduled"] = _embed_queue_request("import")   # 导入即后台向量化
         return result
 
     def _unknown_categories(categories) -> List[str]:
@@ -775,6 +783,8 @@ def register_kb_routes(app, ctx):
             actor = request.session.get("username", "web_admin")
             audit_store.log(actor, "kb_import_csv",
                             f"added={result['added']},updated={result['updated']}")
+        if not dry_run and (result.get("added") or result.get("updated")):
+            result["embed_scheduled"] = _embed_queue_request("import_csv")   # 导入即后台向量化
         return result
 
     # ── P1-2 冷启动向导：空 KB 一键播种场景起步 FAQ 包 ----------
@@ -783,15 +793,33 @@ def register_kb_routes(app, ctx):
         """KB 冷启动现状 + 可选起步包列表（供向导渲染）。"""
         _api_auth(request)
         from src.utils.kb_starter import kb_readiness, list_starter_packs
+        from src.utils.vertical_pack import list_packs
         return {"ok": True, "readiness": kb_readiness(_kb_store),
-                "packs": list_starter_packs()}
+                "packs": list_starter_packs(),
+                "vertical_packs": list_packs(include_internal=None)}
 
     @app.post("/api/kb/seed-pack")
     async def api_kb_seed_pack(request: Request):
-        """播种某场景起步包到 KB（按标题去重）。Body: {domain, dedup?}"""
+        """播种某场景起步包到 KB（按标题去重）。
+
+        Body: {domain, dedup?} 走原起步包（未知域仍回落 general）。
+        Body 另带 vertical_pack 时改种垂直模板包（dry_run 预览；占位符未填的条目不写入）。
+        """
         _api_auth(request)
         from src.utils.kb_starter import kb_readiness, seed_starter_pack
         body = await request.json()
+        if str(body.get("vertical_pack") or "").strip():
+            from src.utils.vertical_pack import handle_seed_request
+            report = handle_seed_request(_kb_store, body)
+            actor = request.session.get("username", "web_admin")
+            if audit_store and report.get("ok") and report.get("apply"):
+                audit_store.log(
+                    actor, "kb_seed_pack",
+                    "vertical_pack=%s,added=%s,skipped=%s" % (
+                        report.get("pack_id"), report.get("added"), report.get("skipped")))
+            if report.get("ok"):
+                report["readiness"] = kb_readiness(_kb_store)
+            return report
         domain = str(body.get("domain") or "general")
         dedup = bool(body.get("dedup", True))
         try:
@@ -855,6 +883,8 @@ def register_kb_routes(app, ctx):
         if audit_store:
             audit_store.log(actor, "kb_batch_update",
                             f"ids={len(ids)},fields={list(updates.keys())}")
+        if count and "enabled" in updates and bool(updates.get("enabled")):
+            _embed_queue_request("batch_enable")   # 批量启用 → 后台补向量
         return {"ok": True, "count": count}
 
     @app.get("/api/kb/usage-ranking")
@@ -1033,6 +1063,45 @@ def register_kb_routes(app, ctx):
             pass
         except Exception:
             logger.debug("[kb] 单条向量化调度失败（忽略）", exc_info=True)
+
+    # ── 导入 / 启用即向量化（2026-10-08 智语）：后台补齐「启用且无向量」，失败自动退避重试，
+    #    状态落 kb_meta，健康页可见、可手动重试。见 src/utils/kb_embed_queue.py
+    from src.utils.kb_embed_queue import KbEmbedQueue, health as _kb_embed_health
+    _embed_queue = KbEmbedQueue(_kb_store, lambda texts: _call_embed_api(texts),
+                                enabled_fn=_auto_embed_enabled)
+    try:
+        app.state.kb_embed_queue = _embed_queue
+    except Exception:
+        pass
+
+    def _embed_queue_request(reason: str) -> bool:
+        try:
+            return bool(_embed_queue.request(reason))
+        except Exception:
+            logger.debug("[kb] 向量化队列调度失败（忽略）", exc_info=True)
+            return False
+
+    def _embed_health() -> dict:
+        try:
+            return _kb_embed_health(_kb_store, _embed_queue, enabled=_auto_embed_enabled())
+        except Exception:
+            logger.debug("[kb] 向量健康读取失败（忽略）", exc_info=True)
+            return {}
+
+    @app.get("/api/kb/embed-health")
+    async def api_kb_embed_health(request: Request):
+        _api_auth(request)
+        return _embed_health()
+
+    @app.post("/api/kb/embed-retry")
+    async def api_kb_embed_retry(request: Request):
+        """健康页「重试」：立刻后台补向量（失败照常退避重试）。"""
+        _api_auth(request)
+        scheduled = _embed_queue_request("manual_retry")
+        if audit_store:
+            actor = request.session.get("username", "web_admin")
+            audit_store.log(actor, "kb_embed_retry", f"scheduled={scheduled}")
+        return {"ok": scheduled, "embedding": _embed_health()}
 
     @app.post("/api/kb/entries/{entry_id}/embed")
     async def api_kb_embed_single(request: Request, entry_id: str):
@@ -1378,6 +1447,7 @@ def register_kb_routes(app, ctx):
                 "SELECT query, cnt FROM kb_miss_log ORDER BY cnt DESC LIMIT 8"
             ).fetchall() if _miss_table_exists(c) else []
         return {
+            "embedding": _embed_health(),
             "stats": stats,
             "top_used": [dict(r) for r in top_used],
             "never_used": never_used,
@@ -1518,7 +1588,10 @@ def register_kb_routes(app, ctx):
     async def api_kb_maintenance_advice(request: Request):
         """返回知识库健康诊断报告（健康分 + 可操作建议列表）"""
         _api_auth(request)
-        return _kb_store.get_maintenance_advice()
+        out = _kb_store.get_maintenance_advice()
+        if isinstance(out, dict):
+            out["embedding"] = _embed_health()   # 健康页：启用条目向量覆盖率 + 黄/绿灯 + 最近任务
+        return out
 
     # ── 报告 / 图片静态 / AI生成 / 导出MD / 统计 / 手动翻译 / 沙盒AI / 建议（批 5L）----------
     @app.get("/api/kb/report")

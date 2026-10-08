@@ -344,11 +344,16 @@ def test_card_frontend_states_and_watchdog_names_goal():
     from src.web.i18n_packs import goals as gp
     for k in ("inbox.goal.auto.active", "inbox.goal.auto.stalled", "inbox.goal.auto.cap_reached"):
         assert k in gp.ZH and k in gp.EN
+    stamps = set()
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
                  "src/web/templates/unified_inbox.html"):
-        # 三宿主戳一致（随批次前移：M-7 e → N-5 发版 20260908b → O-3 D c → O-3 E d → Q-1 E 20260910a
-        # → Q-5 C b；unified_inbox.html 在 Q-5 时别线整文件在途，b 戳随宿主线前移，两戳皆认）
-        assert re.search(r"cp-goal\.js\?v=20260910[ab]", (REPO / host).read_text(encoding="utf-8")), host
+        # 闭集 20260910[ab] 已过期：三宿主现戳 20260912a。与 test_goal_probe_active_leg_236
+        # / test_goal_discovery_pause_confirm_264 同一政策——三处同戳且 ≥ 20260910a，
+        # 不再随每次 bump 改这里。
+        m = re.search(r"cp-goal\.js\?v=(\w+)", (REPO / host).read_text(encoding="utf-8"))
+        assert m, host
+        stamps.add(m.group(1))
+    assert len(stamps) == 1 and min(stamps) >= "20260910a", stamps
     # 「查看消息」对齐：组件回落宿主 __wsFocusConv；iframe 宿主 app.html 桥 postMessage（双树一致）
     assert "root.__wsFocusConv" in js
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html"):
