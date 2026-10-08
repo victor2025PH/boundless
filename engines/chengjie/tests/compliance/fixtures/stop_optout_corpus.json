@@ -6,21 +6,39 @@
  "contract": {
   "positive": "每条都必须判为 STOP（停联/退订）。kind: keyword=整条只有关键词；stop_request=要求别再发；unsubscribe=要求移出名单",
   "negative": "每条都必须判为非 STOP（易误判反例）",
-  "ambiguous": "gate 可自定，但要留痕；expect 给推荐口径：not_stop / not_stop+rg_flag / stop_if_alone",
+  "ambiguous": "gate 可自定，但要留痕；expect 给推荐口径：not_stop / not_stop+rg_flag / stop_if_alone / review（不硬停，转待人工确认：stop_gate.review_hint 必须命中）",
   "lang": "en / tl(Tagalog) / taglish / ceb(Bisaya/Cebuano) / hi(Hindi，含罗马化 Hinglish) / zh",
   "matching_hint": "大小写、首尾空白、句末标点和 emoji 不影响判定；positive 里的 note 说明只在整条消息时才算的关键词"
  },
  "counts": {
-  "positive": 109,
-  "negative": 53,
-  "ambiguous": 12
+  "positive": 113,
+  "negative": 61,
+  "ambiguous": 17
  },
  "positive": [
   {
    "text": "STOP",
    "lang": "en",
    "kind": "keyword",
-   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
+   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词（可带标点/空格）时算"
+  },
+  {
+   "text": "CANCEL",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "整条仅此一词（大小写不限、前后只带标点/空格）＝CTIA 标准退订词，硬停（蛋博士 10-08 拍板）；句中出现不算"
+  },
+  {
+   "text": "END",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "整条仅此一词（大小写不限、前后只带标点/空格）＝CTIA 标准退订词，硬停（蛋博士 10-08 拍板）；句中出现不算"
+  },
+  {
+   "text": "QUIT",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "整条仅此一词（大小写不限、前后只带标点/空格）＝CTIA 标准退订词，硬停（蛋博士 10-08 拍板）；句中出现不算"
   },
   {
    "text": "stop",
@@ -66,24 +84,6 @@
   },
   {
    "text": "unsubscribe",
-   "lang": "en",
-   "kind": "keyword",
-   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
-  },
-  {
-   "text": "CANCEL",
-   "lang": "en",
-   "kind": "keyword",
-   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
-  },
-  {
-   "text": "END",
-   "lang": "en",
-   "kind": "keyword",
-   "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
-  },
-  {
-   "text": "QUIT",
    "lang": "en",
    "kind": "keyword",
    "note": "单词整条消息＝运营商标准退订关键词（CTIA: STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT）；CANCEL/END/QUIT 只在整条仅此一词时算"
@@ -572,6 +572,30 @@
    "text": "我要退订",
    "lang": "zh",
    "kind": "unsubscribe"
+  },
+  {
+   "text": "cancel.",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "裸 CANCEL/END/QUIT 带标点/空格/大小写变体"
+  },
+  {
+   "text": "  Quit!! ",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "裸 CANCEL/END/QUIT 带标点/空格/大小写变体"
+  },
+  {
+   "text": "END?",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "裸 CANCEL/END/QUIT 带标点/空格/大小写变体"
+  },
+  {
+   "text": "Cancel",
+   "lang": "en",
+   "kind": "keyword",
+   "note": "裸 CANCEL/END/QUIT 带标点/空格/大小写变体"
   }
  ],
  "negative": [
@@ -839,6 +863,46 @@
    "text": "停车场在哪",
    "lang": "zh",
    "why": "别发＋别的词 / 停＋别的义"
+  },
+  {
+   "text": "我要退款",
+   "lang": "zh",
+   "why": "退款，不是停联"
+  },
+  {
+   "text": "退订的酒店钱什么时候退",
+   "lang": "zh",
+   "why": "退订酒店，不是停联"
+  },
+  {
+   "text": "这个订单能取消吗",
+   "lang": "zh",
+   "why": "取消订单，不是停联"
+  },
+  {
+   "text": "cancel my order please",
+   "lang": "en",
+   "why": "cancel order, not opt-out"
+  },
+  {
+   "text": "I want a refund",
+   "lang": "en",
+   "why": "refund, not opt-out"
+  },
+  {
+   "text": "pa-cancel po ng order ko",
+   "lang": "taglish",
+   "why": "cancel order, not opt-out"
+  },
+  {
+   "text": "the end",
+   "lang": "en",
+   "why": "句中 end，不是退订"
+  },
+  {
+   "text": "that's the end of the story",
+   "lang": "en",
+   "why": "句中 end"
   }
  ],
  "ambiguous": [
@@ -913,6 +977,36 @@
    "lang": "taglish",
    "expect": "not_stop",
    "why": "暂时不方便，不是永久停联"
+  },
+  {
+   "text": "stop it 😂",
+   "lang": "en",
+   "expect": "review",
+   "why": "可能玩笑也可能真要停：转人工确认"
+  },
+  {
+   "text": "Cancel na lang",
+   "lang": "taglish",
+   "expect": "review",
+   "why": "含糊的取消：转人工确认"
+  },
+  {
+   "text": "取消",
+   "lang": "zh",
+   "expect": "review",
+   "why": "单独「取消」含糊（订单？订阅？）：转人工确认"
+  },
+  {
+   "text": "please cancel",
+   "lang": "en",
+   "expect": "review",
+   "why": "带礼貌词的 cancel：不是裸词，转人工确认"
+  },
+  {
+   "text": "I want to cancel my subscription to the gym",
+   "lang": "en",
+   "expect": "review",
+   "why": "cancel my subscription 可能指对我们的订阅：转人工确认（宁可多拦）"
   }
  ]
 }

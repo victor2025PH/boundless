@@ -14,6 +14,12 @@
 - **STOP**：``/stop``、``STOP``、``退订``… 或主线停联词表 → 冻结；用户**拉黑 bot**
   （``my_chat_member`` → ``kicked``）同样视为停联。之后一律不真发。
 - **进待人工**：点名真人 / AI 异常 / 空回复 / 发送失败 / 入站媒体（``shared/official_handoff``）。
+- **发媒体**：``tg_bot_send_media`` → multipart 直传（``sendPhoto`` / ``sendVideo`` / ``sendVoice``
+  （ogg/opus 呈现为语音条）/ ``sendAudio`` / ``sendDocument``），无需公网媒体 URL；同样过 kill-switch
+  与 STOP 硬闸。worker ``send_media`` 与 ``orch.send_media`` 契约一致。
+- **setWebhook 只手动触发**：``tg_bot_set_webhook(config, public_base_url)``（向导按钮
+  ``POST /api/admin/telegram-bot/set-webhook`` 或 ``tools/tg_bot_set_webhook.py``）；启动、保存凭证
+  都**不会**自动调用（改回调地址是对外可见动作，必须人点）。
 - **健康**：``tg_bot_health()`` + 只读探活 ``tg_bot_probe()``（``getMe`` + ``getWebhookInfo``，
   不发消息）；路由 ``GET /api/admin/telegram-bot/health``。
 - **编排器**：注册 ``(telegram, official)`` worker（坐席接管从收件箱回复走 ``orch.send``），
@@ -38,6 +44,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -50,9 +57,49 @@ from fastapi import FastAPI, Request, Response
 
 logger = logging.getLogger(__name__)
 
+#: Bot token 形态 ``<bot 数字 id>:<密文段>``；Bot API URL 里以 ``/bot<token>/``、``/file/bot<token>/`` 出现。
+_TOKEN_RE = re.compile(r"(?<![0-9])([0-9]{5,16}):[A-Za-z0-9_-]{20,}")
+
+
+def redact_token(text: Any) -> str:
+    """把文本里的 Bot token 打码成 ``<bot_id>:***``（bot 数字 id 公开可见，保留便于排障）。"""
+    return _TOKEN_RE.sub(lambda m: m.group(1) + ":***", "" if text is None else str(text))
+
+
+class _TokenRedactFilter(logging.Filter):
+    """本模块 logger 的兜底（智安 2026-10-08）：消息、参数、异常 traceback 里的 Bot token 一律打码。
+
+    aiohttp / 解析异常的 ``str(e)`` 常带完整请求 URL（含 token）；``logger.exception`` 会把它连同
+    traceback 写进日志文件。这里在记录落地前改写 ``msg`` / ``exc_text``，任何 handler 都只看到打码版。
+    绝不抛、绝不丢记录。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        try:
+            msg = record.getMessage()
+            exc = record.exc_text or ""
+            if record.exc_info and not exc:
+                exc = logging.Formatter().formatException(record.exc_info)
+            if _TOKEN_RE.search(msg) or (exc and _TOKEN_RE.search(exc)):
+                record.msg, record.args = redact_token(msg), ()
+                if exc:
+                    record.exc_text = redact_token(exc)
+                    record.exc_info = None   # 只留打码后的文本，防 handler 重新格式化出原文
+        except Exception:
+            pass
+        return True
+
+
+logger.addFilter(_TokenRedactFilter())
+
 PLATFORM = "telegram"
 TG_API_BASE = "https://api.telegram.org"
 TG_TEXT_MAX = 4000   # 官方 4096
+TG_CAPTION_MAX = 1000   # 官方 1024
+TG_UPLOAD_MAX = 50 * 1024 * 1024   # Bot API multipart 上传上限 50MB
+TG_PHOTO_MAX = 10 * 1024 * 1024    # sendPhoto 上限 10MB（超了改走 sendDocument）
+#: setWebhook 只订阅本模块真正处理的更新类型（私聊消息 / 按钮 / 拉黑·解除）。
+TG_ALLOWED_UPDATES = ("message", "edited_message", "callback_query", "my_chat_member")
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 _rt_lock = threading.Lock()
@@ -300,6 +347,167 @@ async def tg_bot_send_text(
         out = {"ok": False, "error": type(e).__name__, "error_kind": "network"}
         logger.warning("[tg_bot] sendMessage 异常: %s", type(e).__name__)
     _record_send(out)
+    return out
+
+
+_VOICE_EXT = (".ogg", ".oga", ".opus")
+_IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+_VIDEO_EXT = (".mp4", ".mov", ".m4v", ".webm")
+_AUDIO_EXT = (".mp3", ".m4a", ".aac", ".wav", ".flac")
+
+
+def tg_media_method(media_path: str, media_type: str = "", size: int = 0) -> tuple:
+    """按媒体类型 / 扩展名选 Bot API 方法 → ``(method, field)``。纯函数。
+
+    - voice/audio + ogg/opus → ``sendVoice``（语音条）；其他音频 → ``sendAudio``；
+    - image（≤10MB）→ ``sendPhoto``；超限或 gif 以外的动图走 ``sendDocument``；
+    - video → ``sendVideo``；其余 → ``sendDocument``。
+    """
+    mt = str(media_type or "").lower()
+    ext = os.path.splitext(str(media_path or ""))[1].lower()
+    if mt in ("voice", "audio", "ptt") or (not mt and ext in _VOICE_EXT + _AUDIO_EXT):
+        if ext in _VOICE_EXT:
+            return "sendVoice", "voice"
+        return "sendAudio", "audio"
+    if mt in ("image", "photo", "selfie", "sticker_image") or (not mt and ext in _IMAGE_EXT):
+        if size and size > TG_PHOTO_MAX:
+            return "sendDocument", "document"
+        return "sendPhoto", "photo"
+    if mt == "video" or (not mt and ext in _VIDEO_EXT):
+        return "sendVideo", "video"
+    return "sendDocument", "document"
+
+
+async def tg_bot_send_media(
+    chat_id: Any, media_path: str, bot_token: str, *, media_type: str = "", caption: str = "",
+    account_id: str = "", check_kill_switch: bool = True,
+) -> Dict[str, Any]:
+    """multipart 直传媒体。返回 {ok, data, method} / {ok:False, error, error_kind[, blocked]}；永不抛。"""
+    acct = str(account_id or bot_id_from_token(bot_token) or "default")
+    path = str(media_path or "")
+    if check_kill_switch:
+        try:
+            from src.integrations.shared.rpa_send_guard import rpa_send_blocked
+            blocked, scope = rpa_send_blocked(PLATFORM, acct)
+            if blocked:
+                out = {"ok": False, "error": f"kill_switch:{scope}"}
+                _record_send(out)
+                return out
+        except Exception:
+            logger.debug("[tg_bot] kill-switch 查询异常（放行）", exc_info=True)
+    sg = _stop_gate_blocked(acct, str(chat_id), caption)
+    if sg:
+        out = {"ok": False, "error": f"stop_gate:{sg}", "blocked": "stop_contact"}
+        _record_send(out)
+        return out
+    try:
+        size = os.path.getsize(path) if path else -1
+    except OSError:
+        size = -1
+    if size <= 0:
+        out = {"ok": False, "error": "media file missing", "error_kind": "bad_media"}
+        _record_send(out)
+        return out
+    if size > TG_UPLOAD_MAX:
+        out = {"ok": False, "error": f"media too large ({size} bytes)", "error_kind": "too_large"}
+        _record_send(out)
+        return out
+    method, field = tg_media_method(path, media_type, size)
+    cap = str(caption or "").strip()
+    if len(cap) > TG_CAPTION_MAX:
+        cap = cap[: TG_CAPTION_MAX - 1] + "…"
+    try:
+        with open(path, "rb") as fh:
+            blob = fh.read()
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(chat_id))
+        if cap:
+            form.add_field("caption", cap)
+        form.add_field(field, blob, filename=os.path.basename(path) or field)
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+            async with session.post(method_url(bot_token, method), data=form) as resp:
+                raw = await resp.text()
+                try:
+                    data = json.loads(raw or "{}")
+                except Exception:
+                    data = {"raw": raw[:300]}
+                if resp.status == 200 and isinstance(data, dict) and data.get("ok"):
+                    out = {"ok": True, "data": data.get("result") or {}, "method": method}
+                else:
+                    info = classify_tg_error(resp.status, data)
+                    desc = str((data or {}).get("description") or "")[:200] if isinstance(data, dict) else ""
+                    out = {"ok": False, "error": f"HTTP {resp.status}: {desc}", "method": method,
+                           "error_kind": info["kind"], "retriable": info["retriable"]}
+                    if info["retry_after"]:
+                        out["retry_after"] = info["retry_after"]
+                    logger.warning("[tg_bot] %s 失败 HTTP %s kind=%s", method, resp.status, info["kind"])
+    except Exception as e:  # noqa: BLE001
+        out = {"ok": False, "error": type(e).__name__, "error_kind": "network", "method": method}
+        logger.warning("[tg_bot] %s 异常: %s", method, type(e).__name__)
+    _record_send(out)
+    return out
+
+
+# ── setWebhook（只手动触发）────────────────────────────────────────────────────
+
+def webhook_url_for(cfg: Dict[str, Any], public_base_url: Any) -> str:
+    """``https://<公网>`` + ``webhook_path`` → 完整回调地址；非 https / 带查询串 → ""。纯函数。"""
+    base = str(public_base_url or "").strip().rstrip("/")
+    pu = urlparse(base)
+    if pu.scheme != "https" or not pu.hostname or pu.query or pu.fragment:
+        return ""
+    path = str((cfg or {}).get("webhook_path") or "/tg/bot/webhook")
+    if not path.startswith("/"):
+        path = "/" + path
+    return base + path
+
+
+_SECRET_OK = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+
+
+async def tg_bot_set_webhook(config: Dict[str, Any], public_base_url: Any, *,
+                             drop_pending_updates: bool = False,
+                             timeout: float = 10.0) -> Dict[str, Any]:
+    """调 Telegram ``setWebhook``（url + secret_token + allowed_updates）。**只由人手动触发**。
+
+    返回 ``{ok, error_kind, host, path}``（只回主机名与路径，不回 token / secret）。
+    ``error_kind``：``missing_credentials`` / ``bad_secret`` / ``bad_url`` / Telegram 错误归类 / ``network``。
+    """
+    cfg = dict((config or {}).get("telegram_bot") or {})
+    token = str(cfg.get("bot_token") or "").strip()
+    secret = str(cfg.get("webhook_secret") or "").strip()
+    out: Dict[str, Any] = {"ok": False, "error_kind": "", "host": "", "path": ""}
+    if not token or not bot_id_from_token(token):
+        out["error_kind"] = "missing_credentials"
+        return out
+    if not _SECRET_OK.match(secret):
+        out["error_kind"] = "bad_secret"
+        return out
+    url = webhook_url_for(cfg, public_base_url)
+    if not url:
+        out["error_kind"] = "bad_url"
+        return out
+    pu = urlparse(url)
+    out["host"], out["path"] = pu.hostname or "", pu.path
+    if cfg.get("api_base") and not _rt("api_base"):
+        configure_runtime(cfg)
+    payload = {"url": url, "secret_token": secret, "allowed_updates": list(TG_ALLOWED_UPDATES),
+               "drop_pending_updates": bool(drop_pending_updates)}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as s:
+            async with s.post(method_url(token, "setWebhook"), json=payload) as r:
+                data = json.loads((await r.text()) or "{}")
+                if r.status == 200 and isinstance(data, dict) and data.get("ok"):
+                    out["ok"] = True
+                else:
+                    out["error_kind"] = classify_tg_error(r.status, data)["kind"]
+                    out["description"] = str((data or {}).get("description") or "")[:160] \
+                        if isinstance(data, dict) else ""
+    except Exception as e:  # noqa: BLE001
+        out["error_kind"] = "network"
+        logger.warning("[tg_bot] setWebhook 异常: %s", type(e).__name__)
+    logger.warning("[tg_bot] setWebhook（手动）host=%s path=%s ok=%s kind=%s",
+                   out["host"], out["path"], out["ok"], out["error_kind"] or "-")
     return out
 
 
@@ -605,6 +813,21 @@ class TelegramBotWorker:
             res["blocked"] = str(out["blocked"])
         return res
 
+    async def send_media(self, chat_key: str, *, media_path: str, media_type: str,
+                         caption: str = "", media_url: str = "") -> Dict[str, Any]:
+        """媒体出站（multipart 直传，不需要公网 URL；``media_url`` 收下即忽略）。"""
+        dest = str(chat_key or "").rsplit(":", 1)[-1]
+        out = await tg_bot_send_media(dest, media_path, self._token(), media_type=media_type,
+                                      caption=caption, account_id=self.account_id)
+        res: Dict[str, Any] = {"delivered": bool(out.get("ok")),
+                               "message_id": str((out.get("data") or {}).get("message_id") or "")}
+        if not out.get("ok"):
+            res["error_kind"] = str(out.get("error_kind") or "unknown")
+            res["error"] = str(out.get("error") or "")
+        if out.get("blocked"):
+            res["blocked"] = str(out["blocked"])
+        return res
+
 
 # ── 健康 ─────────────────────────────────────────────────────────────────────
 
@@ -714,7 +937,8 @@ def tg_bot_health(config: Dict[str, Any], *, app_state: Any = None) -> Dict[str,
 
 
 __all__ = [
-    "register_telegram_bot_routes", "tg_bot_send_text", "parse_update", "verify_tg_secret",
+    "register_telegram_bot_routes", "tg_bot_send_text", "tg_bot_send_media", "tg_media_method",
+    "tg_bot_set_webhook", "webhook_url_for", "TG_ALLOWED_UPDATES", "parse_update", "verify_tg_secret",
     "bot_id_from_token", "classify_tg_error", "tg_bot_probe", "tg_bot_health",
     "TelegramBotWorker", "configure_runtime", "ensure_runtime", "stats_snapshot",
     "reset_for_tests",

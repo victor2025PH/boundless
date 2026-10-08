@@ -91,7 +91,14 @@ _IMPLEMENTED_MODES = {
     # 微信客服（企业微信官方通道，实施97 线 A，2026-09-07）：独立平台，唯一形态 official
     # （企微自建应用凭证经向导）；个人微信 PC 副驾是另一个平台 wechat（mode=pcui，准入区）。
     ("wechat_kf", "official"),
+    # Telegram Bot API（官方 bot，2026-10-08）：与个人号协议轨并列的合规第二路；凭证在向导
+    # 「Telegram 机器人」卡（channel_setup id=telegram_bot），见 _OFFICIAL_CHANNEL_OF。
+    ("telegram", "official"),
 }
+
+#: official 模式凭证所在的向导卡 id ≠ 平台名的情形（Telegram 的 telegram 卡是个人号 API 凭证，
+#: 官方 bot 凭证在单独的 telegram_bot 卡）。缺省＝同名。
+_OFFICIAL_CHANNEL_OF = {"telegram": "telegram_bot"}
 
 
 def _blocker(code: str, severity: str = SEV_BLOCK, **params: Any) -> Dict[str, Any]:
@@ -299,7 +306,7 @@ def _official_blockers(platform: str, config: Dict[str, Any]) -> List[Dict[str, 
     out: List[Dict[str, Any]] = []
     try:
         from src.utils.channel_setup import _dig, _is_placeholder, get_channel
-        ch = get_channel(platform)
+        ch = get_channel(_OFFICIAL_CHANNEL_OF.get(platform, platform))
         if ch is None:
             return [_blocker(BLOCK_NOT_ENABLED)]
         missing = [

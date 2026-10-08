@@ -36,11 +36,11 @@ def _mk(tmp_path: Path):
     CREATE TABLE outreach_log (id INTEGER PRIMARY KEY, conversation_id TEXT, status TEXT, note TEXT DEFAULT '', ts REAL);
     """)
     c.executemany("INSERT INTO conversations(conversation_id,platform,account_id,chat_key) VALUES(?,?,?,?)", [
-        ("telegram:6834964252:1", "telegram", "6834964252", "1"),
+        ("telegram:7000000001:1", "telegram", "7000000001", "1"),
         ("telegram:111:2", "telegram", "111", "2"),
     ])
     rows = [
-        ("s1", "telegram:6834964252:1", "out", 1000.0, ""),   # R2 script
+        ("s1", "telegram:7000000001:1", "out", 1000.0, ""),   # R2 script
         ("a1", "telegram:111:2", "out", 2000.0, ""),          # R1 claimed
         ("d1", "telegram:111:2", "out", 3000.0, ""),          # R3 draft auto → ai
         ("d2", "telegram:111:2", "out", 4000.0, ""),          # R3 draft by agent → agent
@@ -78,7 +78,7 @@ def test_preview_counts_each_rule_and_never_writes(tmp_path):
     db, adb = _mk(tmp_path)
     before = (_h(db), _h(adb))
     conn, aconn = mod.open_ro(str(db)), mod.open_ro(str(adb))
-    r = mod.preview(conn, audit_conn=aconn, window=60)
+    r = mod.preview(conn, audit_conn=aconn, window=60, script_accounts=["7000000001"])
     conn.close(); aconn.close()
     assert (_h(db), _h(adb)) == before
     br = {k: v["count"] for k, v in r["by_rule"].items()}

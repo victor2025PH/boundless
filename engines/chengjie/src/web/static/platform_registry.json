@@ -10,7 +10,8 @@
       "modes": [
         "protocol",
         "device",
-        "phone"
+        "phone",
+        "official"
       ],
       "default_mode": "protocol",
       "compliance": "main",

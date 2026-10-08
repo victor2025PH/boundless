@@ -6063,6 +6063,31 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             await tg_bot_probe(cfg)
         return tg_bot_health(cfg, app_state=app.state)
 
+    @app.post("/api/admin/telegram-bot/set-webhook")
+    async def api_telegram_bot_set_webhook(request: Request):
+        """手动设置 Telegram 回调（向导「设置 Webhook」按钮；**只在人点时调用**）。
+
+        body ``{public_base_url: "https://<你的域名>", drop_pending_updates?: bool}`` →
+        ``setWebhook(url=<base><webhook_path>, secret_token=<webhook_secret>, allowed_updates)``。
+        只回主机名 / 路径 / 错误归类，不回 token 与 secret。运营动作：拒 agent / viewer。
+        """
+        api_auth(request)
+        _require_account_manager(request)
+        cfg = (config_manager.config if config_manager is not None else {}) or {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        from src.integrations.telegram_bot_official import tg_bot_probe, tg_bot_set_webhook
+        out = await tg_bot_set_webhook(cfg, (body or {}).get("public_base_url"),
+                                       drop_pending_updates=bool((body or {}).get("drop_pending_updates")))
+        if out.get("ok"):
+            try:
+                await tg_bot_probe(cfg)   # 刷新健康页的 webhook 状态（只读 getWebhookInfo）
+            except Exception:
+                pass
+        return out
+
     @app.get("/api/admin/buried-conversations")
     async def api_buried_conversations(request: Request):
         """被埋会话体检（只读）：归档着、却有未读入站——客户在等而工作台看不见（P0-198）。
