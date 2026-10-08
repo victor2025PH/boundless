@@ -85,10 +85,18 @@ def test_dashboard_done_card_uses_single_source():
     assert "if(_FUNNEL_DONE_SET[k]) n+=sc[k]||0;" in html, (
         "看板 _doneCountFromStages 未读取单源 _FUNNEL_DONE_SET"
     )
-    # done 卡片数字唯一经由 _doneCountFromStages（不硬算阶段和）
-    assert "_doneCard(_doneCountFromStages(" in html, (
-        "看板「已成交」卡片数字未走单源 _doneCountFromStages"
-    )
+    # done 卡片数字唯一经由 _doneCountFromStages（不硬算阶段和）。
+    # 允许先落局部变量再传入（看板 v2 为 _zeroish 复用同一个数：
+    # `var dn=_doneCountFromStages(...)` → `_doneCard(dn, ...)`），但该变量必须
+    # 恰好由单源赋值一次，且不得再被改写。
+    m = re.search(r"(?<!function )_doneCard\(\s*([A-Za-z_$][\w$]*)\s*([(,)])", html)
+    assert m, "看板未找到 _doneCard(...) 调用"
+    arg, nxt = m.group(1), m.group(2)
+    if not (arg == "_doneCountFromStages" and nxt == "("):
+        assigns = re.findall(r"(?<![\w$.])" + re.escape(arg) + r"\s*=(?!=)\s*([^;\n]*)", html)
+        assert len(assigns) == 1 and assigns[0].startswith("_doneCountFromStages("), (
+            f"看板「已成交」卡片数字未走单源 _doneCountFromStages（_doneCard 入参 {arg} 的赋值：{assigns}）"
+        )
 
 
 # ── 跨模板：两侧兜底口径彼此一致且都 == 后端权威集合 ─────────────────────
