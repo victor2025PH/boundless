@@ -89,16 +89,36 @@ def test_api_playbooks_lists_with_validation(auth_client, _books):
 
 
 def test_api_playbook_detail_returns_beat_sheet(auth_client, _books):
-    # sorted 首位现在是 duo_matrixx：只有目标、没有 beats（「没有剧本，只按目标聊天」）。
-    # 逐拍契约要挑一本真有节拍的。
-    pid = next(p for p in sorted(_books) if getattr(_books[p], "beats", None))
+    """详情带 beats 列表。现库全是「有目标、不念节拍」的书，列表为空。
+
+    节拍形状仍由序列化函数钉住：有 beats 时 id/role/intent/product/soft/pace
+    都在，soft 已折算成整数。
+    """
+    from src.companion.group_show.playbook import Beat, Playbook
+    from src.web.routes.group_show_routes import playbook_detail
+
+    sample = Playbook(
+        id="shape", name="shape", soft_ad_level=1,
+        beats=(Beat(id="b1", role="advocate", intent="ask",
+                    product="matrixx", soft=2, pace="slow"),),
+    )
+    beat = playbook_detail(sample, [])["beats"][0]
+    assert {"id", "role", "intent", "product", "soft", "pace"} <= set(beat)
+    assert isinstance(beat["soft"], int) and beat["soft"] == 2
+    assert beat["id"] == "b1" and beat["pace"] == "slow"
+
+    with_beats = [p for p in sorted(_books) if getattr(_books[p], "beats", None)]
+    pid = with_beats[0] if with_beats else sorted(_books)[0]
     r = auth_client.get(f"/api/group-show/playbooks/{pid}")
     assert r.status_code == 200
     pb = r.json()["playbook"]
-    assert pb["id"] == pid and pb["beats"]
-    beat = pb["beats"][0]
-    assert {"id", "role", "intent", "product", "soft", "pace"} <= set(beat)
-    assert isinstance(beat["soft"], int)      # 已折算成本拍生效值，前端不再算
+    assert pb["id"] == pid and isinstance(pb["beats"], list)
+    if with_beats:
+        live = pb["beats"][0]
+        assert {"id", "role", "intent", "product", "soft", "pace"} <= set(live)
+        assert isinstance(live["soft"], int)
+    else:
+        assert pb["beats"] == []
 
 
 def test_api_playbook_detail_unknown_id_is_4xx_localized(auth_client):
@@ -417,11 +437,20 @@ def _stock_shows(st, *, groups, speakers, ts):
 
 
 def _pin_show_store(monkeypatch, st):
-    """路由 `_store()` 按实例 config 目录重配单例。测试刚灌进 tmp 的台账
-    会被换成空库，预算读成 0，压角/越界/容量断言全部失真。"""
+    """路由 `_store()` 按实例 config 目录重配单例，刚灌进 tmp 的台账会被换掉。
+
+    预算还要求号池非空（空池＝没数据，不算约束）。本机没有在线号，所以同时
+    把池钉成台账里那 6 个 pa*。有号的环境仍走这 6 个，断言看的是台账不是注册表。
+    """
     monkeypatch.setattr(
         "src.web.routes.group_show_routes._store",
         lambda *_a, **_k: st,
+    )
+    monkeypatch.setattr(
+        "src.web.routes.group_show_routes._online_accounts",
+        lambda *_a, **_k: [
+            {"account_id": f"pa{i}", "platform": "telegram"} for i in range(6)
+        ],
     )
 
 
