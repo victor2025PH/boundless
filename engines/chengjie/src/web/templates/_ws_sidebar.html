@@ -135,7 +135,9 @@
     {#- 真机矩阵上下文导航:矩阵五页已撤出简洁清单,但渠道中心壳只有这条侧栏,
         深链进来若不渲染本组=当前页不在侧栏(不高亮、四渠道无法互切)。
         仅 /workspace/channels/* 路径出现,别处保持精简。 -#}
-    {%- if _cur_path.startswith('/workspace/channels/') %}
+    {#- matrix_nav 关（ui_visibility 缺省）时 nav_matrix_items 被剔空：组头也不渲染，
+        不留一个下面什么都没有的「真机矩阵」空标题。 -#}
+    {%- if _cur_path.startswith('/workspace/channels/') and nav_matrix_items %}
     <div class="wsb-sec">{{ (i18n or {}).get('section_channels', '真机矩阵') }}</div>
     {%- for it in (nav_matrix_items or []) %}{{ wsb_item(it) }}{%- endfor %}
     {%- endif %}

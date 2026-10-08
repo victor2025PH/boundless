@@ -26,6 +26,15 @@ _CHANNEL_TPL = _ROOT / "src" / "web" / "templates" / "workspace_channels.html"
 _ASIDE_RE = re.compile(r'<aside class="wsb-side".*?</aside>', re.S)
 
 
+@pytest.fixture
+def matrix_nav_on(monkeypatch):
+    """渠道中心上下文导航只在 ui_visibility.matrix_nav 开时渲染（代码缺省 False=隐藏，
+    见 ui_visibility / nav_schema._apply_visibility）。本文件 1)/3) 断言的是「开」态，
+    须显式打开——首版（08-17 快照）没配这一键，自入库起一直红，并非回归。"""
+    from src.web import ui_visibility as uv
+    monkeypatch.setitem(uv.DEFAULTS, "matrix_nav", True)
+
+
 def _aside(html: str) -> str:
     m = _ASIDE_RE.search(html)
     assert m, "侧栏 <aside class=\"wsb-side\"> 未渲染"
@@ -40,7 +49,7 @@ def _aside(html: str) -> str:
      ("messenger", "/workspace/channels/messenger"),
      ("whatsapp", "/workspace/channels/whatsapp")],
 )
-def test_channel_center_renders_sidebar(auth_client, channel, path):
+def test_channel_center_renders_sidebar(matrix_nav_on, auth_client, channel, path):
     r = auth_client.get(path)
     assert r.status_code == 200, (channel, r.status_code)
     html = r.text
@@ -52,6 +61,16 @@ def test_channel_center_renders_sidebar(auth_client, channel, path):
     body = _aside(html)
     hit = re.search(r'<a href="%s"[^>]*class="active"' % re.escape(path), body)
     assert hit, f"{channel}: 侧栏未高亮当前渠道"
+
+
+def test_channel_center_matrix_nav_off_has_no_empty_group(auth_client):
+    """matrix_nav 关（缺省）：侧栏照常在场，但不渲染矩阵项，也不留空的「真机矩阵」组头。"""
+    html = auth_client.get("/workspace/channels/telegram").text
+    assert 'id="ws-side"' in html
+    body = _aside(html)
+    assert 'href="/workspace/channels/line"' not in body
+    secs = re.findall(r'<div class="wsb-sec">([^<]*)</div>', body)
+    assert "真机矩阵" not in secs and "Device Matrix" not in secs, secs
 
 
 # ── 2) 收件箱回归钉：默认关，布局零改动 ─────────────────────────────────
@@ -68,7 +87,7 @@ def test_inbox_has_no_sidebar(auth_client):
 
 
 # ── 3) 菜单单一事实源＝nav_schema ───────────────────────────────────────
-def test_sidebar_items_come_from_nav_schema(auth_client):
+def test_sidebar_items_come_from_nav_schema(matrix_nav_on, auth_client):
     """每条菜单都得自报来源，且 schema 来源的 href 必须真在 NAV_ITEMS 里。
 
     来源标记（data-nav）三档：schema=nav_schema 菜单项 / domain=域 manifest 动态页

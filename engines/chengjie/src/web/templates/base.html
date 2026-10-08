@@ -650,7 +650,7 @@ code{background:var(--input);padding:.15rem .45rem;border-radius:5px;font-size:.
     {%- endfor %}
     {#- 真机矩阵上下文导航:矩阵五页已撤出简洁清单,但深链/书签进矩阵总览时
         就地渲染本组(保住高亮与组内互切);其余页面不渲染,保持精简。 -#}
-    {%- if active == 'rpa_overview' %}
+    {%- if active == 'rpa_overview' and nav_matrix_items %}
     <div class="sb-sec">{{ (i18n or {}).get('section_channels', '真机矩阵') }}</div>
     {%- for it in (nav_matrix_items or []) %}{{ nav_item(it) }}{%- endfor %}
     {%- endif %}
