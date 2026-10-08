@@ -610,10 +610,22 @@ def test_wiring_kb_gate_bug_group_exempt():
     d = resolve_kb_policy(persona=None, intent="direct_chat", text="怎么登录",
                           config=cfg, chat_id="-100777")
     assert d.mode == "optional" and d.reason == "bug_group"
-    # 非报障群同句仍走闲聊闸（旧行为不变）
-    d2 = resolve_kb_policy(persona=None, intent="direct_chat", text="怎么登录",
+    # 报障群里连非提问的闲聊句也豁免（bug_group 分支先于闲聊闸）
+    d1 = resolve_kb_policy(persona=None, intent="direct_chat", text="今天天气真好啊",
+                           config=cfg, chat_id="-100777")
+    assert d1.mode == "optional" and d1.reason == "bug_group"
+    # 非报障群：闲聊句仍走闲聊闸（旧行为不变）
+    d2 = resolve_kb_policy(persona=None, intent="direct_chat", text="今天天气真好啊",
                            config=cfg, chat_id="-100888")
     assert d2.mode == "skip" and d2.reason == "companion_chat"
+    # 非报障群的提问句由 info_query_bypass（kb_policy 默认开）放行；关掉旁路即回到闲聊闸
+    d3 = resolve_kb_policy(persona=None, intent="direct_chat", text="怎么登录",
+                           config=cfg, chat_id="-100888")
+    assert d3.mode == "optional" and d3.reason == "info_query"
+    cfg_nobypass = {**cfg, "inbox": {"kb_policy": {"info_query_bypass": False}}}
+    d4 = resolve_kb_policy(persona=None, intent="direct_chat", text="怎么登录",
+                           config=cfg_nobypass, chat_id="-100888")
+    assert d4.mode == "skip" and d4.reason == "companion_chat"
 
 
 def test_wiring_photo_and_pending_routes():

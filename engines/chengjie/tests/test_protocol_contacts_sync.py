@@ -266,7 +266,9 @@ def test_revoke_and_edit_roundtrip(tmp_path):
     assert store.ingest_batch(conv, [m1, m2]) == 2
 
     def _obj(pmid):
-        rows = store.list_recent_messages(cid, limit=10)
+        # M-1 C #219：业务口径（include_deleted=True，缺省）剔除 revoked=1 行（AI 上下文不该
+        # 读到已撤回内容）；气泡置灰走 UI 口径 include_deleted=False，revoked 行照常给出。
+        rows = store.list_recent_messages(cid, limit=10, include_deleted=False)
         row = [r for r in rows if r["platform_msg_id"] == pmid][0]
         return store_message_to_obj(row)
 

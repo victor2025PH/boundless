@@ -1324,8 +1324,15 @@ class TestPlatformExpert:
     def test_platforms_match_worker_registry(self):
         # PLATFORMS 刻意本地定义（纯函数模块零依赖）——与能力矩阵 WORKERS
         # 注册表的平台集合必须一致，漂移即红（新平台上线两处都要登记）。
+        # 刻意例外（2026-10-08 登记）：douyin / tiktok 官方通道（DY-1 / TK-1 B）进了
+        # WORKERS，但不在全系统参照系 SUPPORTED_PLATFORMS 里、也没有坐席拟人节奏，
+        # pacing 键域刻意不收（test_sanitize_platform_delay_overrides 钉 tiktok=bad_platform）。
+        # 一旦它们进了参照系，这里立刻要求 pacing 同步扩。
         from src.integrations.platform_capabilities import WORKERS
-        assert set(rps.PLATFORMS) == {p for p, _m, _mod, _c in WORKERS}
+        from src.integrations.platform_login import SUPPORTED_PLATFORMS
+        official_only = {"douyin", "tiktok"}
+        assert not (official_only & set(SUPPORTED_PLATFORMS))
+        assert set(rps.PLATFORMS) == {p for p, _m, _mod, _c in WORKERS} - official_only
 
     def test_sanitize_platform_modes(self):
         clean, errors = rps.sanitize_patch({_PM: {"Messenger": "Review"}})

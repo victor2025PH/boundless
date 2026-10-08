@@ -59,7 +59,8 @@ def _spy_hub(tmp_path: Path, ok: bool = True):
     seen = {}
 
     def fake(base_url, profile, text, *, language="", emotion="",
-             best_of=1, timeout_sec=30.0, audio_format="", tts_engine=""):
+             best_of=1, timeout_sec=30.0, audio_format="", tts_engine="",
+             emo_text="", emo_alpha=None):
         seen.update(base_url=base_url, profile=profile, text=text,
                     tts_engine=tts_engine, audio_format=audio_format)
         if not ok:

@@ -158,16 +158,22 @@ def test_scoped_shape_vs_unscoped_shape(tmp_path):
     # hidden_included＝历史只读视角特性探测标记（2026-08-17，前端据此区分
     # 「后端已放行隐藏行」vs「旧后端忽略了 include_hidden 参数」）
     assert set(scoped.keys()) == {"ok", "ts", "chats", "has_more",
-                                  "oldest_ts", "scope", "hidden_included"}
+                                  "oldest_ts", "scope", "hidden_included",
+                                  # #12/#142 全局真发暂停旗标 + 应急横幅（scoped 同带）
+                                  "deliver_paused", "deliver_paused_meta"}
     # 未显式带 include_hidden / 无 account_id scoped → 标记必须为 False（默认口径不变）
     assert scoped["hidden_included"] is False
     # 无参数：与现有响应逐字段一致（零回归），含 platform_status、无 scope
     plain = c.get("/api/unified-inbox/chats").json()
-    assert set(plain.keys()) == {
+    # unread_breakdown_by_account（#222）聚合成功才带，属可选键，不计入等值比较。
+    assert set(plain.keys()) - {"unread_breakdown_by_account"} == {
         "ok", "ts", "chats", "platform_status", "has_more", "oldest_ts",
         "unread_by_platform", "unread_by_account",  # P6 全库有效未读聚合
         "attn_by_account",                          # P8 近窗需人工聚合
         "accounts_summary",                         # P0 账号真相单源（2026-08-17）
+        "archived_unread_by_account",               # #142 归档中有效未读
+        "ai_skip_groups",                           # #222 AI 是否跳过群/频道
+        "deliver_paused", "deliver_paused_meta",    # #12/#142 真发暂停旗标 + 横幅
     }
     assert isinstance(plain["unread_by_platform"], dict)
     assert isinstance(plain["unread_by_account"], dict)
@@ -250,8 +256,11 @@ def test_scoped_without_store_falls_back_to_full_path():
     body = d.json()
     assert body["ok"] is True
     # 回落响应形状与无参数版完全一致（带 platform_status / 聚合字段、无 scope）
-    assert set(body.keys()) == {
+    # unread_breakdown_by_account（#222）聚合成功才带，属可选键，不计入等值比较。
+    assert set(body.keys()) - {"unread_breakdown_by_account"} == {
         "ok", "ts", "chats", "platform_status", "has_more", "oldest_ts",
         "unread_by_platform", "unread_by_account", "attn_by_account",
         "accounts_summary",   # P0 账号真相单源（2026-08-17）
+        "archived_unread_by_account", "ai_skip_groups",   # #142 / #222
+        "deliver_paused", "deliver_paused_meta",          # #12 / #142
     }

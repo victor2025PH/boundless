@@ -58,7 +58,9 @@ def _build(tmp_path):
     app.add_middleware(SessionMiddleware, secret_key="t")
 
     def auth_dep(request: Request) -> None:
-        request.scope["session"] = {"role": "", "user": "tester"}
+        # starlette>=1.x：SessionMiddleware 的 send_wrapper 读 Session.accessed，
+        # 整个替换成普通 dict 会 AttributeError——就地更新既有会话对象。
+        request.session.update({"role": "", "user": "tester"})
 
     register_goal_routes(app, auth_dep, cm)
     register_workflow_routes(app, api_auth=_api_auth)

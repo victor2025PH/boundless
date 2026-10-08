@@ -232,9 +232,10 @@ async def test_short_and_non_chinese_noop():
     reset_state()
     fake = _FakeAI("不该被调用")
     assert await llm_colloquialize("好的呀", ai_client=fake) is None      # 短句
+    # 英文已纳入 LLM 口语化（src_en → language="en"），非中文且非英文（如泰文）仍 no-op
     assert await llm_colloquialize(
-        "this is a fairly long english sentence here now", ai_client=fake) is None
-    assert fake.calls == 0          # 短句/非中文根本不调 LLM
+        "นี่คือประโยคภาษาไทยที่ค่อนข้างยาวมากเลยนะครับ", ai_client=fake) is None
+    assert fake.calls == 0          # 短句/非中非英根本不调 LLM
     reset_state()
 
 

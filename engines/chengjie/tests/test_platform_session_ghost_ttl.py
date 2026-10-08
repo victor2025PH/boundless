@@ -141,10 +141,13 @@ class TestChannelSnapshotName:
         monkeypatch.setattr(psh, "get_platform_session_health", lambda: h)
         monkeypatch.setattr(psh, "ensure_seeded_from_registry", lambda: 0)
 
+        # 状态中心 v2（2026-08-27）：横幅只亮「期望在线」的号（session_expected_online：
+        # 注册表行 status=online 等）；无注册表行的会话＝登录幽灵，不亮。
         class _FakeReg:
             def get(self, plat, acct):
                 if acct == "61580373548045":
-                    return {"label": "", "meta": {"self_name": "Micah Bindo"}}
+                    return {"label": "", "status": "online",
+                            "meta": {"self_name": "Micah Bindo"}}
                 return None
 
         import src.integrations.account_registry as reg_mod
@@ -167,9 +170,10 @@ class TestChannelSnapshotName:
         monkeypatch.setattr(psh, "get_platform_session_health", lambda: h)
         monkeypatch.setattr(psh, "ensure_seeded_from_registry", lambda: 0)
 
+        # 注册表有行（期望在线，见上一用例注释）但没有 label / self_name → name 为空串。
         class _EmptyReg:
             def get(self, plat, acct):
-                return None
+                return {"label": "", "status": "online", "meta": {}}
 
         import src.integrations.account_registry as reg_mod
         monkeypatch.setattr(reg_mod, "get_account_registry", lambda: _EmptyReg())

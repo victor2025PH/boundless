@@ -608,7 +608,12 @@ def test_card_and_report_payloads_carry_business_domain():
     client = _build_client({"business_domain": "companion"})
     store = get_goal_store(":memory:")
     d0 = client.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()
-    assert d0 == {"goal": None, "last": None}        # 无目标：旧契约原样（卡片此时不渲染画像/达成表单）
+    # 无目标：goal/last 为空、不带画像 schema（卡片此时不渲染画像/达成表单）。
+    # 无目标分支后来叠加了 discovery_paused / default_goal（#264 默认目标）/
+    # stage_plan（Q-8 B「阶段 · 今日主线」）/ signal_hint 等附加提示字段，不属于画像契约。
+    assert d0["goal"] is None and d0["last"] is None
+    assert "business_domain" not in d0 and "slots_progress" not in d0
+    assert set(d0) <= {"goal", "last", "discovery_paused", "default_goal", "stage_plan", "signal_hint"}
     g = store.create_goal(conversation_id=CONV, platform="telegram", account_id="a1",
                           chat_key="100", template="profile_discovery",
                           params={"slots": "age,family_status"}, autonomy="auto", deadline_days=10)

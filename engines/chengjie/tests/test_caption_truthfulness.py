@@ -178,8 +178,10 @@ async def test_operator_tagged_stock_still_sends():
 
 async def test_plain_selfie_request_unaffected():
     """普通要自拍（没点名别的东西）行为完全不变——P1 不能把正常发图拦掉。"""
+    # 「自拍」被 requested_scene_kind 识别为点名 kind=selfie（CK8HCT/Q-39：点名 kind 时通用池
+    # 须过 kind 过滤，绝不拿未归类照片顶包）→ 夹具条目须带 kind:selfie，才是「有自拍存货」。
     _store().add("lin", "photo", "/disk/selfie1.jpg", "/static/selfie1.jpg",
-                 caption="嘿嘿")
+                 caption="嘿嘿", tags=["kind:selfie"])
     sent, send_fn = _recorder()
     cfg = _cfg(enabled=True, provider={"backend": "album"})
     ok = await ia.run_autosend_image(
@@ -279,7 +281,9 @@ async def test_check_caption_soft_passes_without_vision_cfg():
 async def test_autosend_replaces_llm_caption_on_mismatch(monkeypatch):
     """端到端：核对判定不符 → 发出去的是诚实兜底文案而不是那句谎话，
     且图照发（错的是文字，不是图）。"""
-    _store().add("lin", "photo", "/disk/s.jpg", "/static/s.jpg")
+    # 「自拍」被 requested_scene_kind 识别为点名 kind=selfie（CK8HCT/Q-39：点名 kind 时通用池
+    # 须过 kind 过滤，绝不拿未归类照片顶包）→ 夹具条目须带 kind:selfie，才是「有自拍存货」。
+    _store().add("lin", "photo", "/disk/s.jpg", "/static/s.jpg", tags=["kind:selfie"])
 
     async def fake_caption(*a, **k):
         return "给你瞅瞅我卧室的样子"

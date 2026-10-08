@@ -56,7 +56,8 @@ def _spy_hub(ok: bool = True):
     seen = {}
 
     def fake(base_url, profile, text, *, language="", emotion="",
-             best_of=1, timeout_sec=30.0, audio_format="", tts_engine=""):
+             best_of=1, timeout_sec=30.0, audio_format="", tts_engine="",
+             emo_text="", emo_alpha=None):
         seen.update(profile=profile, text=text)
         if not ok:
             raise RuntimeError("hub down")
@@ -124,7 +125,8 @@ def _spy_hub_bestof(ok: bool = True):
     seen = {}
 
     def fake(base_url, profile, text, *, language="", emotion="",
-             best_of=1, timeout_sec=30.0, audio_format="", tts_engine=""):
+             best_of=1, timeout_sec=30.0, audio_format="", tts_engine="",
+             emo_text="", emo_alpha=None):
         seen.update(profile=profile, best_of=best_of)
         if not ok:
             raise RuntimeError("hub down")

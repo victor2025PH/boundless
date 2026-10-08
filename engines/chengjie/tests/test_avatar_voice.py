@@ -707,7 +707,13 @@ async def test_pipeline_avatar_clone_unreachable_falls_back_to_edge(tmp_path):
     tts = TTSPipeline(cfg)
     with patch.object(AvatarVoiceClient, "health_ok", return_value=False), \
          patch.object(TTSPipeline, "_edge_tts", fake_edge):
-        rv = await tts.synthesize("测试降级")
+        # Q-22（#287/#288，2026-09-12）：自动链克隆不可用时**不出系统音**，改发文字
+        # （带可用系统声提示）；坐席二次确认 confirm_system_voice=True 后才回落 edge。
+        blocked = await tts.synthesize("测试降级")
+        rv = await tts.synthesize("测试降级", confirm_system_voice=True)
+    assert not blocked.ok
+    assert blocked.extra.get("degrade_to_text") is True
+    assert blocked.extra.get("system_voice")
     assert rv.ok
     assert rv.provider == "edge_tts"
     assert rv.extra.get("fallback_from") == "avatar_clone"
@@ -746,7 +752,10 @@ async def test_pipeline_avatar_clone_synth_error_falls_back(tmp_path):
     with patch.object(AvatarVoiceClient, "health_ok", return_value=True), \
          patch.object(AvatarVoiceClient, "_post", side_effect=OSError("boom")), \
          patch.object(TTSPipeline, "_edge_tts", fake_edge):
-        rv = await tts.synthesize("测试合成失败降级")
+        # Q-22：未确认不出系统音；确认后回落 edge（见上一用例注释）。
+        blocked = await tts.synthesize("测试合成失败降级")
+        rv = await tts.synthesize("测试合成失败降级", confirm_system_voice=True)
+    assert not blocked.ok and blocked.extra.get("degrade_to_text") is True
     assert rv.ok
     assert rv.provider == "edge_tts"
 

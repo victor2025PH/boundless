@@ -69,9 +69,10 @@ async def test_translate_document_engine_passthrough():
     s = TranslationService(ai_client=None)
     s._router = EngineRouter([_StubEngine("ai"), _StubEngine("deepl")])
     svc = DocumentTranslateService(s)
-    out = await svc.translate_document("x", target_lang="zh", source_lang="en", engine="deepl")
+    # #234（M-1 B）：单字符没有可译正文 → TranslationService identity 早退，不进引擎；夹具用 ≥2 字符。
+    out = await svc.translate_document("xy", target_lang="zh", source_lang="en", engine="deepl")
     assert out["segments"][0]["provider"] == "deepl"
-    assert out["translated_text"] == "x·deepl"
+    assert out["translated_text"] == "xy·deepl"
 
 
 async def test_translate_document_empty():

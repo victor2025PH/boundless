@@ -35,8 +35,10 @@ class _FakeChatClient:
         class _Det:
             cached_tokens = cached
 
+        _pt = prompt_tokens  # 类体内 `prompt_tokens = prompt_tokens` 不读外层函数作用域 → NameError
+
         class _Usage:
-            prompt_tokens = prompt_tokens
+            prompt_tokens = _pt
             completion_tokens = 30
             prompt_tokens_details = _Det()
 
