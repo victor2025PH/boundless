@@ -79,6 +79,9 @@ async def test_ffmpeg_unavailable_soft_fail(monkeypatch, tmp_path):
 
 
 async def test_too_long_rejected(monkeypatch, tmp_path):
+    # 时长闸在 ffmpeg 存在之后才走到。CI 镜像没有 ffmpeg 时会先返回
+    # ffmpeg_unavailable，测不到「超限必须在抽轨之前拒绝」。与同文件并发测试一样打桩。
+    monkeypatch.setattr(vt, "ffmpeg_available", lambda: True)
     monkeypatch.setattr(vt, "probe_duration_sec", lambda _p: 16 * 60.0)
     stub = _StubVoice()
     svc = VideoTranslateService(stub, max_minutes=15)
