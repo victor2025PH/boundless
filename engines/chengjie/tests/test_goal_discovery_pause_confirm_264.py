@@ -27,7 +27,11 @@ from src.web.routes.goal_routes import register_goal_routes
 _ROOT = Path(__file__).resolve().parents[1]
 CONV = "whatsapp:12137839654:13105551234"
 PLAT, ACCT, CK = "whatsapp", "12137839654", "13105551234"
-T0 = time.mktime((2026, 9, 8, 20, 30, 0, 0, 0, -1))
+# 2026-10-08 CI 基线：原钉死 2026-09-08 20:30——目标 deadline_days=3，过了 09-11 后
+# 确认端点触发的到期结算会把目标收成 expired（定时炸弹）。改为「昨天 20:30」：
+# 保留固定的本地钟点语义，同时 deadline 恒在未来。
+_D = time.localtime(time.time() - 86400)
+T0 = time.mktime((_D.tm_year, _D.tm_mon, _D.tm_mday, 20, 30, 0, 0, 0, -1))
 
 
 class _Inbox:

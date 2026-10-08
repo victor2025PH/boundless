@@ -34,6 +34,15 @@ def _account_not_in_cold_start(monkeypatch):
     monkeypatch.setattr(ac, "resolve_account_connected_at", lambda *a, **k: 1.0)
 
 
+@pytest.fixture(autouse=True)
+def _account_has_persona(monkeypatch):
+    """同理钉住「账号已选人设」——④b persona_unselected 层（未选人设 → review）晚于本文件
+    落地，与业务线封顶正交；当场 upsert 的测试账号没有人设，不钉住会被该层如实降级。
+    专门门禁见 ``tests/test_persona_unselected.py``。"""
+    import src.ai.persona_voice as pv
+    monkeypatch.setattr(pv, "account_persona_unselected", lambda *a, **k: False)
+
+
 # ── 注册表列 + 缓存 ────────────────────────────────────────────────────────
 
 def test_registry_business_line_column_roundtrip():

@@ -274,7 +274,7 @@ def test_kick_orchestrator_noop_when_not_running(monkeypatch):
     asyncio.run(_go())
 
 
-def test_start_schedules_sync_without_blocking(monkeypatch):
+def test_start_schedules_sync_without_blocking(monkeypatch, tmp_path):
     """``start()`` 不得 await 同步：大号名单几秒起步，别拖慢账号变「在线」。"""
     import src.integrations.account_orchestrator as ao
     calls = []
@@ -287,7 +287,11 @@ def test_start_schedules_sync_without_blocking(monkeypatch):
     monkeypatch.setattr(ao.LineProtocolWorker, "_start_receiver", lambda self: None)
     import src.integrations.line_protocol_login as lpl
     monkeypatch.setattr(lpl, "is_okline_available", lambda: True)
-    monkeypatch.setattr(lpl, "tokens_path", lambda cfg, acct: __file__)  # 存在即可
+    # 存在即可；必须落在 tmp_path——start() 会在旁边写 ``<tokens>.reqseq`` 地板文件，
+    # 以前指向 __file__ 时每跑一次就改脏仓库里的 tests/test_line_sync_bootstrap.py.reqseq
+    tok = tmp_path / "tokens.json"
+    tok.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(lpl, "tokens_path", lambda cfg, acct: str(tok))
     import okline
     monkeypatch.setattr(okline.OkLine, "from_tokens_file",
                         classmethod(lambda cls, p, **k: _FakeClient()))

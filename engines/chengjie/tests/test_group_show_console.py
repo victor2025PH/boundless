@@ -35,6 +35,25 @@ def _isolated_show_store():
     reset_group_show_store()
 
 
+@pytest.fixture(autouse=True)
+def _seeded_account_pool(tmp_path):
+    """实例注册表（config 目录 = tmp_path）预置 8 个在线 TG 号，各走独立代理出口。
+
+    2026-10-08 CI 基线：``_online_accounts`` 在实例目录没有 account_registry.db 时回落
+    **仓库根 config/account_registry.db**——开发机上那是真号池（用例因此本地全绿），CI 上
+    不存在 → 号池恒空，出席/排练/容量相关断言集体失去前提。预置隔离号池让结果与机器无关，
+    也不再读到生产注册表。
+    """
+    from src.integrations.account_registry import AccountRegistry
+
+    reg = AccountRegistry(tmp_path / "account_registry.db")
+    # 8 个：够排 12 群×3 座（推荐 7），又小到让 40 群台账下的开口预算 < 4 角剧本（压角可观测）。
+    for i in range(8):
+        reg.upsert("telegram", f"gs_pool_{i:02d}", mode="protocol",
+                   label=f"pool{i}", proxy_id=f"proxy-{i:02d}", status="online")
+    yield
+
+
 @pytest.fixture()
 def _books():
     """仓库自带剧本库（没有剧本就没什么可测的，直接跳过而不是假绿）。"""
@@ -89,14 +108,19 @@ def test_api_playbooks_lists_with_validation(auth_client, _books):
 
 
 def test_api_playbook_detail_returns_beat_sheet(auth_client, _books):
+    # 2026-10-08 CI 基线：仓库剧本库已全部改为目标驱动型（goal/goal_cues + 角色说明，
+    # beats 为空），原「首本剧本必有逐拍」前提不再成立。详情端点仍须回完整形状：
+    # beats 列表（可空）与 beat_count 一致、角色说明逐条带 slot/desc；有拍时逐拍字段齐全。
     pid = sorted(_books)[0]
     r = auth_client.get(f"/api/group-show/playbooks/{pid}")
     assert r.status_code == 200
     pb = r.json()["playbook"]
-    assert pb["id"] == pid and pb["beats"]
-    beat = pb["beats"][0]
-    assert {"id", "role", "intent", "product", "soft", "pace"} <= set(beat)
-    assert isinstance(beat["soft"], int)      # 已折算成本拍生效值，前端不再算
+    assert pb["id"] == pid and isinstance(pb["beats"], list)
+    assert pb["beat_count"] == len(pb["beats"])
+    assert pb["roles_detail"] and all({"slot", "desc"} <= set(x) for x in pb["roles_detail"])
+    for beat in pb["beats"]:
+        assert {"id", "role", "intent", "product", "soft", "pace"} <= set(beat)
+        assert isinstance(beat["soft"], int)      # 已折算成本拍生效值，前端不再算
 
 
 def test_api_playbook_detail_unknown_id_is_4xx_localized(auth_client):
