@@ -21,9 +21,16 @@ from src.web.routes.unified_inbox_account_routes import register_account_routes
 @pytest.fixture(autouse=True)
 def _fresh_singletons(monkeypatch, tmp_path):
     import src.integrations.platform_session_health as psh
+    import src.ops.kill_switch as ksmod
     from src.integrations.shared import event_bus as eb
     monkeypatch.setattr(psh, "_SINGLETON", None, raising=False)
     monkeypatch.setattr(eb, "_bus", None, raising=False)
+    # 「blocked」上报会走真处置链 ban_signal.apply_action → get_kill_switch()：单例为空时
+    # 按默认相对路径 config/runtime_flags.db 建库——即写进**仓库工作树**、并把进程级
+    # 单例留给同 worker 后续用例。实锤：account:messenger:100 被暂停 2h，
+    # test_messenger_send_semantics 随后 4 条 403≠502（CI py3.12 -n 并行按分片顺序时红）。
+    # 每例一个 tmp 库的 KillSwitch，用例结束 monkeypatch 还原。
+    monkeypatch.setattr(ksmod, "_singleton", ksmod.KillSwitch(tmp_path / "rf.db"), raising=False)
     yield
 
 
