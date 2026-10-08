@@ -14,8 +14,6 @@ P0-3/B8 默认翻转后语义：``enabled`` 未显式配置 = 跟随引擎可用
 import asyncio
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -156,14 +154,8 @@ async def test_enrich_explicit_false_wins_over_engines():
 @pytest.mark.asyncio
 async def test_enrich_translates_inbound_en():
     app = FastAPI()
-    app.state.ai_client = MagicMock()
-    svc = TranslationService(ai_client=app.state.ai_client)
-
-    async def _fake_chat(prompt, ctx=None):
-        return "你好"
-
-    app.state.ai_client.chat = AsyncMock(side_effect=_fake_chat)
-
+    # 入站自动翻译不传 tier（标准档）。用零成本桩，不走付费 AIEngine。
+    svc = _svc_with_engine()
     req = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "app": app})
 
     msgs = [
@@ -245,13 +237,7 @@ async def test_enrich_records_inbound_funnel(tmp_path):
     store = InboxStore(tmp_path / "inbox.db")
     app = FastAPI()
     app.state.inbox_store = store
-    app.state.ai_client = MagicMock()
-    svc = TranslationService(ai_client=app.state.ai_client)
-
-    async def _fake_chat(prompt, ctx=None):
-        return "你好"
-
-    app.state.ai_client.chat = AsyncMock(side_effect=_fake_chat)
+    svc = _svc_with_engine()
     req = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "app": app})
 
     msgs = [message_obj(text="hello there", direction="in", message_id="m1")]

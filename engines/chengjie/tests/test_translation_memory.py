@@ -36,7 +36,7 @@ async def test_translate_persists_and_hits_across_restart(tmp_path):
     ai = _AI()
     store = TranslationMemoryStore(db)
     svc = TranslationService(ai_client=ai, memory_store=store)
-    r1 = await svc.translate("hello friend", target_lang="zh")
+    r1 = await svc.translate("hello friend", target_lang="zh", tier="pro")
     assert r1.ok and r1.translated_text == "你好朋友"
     assert ai.calls == 1
     store.close()
@@ -45,7 +45,7 @@ async def test_translate_persists_and_hits_across_restart(tmp_path):
     ai2 = _AI()
     store2 = TranslationMemoryStore(db)
     svc2 = TranslationService(ai_client=ai2, memory_store=store2)
-    r2 = await svc2.translate("hello friend", target_lang="zh")
+    r2 = await svc2.translate("hello friend", target_lang="zh", tier="pro")
     assert r2.ok and r2.translated_text == "你好朋友"
     assert r2.cached is True
     assert ai2.calls == 0  # 命中持久记忆，未调 AI
@@ -75,9 +75,9 @@ async def test_translate_thai_target_marks_cached_on_repeat(tmp_path):
     ai = _AIThai()
     store = TranslationMemoryStore(tmp_path / "tm.db")
     svc = TranslationService(ai_client=ai, memory_store=store)
-    r1 = await svc.translate("hello", target_lang="th")
+    r1 = await svc.translate("hello", target_lang="th", tier="pro")
     assert r1.ok and ai.calls == 1 and r1.cached is False
-    r2 = await svc.translate("hello", target_lang="th")
+    r2 = await svc.translate("hello", target_lang="th", tier="pro")
     assert r2.ok and r2.cached is True and ai.calls == 1  # 命中缓存，未再调 AI
     store.close()
 
@@ -88,12 +88,12 @@ async def test_glossary_version_change_invalidates(tmp_path):
     ai = _AI()
     store = TranslationMemoryStore(db)
     svc_v1 = TranslationService(ai_client=ai, memory_store=store, glossary_version="v1")
-    await svc_v1.translate("hello friend", target_lang="zh")
+    await svc_v1.translate("hello friend", target_lang="zh", tier="pro")
     assert ai.calls == 1
 
     # 术语库版本变了 → cache_key 变 → 不命中旧译，重新翻译
     svc_v2 = TranslationService(ai_client=ai, memory_store=store, glossary_version="v2")
-    await svc_v2.translate("hello friend", target_lang="zh")
+    await svc_v2.translate("hello friend", target_lang="zh", tier="pro")
     assert ai.calls == 2
     store.close()
 
@@ -114,7 +114,7 @@ async def test_glossary_terms_injected_into_prompt(tmp_path):
         glossary_terms={"size": "尺码"},
         glossary_version="v1",
     )
-    await svc.translate("what size", target_lang="zh", source_lang="en")
+    await svc.translate("what size", target_lang="zh", source_lang="en", tier="pro")
     assert "size->尺码" in captured["prompt"]
 
 
@@ -123,9 +123,9 @@ async def test_backward_compatible_without_memory_store():
     # memory_store=None → 行为与改造前一致（纯内存缓存）
     ai = _AI()
     svc = TranslationService(ai_client=ai)
-    r = await svc.translate("hello friend", target_lang="zh")
+    r = await svc.translate("hello friend", target_lang="zh", tier="pro")
     assert r.ok and r.translated_text == "你好朋友"
     # 内存 L1 命中
-    r2 = await svc.translate("hello friend", target_lang="zh")
+    r2 = await svc.translate("hello friend", target_lang="zh", tier="pro")
     assert r2.cached is True
     assert ai.calls == 1

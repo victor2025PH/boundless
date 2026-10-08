@@ -86,7 +86,7 @@ async def test_fuse_happy_path_returns_fused_text():
     cands = [_cand("m1", "你好，明天见", conf=0.8), _cand("m2", "您好呀明天见面", conf=0.7)]
     out = await fuse_compare_candidates(svc, text="hi, see you tomorrow",
                                         candidates=cands, source_lang="en",
-                                        target_lang="zh")
+                                        target_lang="zh", tier="pro")
     assert out["ok"] and out["text"] == "你好呀，明天见！"
     assert out["engine"] == "fusion" and out["engines_used"] == ["m1", "m2"]
     assert out["confidence"] > 0 and out["confidence_tier"] in ("high", "mid", "low")
@@ -120,7 +120,7 @@ async def test_fuse_rejects_bad_output_and_below_best():
     cands = [_cand("m1", "你好，明天见", conf=0.9), _cand("m2", "您好呀", conf=0.8)]
     out = await fuse_compare_candidates(svc, text="hi, see you tomorrow",
                                         candidates=cands, source_lang="en",
-                                        target_lang="zh")
+                                        target_lang="zh", tier="pro")
     assert not out["ok"] and out["reason"] == "bad_output"
     # LLM 通道抛异常 → fusion_error（fail-open，不上抛）
     class _Boom:
@@ -131,7 +131,8 @@ async def test_fuse_rejects_bad_output_and_below_best():
             raise RuntimeError("down")
     svc2 = TranslationService(engines=[AIEngine(_Boom())])
     out2 = await fuse_compare_candidates(svc2, text="hi", candidates=cands,
-                                         source_lang="en", target_lang="zh")
+                                         source_lang="en", target_lang="zh",
+                                         tier="pro")
     assert not out2["ok"] and out2["reason"] == "fusion_error"
 
 
@@ -274,6 +275,7 @@ def test_compare_route_fuse_end_to_end():
     client = TestClient(_compare_app())
     r = client.post("/api/unified-inbox/translate-compare", json={
         "text": "hello, see you tomorrow", "target_lang": "zh", "fuse": True,
+        "tier": "pro",
     })
     body = r.json()
     assert body["ok"] is True
