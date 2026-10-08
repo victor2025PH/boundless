@@ -4075,7 +4075,19 @@ translation:
     statistical:
       enabled: false                 # 默认关；开后需装 lingua 或 langdetect（缺则自动跳过）
       min_chars: 12                  # 低于此长度不咨询统计层（短文本统计不可靠）
-  # P56：多翻译引擎（按 order 故障转移；首个可用且非空者获胜，AI 兜底）
+  # 免费档（请求 tier 缺省 / std / free）只允许零成本引擎：ollama_mt（含
+  # api: openai 的 vLLM 部署）和 opencc。下列都算付费，免费请求不会调用，
+  # 没有可用零成本引擎或全部失败则翻译失败（出站 HOLD 转人工），绝不改打：
+  #   ai（主对话 LLM，即使 base 在局域网——会落到云端 key 池）、
+  #   deepl / google / microsoft / youdao / baidu、
+  #   custom 里的 OpenAI 兼容线（局域网也算付费）。
+  # pro / certified 以及任何其它显式档名保持原引擎链（认证档仍优先 DeepL）。
+  # 当前产品调用方都不传 tier，因此 enforce 之后现网翻译全部走这条守卫。
+  # 还依赖默认 order:["ai"]、暂时不能切本地 MT 的部署，上线前把本键改成 legacy
+  # （只关守卫，计费档不变）。缺省 / enforce = 守卫开。
+  free_tier_zero_cost: enforce
+  # P56：多翻译引擎（按 order 故障转移；首个可用且非空者获胜）。
+  # 付费档 / legacy 下 AI 仍是默认兜底；免费档会跳过 order 里的付费引擎。
   engines:
     # 可选内置名：ollama_mt/ai/deepl/google/microsoft/youdao/baidu/opencc；
     # custom 段里的任意名字（OpenAI 兼容通用线）写进 order 即参战。

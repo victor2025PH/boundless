@@ -84,6 +84,7 @@ async def fuse_compare_candidates(
     candidates: List[Dict[str, Any]],
     source_lang: str = "",
     target_lang: str = "",
+    tier: str = "",
 ) -> Dict[str, Any]:
     """把对照候选交 LLM 择优合成。返回 fusion dict（见模块 docstring 的闸门语义）。
 
@@ -107,6 +108,13 @@ async def fuse_compare_candidates(
     if ai_eng is None or not getattr(ai_eng, "available", False) \
             or not hasattr(ai_eng, "bare_chat"):
         return {"ok": False, "reason": "no_llm"}
+
+    # 融合是一次 LLM 调用（bare_chat），不经 EngineRouter。免费档在这里拦住，
+    # 不能靠「引擎类名不是付费表」绕过——只要会打 bare_chat 就是付费通道。
+    from src.ai.translation_engines import is_free_tier, note_paid_engine_blocked
+    if bool(getattr(svc, "free_tier_zero_cost", True)) and is_free_tier(tier):
+        note_paid_engine_blocked("fusion", target_lang=target_lang)
+        return {"ok": False, "reason": "free_tier_paid_engine_blocked"}
 
     prompt = build_fusion_prompt(
         text, cands, source_lang=source_lang, target_lang=target_lang)

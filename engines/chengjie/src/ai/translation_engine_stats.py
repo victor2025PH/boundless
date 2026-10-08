@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 
 class TranslationEngineStats:
     __slots__ = ("_lock", "_rows", "_started_at", "_last_ts", "_fallbacks", "_total",
-                 "_low_conf", "_conf_switches", "_sem_low")
+                 "_low_conf", "_conf_switches", "_sem_low", "_paid_blocked")
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -29,6 +29,8 @@ class TranslationEngineStats:
         self._low_conf = 0       # 一次译文被判低置信（< min_confidence）的累计次数
         self._conf_switches = 0  # 因低置信实际切换到非主引擎结果的 translate() 调用数
         self._sem_low = 0        # 其中「确定性达标但语义相似度低」触发的次数（在线语义闸门）
+        # 免费档请求被拦住的付费引擎次数（按引擎名）。没真正发起调用。
+        self._paid_blocked: Dict[str, int] = {}
 
     def record(self, engine: str, *, ok: bool, latency_ms: int = 0) -> None:
         engine = str(engine or "unknown")
@@ -63,6 +65,12 @@ class TranslationEngineStats:
         with self._lock:
             self._sem_low += 1
 
+    def record_paid_blocked(self, engine: str) -> None:
+        """免费档请求本会打到付费引擎、被中央守卫拦住时 +1。不记译文。"""
+        engine = str(engine or "unknown")
+        with self._lock:
+            self._paid_blocked[engine] = int(self._paid_blocked.get(engine, 0)) + 1
+
     def dump(self) -> Dict[str, Any]:
         with self._lock:
             rows = []
@@ -84,6 +92,8 @@ class TranslationEngineStats:
                 "low_confidence": self._low_conf,
                 "confidence_switches": self._conf_switches,
                 "semantic_low": self._sem_low,
+                "paid_blocked": {k: int(v) for k, v in sorted(self._paid_blocked.items())},
+                "paid_blocked_total": int(sum(self._paid_blocked.values())),
                 "rows": rows,
             }
 
@@ -101,6 +111,8 @@ class TranslationEngineStats:
             "# TYPE translation_engine_confidence_switches_total counter",
             "# HELP translation_engine_semantic_low_total Translations flagged by online semantic gate",
             "# TYPE translation_engine_semantic_low_total counter",
+            "# HELP translation_engine_paid_blocked_total Paid engines skipped for a free-tier request",
+            "# TYPE translation_engine_paid_blocked_total counter",
         ]
         with self._lock:
             lines.append(f"translation_engine_fallbacks_total {self._fallbacks}")
@@ -111,6 +123,9 @@ class TranslationEngineStats:
                 lbl = f'engine="{_esc(name)}"'
                 lines.append(f'translation_engine_attempts_total{{{lbl}}} {int(v["calls"])}')
                 lines.append(f'translation_engine_fail_total{{{lbl}}} {int(v["fail"])}')
+            for name, n in self._paid_blocked.items():
+                lbl = f'engine="{_esc(name)}"'
+                lines.append(f"translation_engine_paid_blocked_total{{{lbl}}} {int(n)}")
         return "\n".join(lines) + "\n"
 
     def reset(self) -> None:
@@ -122,6 +137,7 @@ class TranslationEngineStats:
             self._low_conf = 0
             self._conf_switches = 0
             self._sem_low = 0
+            self._paid_blocked.clear()
 
 
 def _esc(s: str) -> str:
