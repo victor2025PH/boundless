@@ -2344,6 +2344,15 @@ _ADDITIONS_2026_10_06_GROUP_SHOW_GUIDE = """
 """
 _BASELINE += _ADDITIONS_2026_10_06_GROUP_SHOW_GUIDE
 
+# 2026-10-08 集成分支合入：#91 Telegram 官方 Bot 入口——手动 setWebhook（需账号管理权限
+# _require_account_manager，成功后只读刷新 getWebhookInfo）；#88 START 重新订阅——坐席手动解冻
+# 停联会话（api_auth，必填理由，统一闸审计 action=unfrozen）。
+_ADDITIONS_2026_10_08_TG_OFFICIAL_AND_RESUBSCRIBE = """
+/api/admin/telegram-bot/set-webhook	POST
+/api/workspace/conv/{conversation_id}/stop-contact/unfreeze	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_08_TG_OFFICIAL_AND_RESUBSCRIBE
+
 
 def _parse_baseline():
     expected = set()

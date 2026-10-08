@@ -304,7 +304,7 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
                                                         "tags": store.get_conv_tags(conversation_id),
                                                         "ts": _t.time()})
             except Exception:
-                pass
+                logger.debug("解冻后广播 conv_tagged 失败（忽略，解冻本身已落库）", exc_info=True)
         return {"ok": bool(out.get("ok")), "error": out.get("error", ""), "was": out.get("was", ""),
                 "still_stopped": out.get("still_stopped", ""),
                 "mode_restored": (out.get("detail") or {}).get("mode_restored", "")}

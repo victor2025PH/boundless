@@ -6085,7 +6085,7 @@ def register_account_routes(app, *, api_auth, config_manager=None) -> None:
             try:
                 await tg_bot_probe(cfg)   # 刷新健康页的 webhook 状态（只读 getWebhookInfo）
             except Exception:
-                pass
+                logger.debug("set-webhook 成功后刷新 webhook 状态失败（忽略，健康页下次巡检再刷）", exc_info=True)
         return out
 
     @app.get("/api/admin/buried-conversations")
