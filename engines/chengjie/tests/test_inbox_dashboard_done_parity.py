@@ -85,8 +85,12 @@ def test_dashboard_done_card_uses_single_source():
     assert "if(_FUNNEL_DONE_SET[k]) n+=sc[k]||0;" in html, (
         "看板 _doneCountFromStages 未读取单源 _FUNNEL_DONE_SET"
     )
-    # done 卡片数字唯一经由 _doneCountFromStages（不硬算阶段和）
-    assert "_doneCard(_doneCountFromStages(" in html, (
+    # done 卡片数字唯一经由 _doneCountFromStages（不硬算阶段和）。
+    # 调用拆成两行是为了同一数字同时喂零值折叠；卡片入参仍是这个局部量。
+    assert "var dn=_doneCountFromStages(d.stage_counts);" in html, (
+        "看板「已成交」数字未从单源 _doneCountFromStages 取出"
+    )
+    assert "_doneCard(dn," in html, (
         "看板「已成交」卡片数字未走单源 _doneCountFromStages"
     )
 

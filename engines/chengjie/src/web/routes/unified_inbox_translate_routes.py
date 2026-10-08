@@ -348,12 +348,14 @@ def register_translate_routes(app, *, api_auth) -> None:
             engine = _resolve_conv_engine(request, platform, account_id, chat_key)
 
         svc = _get_translation_service(request)
+        tier = str(body.get("tier") or "").strip().lower()
         result = await svc.translate(
             text,
             target_lang=target_lang,
             source_lang=source_lang,
             style=style,
             engine=engine,
+            tier=tier,
         )
         # quotawall v2 P2.6（2026-08-21）：授权字符池耗尽（licensing.enforce 开）时
         # 服务层刻意软失败（自动链绝不阻断消息投递），但**坐席手动翻译**必须显式
@@ -417,7 +419,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                 try:
                     bres = await svc.translate(
                         result.translated_text, target_lang=back_target,
-                        source_lang=target_lang, style=style,
+                        source_lang=target_lang, style=style, tier=tier,
                     )
                     resp["back"] = {
                         "ok": bool(bres.ok),
@@ -471,6 +473,7 @@ def register_translate_routes(app, *, api_auth) -> None:
         engine = str(body.get("engine") or "").strip().lower()
         if not engine:
             engine = _resolve_conv_engine(request, platform, account_id, chat_key)
+        tier = str(body.get("tier") or "").strip().lower()
 
         svc = _get_translation_service(request)
         _MAX_ITEMS = 50
@@ -483,7 +486,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             async with sem:
                 result = await svc.translate(
                     text, target_lang=target_lang, source_lang=src,
-                    style=style, engine=engine,
+                    style=style, engine=engine, tier=tier,
                 )
             return iid, result
 
@@ -846,8 +849,10 @@ def register_translate_routes(app, *, api_auth) -> None:
                     "candidates": []}
 
         svc = _get_translation_service(request)
+        tier = str(body.get("tier") or "").strip().lower()
         data = await svc.compare_translations(
             text, target_lang=target_lang, source_lang=source_lang, style=style,
+            tier=tier,
         )
         cands = data.get("candidates") or []
         # P1-XF（2026-08-16）智能融合：fuse=true → 成功候选交 LLM 择优合成一条
@@ -860,6 +865,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                     svc, text=text, candidates=cands,
                     source_lang=str(data.get("source_lang") or source_lang or ""),
                     target_lang=target_lang,
+                    tier=tier,
                 )
             except Exception:
                 data["fusion"] = {"ok": False, "reason": "fusion_error"}
@@ -907,12 +913,13 @@ def register_translate_routes(app, *, api_auth) -> None:
         engine = str(body.get("engine") or "").strip().lower()
         if not engine:
             engine = _resolve_conv_engine(request, platform, account_id, chat_key)
+        tier = str(body.get("tier") or "").strip().lower()
 
         from src.ai.document_translate import DocumentTranslateService
         svc = DocumentTranslateService(_get_translation_service(request))
         _doc_res = await svc.translate_document(
             text, target_lang=target_lang, source_lang=source_lang,
-            style=style, engine=engine,
+            style=style, engine=engine, tier=tier,
         )
         # 坐席字符计量归因（2026-08-16）：源文本就在手上，按 len(text) 记——与
         # /translate 同口径（整篇成功才记；分段部分失败时 ok=False 不记，宁少勿多）。

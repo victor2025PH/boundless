@@ -1002,7 +1002,7 @@ function _admThemeWrite(m){
     if(!j.night||typeof j.night!=='object') j.night={mode:'auto',start:1320,end:480};
     j.night.mode=m; j.ts=Date.now(); anim=(j.anim!==false);
     localStorage.setItem('ws_appearance_v1',JSON.stringify(j));
-    fetch('/api/workspace/prefs',{method:'POST',credentials:'same-origin',
+    window.apiFetch('/api/workspace/prefs',{method:'POST',credentials:'same-origin',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({appearance:j})}).catch(function(){});
   }catch(_){}
   var rm=false; try{rm=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;}catch(_){}
@@ -1626,7 +1626,7 @@ function _diffLines(oldL, newL){
   }
   function probe(){
     if(done) return;
-    fetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
+    window.apiFetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
       return r.ok ? r.json() : null;
     }).then(function(b){
       if(b&&b.ok&&b.enabled){ inject(b); return; }
@@ -1677,7 +1677,7 @@ function _diffLines(oldL, newL){
   async function tick(){
     if(shown) return;
     try{
-      var r=await fetch(URL+'?_='+Date.now(),{cache:'no-store'});
+      var r=await window.apiFetch(URL+'?_='+Date.now(),{cache:'no-store'});
       if(!r.ok) return;
       var lines=String(await r.text()).split(/\r?\n/);
       var cur=String(lines[0]||'').trim();

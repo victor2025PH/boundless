@@ -108,7 +108,8 @@ def _stop_gate_decision(*, platform: str, account_id: str, external_id: str, tex
       ``{"action": "silent", "reason": "stop"}``，零生成、零出站，审计 ``blocked``。
     - 本条入站命中多语 STOP 词表 → 登记停联（会话在本机则冻结 + 名单，否则只进名单）→
       ``{"action": "silent", "reason": "stop", "confirm_text": …, "confirm_once": true}``：
-      ``confirm_text`` 是**唯一允许**的那条模板确认（``stop_contact.farewell_text``，不走 LLM），
+      ``confirm_text`` 是**唯一允许**的那条模板确认（默认 ``farewell_text``；
+      ``multilingual_confirm`` 打开后 tl/ceb/hi 用 snippets，不走 LLM），
       只在首次登记时给；执行层可选择发或不发，之后同一对端永远 silent。审计 ``detected``。
     - 本条只是**含糊**停联信号（``stop_gate.review_hint``）→ ``{"action": "silent", "reason": "stop_review"}``：
       不登记、不确认，只是不自动回，留给人工确认。审计 ``review``。
@@ -148,7 +149,7 @@ def _stop_gate_decision(*, platform: str, account_id: str, external_id: str, tex
                  conversation_id=str(rec.get("conversation_id") or ""), hit=hit)
         out: Dict[str, Any] = {"action": _ACTION_SILENT, "reason": sg.STOP_REASON}
         if not rec.get("already"):
-            out["confirm_text"] = sg.confirm_text(sg.guess_lang(text))
+            out["confirm_text"] = sg.resolve_confirm_text(text, config)
             out["confirm_once"] = True
             sg.audit(store, path="replybus_decide", action="confirm", platform=platform,
                      account_id=acct, peer=external_id,

@@ -54,7 +54,9 @@ class _Sender(TelegramSenderMixin):
         self.account_id = "acct7"
         self.logger = logging.getLogger("test_aline_disclosure")
 
-    def _presend_blocked(self, is_autoreply=True):
+    def _presend_blocked(self, is_autoreply=True, peer=None, rate_gate=True):
+        # 产品签名是 keyword-only peer=/rate_gate=（sender.py）。漏了这两个
+        # 形参时发送在进披露之前就 TypeError，client.sent 一直是空的。
         return False
 
     async def _mark_peer_read(self, chat_id):
