@@ -12,6 +12,10 @@ aiohttp>=3.9.0
 
 # 工具和实用程序
 PyYAML>=6.0.1
+# 保注释写 config overlay（src/utils/config_manager.py round-trip）。
+# 本机注释写的是 0.18.x；0.19 的 round-trip 已在回归相关测试里通过。缺这个包时
+# 写入函数返回 False，调用方拒绝整文件重写。
+ruamel.yaml>=0.18
 colorama>=0.4.6
 # 多语言 TTS 语言识别（src/integrations/whatsapp_rpa/lang_detect.py 软依赖；
 # 缺失时 Latin 语种会退化为 fallback）
