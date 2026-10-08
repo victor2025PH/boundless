@@ -908,9 +908,11 @@ def detect_persona_drift(
         return []
     hits: List[str] = []
     spk = persona.get("speaking") or {}
-    for p in _as_list(spk.get("forbidden_phrases") if isinstance(spk, dict) else None):
-        if p.lower() in hay:
-            hits.append(p)
+    # 与出站守卫同一口径（拉丁词边界 / CJK 子串）：旧的 `p.lower() in hay` 会让禁词 "AI"
+    # 命中他加禄常用词 kailangan / kaibigan，误判漂移、整段画像被拒写（P0-5 同源问题）。
+    from src.utils.persona_guard import match_forbidden_phrases
+    _fp = _as_list(spk.get("forbidden_phrases") if isinstance(spk, dict) else None)
+    hits.extend(match_forbidden_phrases(hay, _fp))
     bnd = persona.get("boundaries") or {}
     for t in _as_list(bnd.get("topics_to_avoid") if isinstance(bnd, dict) else None):
         if t.lower() in hay:

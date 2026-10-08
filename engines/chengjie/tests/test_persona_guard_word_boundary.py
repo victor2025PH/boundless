@@ -473,3 +473,26 @@ def test_snippet_example_persona_disclosure_kept_claim_stripped():
     cleaned, hits = sanitize("Real person ako, legit. Kain na tayo!", persona,
                              honest_identity=True, foreign_products=[])
     assert hits and cleaned == "Kain na tayo!"
+
+
+# ── deep_persona 漂移检测与出站守卫同口径（不再因 AI ⊂ kailangan 拒写画像）──
+
+
+def test_deep_persona_drift_uses_word_boundary():
+    from src.companion.deep_persona import detect_persona_drift
+
+    persona = {"speaking": {"forbidden_phrases": ["AI", "bot", "机器人"]}}
+    clean = detect_persona_drift(
+        persona, profile="Kailangan niya ng kaibigan, abot-kaya ang gusto niya",
+        inside_jokes=["mainit na kape"],
+    )
+    assert clean == []
+    assert detect_persona_drift(persona, profile="Akala niya AI daw ako") == ["AI"]
+    assert detect_persona_drift(persona, profile="他说你是不是机器人") == ["机器人"]
+
+
+def test_deep_persona_drift_topics_unchanged():
+    from src.companion.deep_persona import detect_persona_drift
+
+    persona = {"boundaries": {"topics_to_avoid": ["politics"]}}
+    assert detect_persona_drift(persona, profile="loves politics talk") == ["politics"]
