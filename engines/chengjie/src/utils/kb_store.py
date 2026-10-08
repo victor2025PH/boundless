@@ -20,6 +20,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from src.tenancy.workspace import DEFAULT_WORKSPACE_ID, resolve_write_workspace
+
 # 尝试导入 numpy（可选加速，不可用则纯 Python 兜底）
 try:
     import numpy as _np
@@ -1068,7 +1070,13 @@ class KnowledgeBaseStore:
 
     # ── 知识条目 CRUD ─────────────────────────────────────
 
-    def add_entry(self, data: Dict) -> str:
+    def add_entry(self, data: Dict, *, workspace_id: Optional[str] = None) -> str:
+        """新增 / 覆盖一条知识条目。
+
+        代运营工作区第二段：``workspace_id`` 显式传入优先；否则覆盖已有条目时沿用它原来的归属
+        （``INSERT OR REPLACE`` 会删旧行重插，不处理就会被重置成 default）；新条目跟着当前工作区，
+        没有就是 default。不从 ``data`` 里取归属——请求体不能自己指定工作区。
+        """
         entry_id = data.get("id") or str(uuid.uuid4())[:8]
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         triggers = _split_terms(data.get("triggers", []))
@@ -1084,6 +1092,14 @@ class KnowledgeBaseStore:
             rds_str = json.dumps(_rds, ensure_ascii=False)
         neg_trig = _split_terms(data.get("negative_triggers", []))
         with self._conn() as c:
+            _prev_ws = ""
+            if workspace_id is None:
+                try:
+                    _r = c.execute("SELECT workspace_id FROM kb_entries WHERE id=?",
+                                   (entry_id,)).fetchone()
+                    _prev_ws = str(_r[0] or "") if _r else ""
+                except sqlite3.Error:
+                    _prev_ws = ""
             c.execute(
                 "INSERT OR REPLACE INTO kb_entries "
                 "(id,category,title,triggers,scenario,steps,principles,example_reply_zh,"
@@ -1117,6 +1133,12 @@ class KnowledgeBaseStore:
                     now, now,
                 ),
             )
+            _ws = resolve_write_workspace(explicit=workspace_id, fallback=_prev_ws)
+            if _ws != DEFAULT_WORKSPACE_ID:     # 新行本就是 default：只有非 default 才补一笔
+                try:
+                    c.execute("UPDATE kb_entries SET workspace_id=? WHERE id=?", (_ws, entry_id))
+                except sqlite3.Error:
+                    pass
         self._touch_index()
         return entry_id
 

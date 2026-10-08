@@ -33,6 +33,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from src.tenancy.workspace import DEFAULT_WORKSPACE_ID, resolve_write_workspace
+
 from .models import InboxConversation, InboxMessage, MessageAnalysis
 
 logger = logging.getLogger(__name__)
@@ -1648,6 +1650,7 @@ class InboxStore:
         if not conv.conversation_id or not conv.platform:
             return
         now = self._now()
+        _conv_ws = resolve_write_workspace(platform=conv.platform, account_id=conv.account_id)
         with self._lock:
             self._conn.execute(
                 """
@@ -1710,7 +1713,40 @@ class InboxStore:
                     now, now,
                 ),
             )
+            self._tag_workspace_locked("conversations", "conversation_id",
+                                       conv.conversation_id, _conv_ws)
             self._conn.commit()
+
+    def _tag_workspace_locked(self, table: str, key_col: str, key: Any, ws: str) -> None:
+        """代运营工作区第二段：给刚写入的行打上工作区标签。
+
+        只写非 default 的标签：单客户实例（全是 default）零额外写入；带来 default（账号未归属 /
+        注册表不可用 / 关了打标）时不动已有标签，避免把真实归属冲回 default。会话跟着账号走——
+        账号改归属后，该账号后续写入的会话随之改标。调用方已持锁、同一事务；绝不抛。
+        """
+        if not ws or ws == DEFAULT_WORKSPACE_ID:
+            return
+        try:
+            self._conn.execute(
+                f"UPDATE {table} SET workspace_id=? WHERE {key_col}=? AND workspace_id != ?",
+                (ws, key, ws))
+        except sqlite3.Error:
+            logger.debug("[workspace] %s 打标失败（忽略，保持 default）", table, exc_info=True)
+
+    def _workspace_for_conversation_locked(self, conversation_id: str) -> str:
+        """会话关联写入（agent_sends / outreach_log）的归属：会话所属账号的工作区 → 会话已有标签
+        → 当前工作区 → default。调用方已持锁；绝不抛。"""
+        platform = account_id = conv_ws = ""
+        try:
+            row = self._conn.execute(
+                "SELECT platform, account_id, workspace_id FROM conversations"
+                " WHERE conversation_id=?", (conversation_id,)).fetchone()
+            if row is not None:
+                platform, account_id, conv_ws = (str(row[0] or ""), str(row[1] or ""),
+                                                 str(row[2] or ""))
+        except sqlite3.Error:
+            logger.debug("[workspace] 会话归属查询失败（按当前工作区）", exc_info=True)
+        return resolve_write_workspace(platform=platform, account_id=account_id, fallback=conv_ws)
 
     def _fill_unknown_language_locked(self, conversation_id: str, lang: str) -> None:
         """P1-5（2026-10-08）：新入站消息带可信语种、而会话语言还是 unknown → 补上。
@@ -1801,6 +1837,7 @@ class InboxStore:
             return 0
         now = self._now()
         inserted = 0
+        _conv_ws = resolve_write_workspace(platform=conv.platform, account_id=conv.account_id)
         # 本批**真正新插入**的入站消息里最晚的 ts（0=本批没有新入站消息）。
         # 只有它能驱动「归档会话自动复活」，见 _unarchive_on_inbound 的判据说明。
         _new_inbound_ts = 0.0
@@ -1884,6 +1921,8 @@ class InboxStore:
                     now, now,
                 ),
             )
+            self._tag_workspace_locked("conversations", "conversation_id",
+                                       conv.conversation_id, _conv_ws)
             for msg in msgs or []:
                 if not msg.conversation_id:
                     continue
@@ -4353,6 +4392,8 @@ class InboxStore:
                 "VALUES (?,?,?,?,?,?)",
                 (cid, aid, str(agent_name or ""), t, th, ref),
             )
+            self._tag_workspace_locked("agent_sends", "rowid", int(cur.lastrowid or 0),
+                                       self._workspace_for_conversation_locked(cid))
             if th or ref:
                 self._claim_row_for_send_locked(int(cur.lastrowid or 0), cid, t, th, ref)
             self._conn.commit()
@@ -8775,6 +8816,11 @@ class InboxStore:
                 (cid, str(batch_id or ""), str(platform or ""), str(account_id or ""),
                  str(status or "sent"), str(note or ""), t),
             )
+            # 触达跟着本次发送的账号 → 会话的账号 / 已有标签 → 当前工作区 → default
+            self._tag_workspace_locked(
+                "outreach_log", "rowid", int(cur.lastrowid or 0),
+                resolve_write_workspace(platform=platform, account_id=account_id,
+                                        fallback=self._workspace_for_conversation_locked(cid)))
             self._conn.commit()
             return int(cur.lastrowid or 0)
 

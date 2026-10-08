@@ -217,6 +217,32 @@ class AccountRegistry:
         _invalidate_business_line_cache(platform, account_id)
         return True
 
+    def set_workspace(self, platform: str, account_id: str, workspace_id: str) -> bool:
+        """代运营工作区第二段：设账号归属工作区（'' → default）。账号不存在返回 False。
+
+        只改标签，不搬历史数据；该账号后续写入的会话 / 触达跟着新归属走。
+        """
+        from src.tenancy.workspace import DEFAULT_WORKSPACE_ID, normalize_workspace_id
+        ws = normalize_workspace_id(workspace_id) or DEFAULT_WORKSPACE_ID
+        with self._lock:
+            cur = self._conn.execute(
+                """UPDATE platform_accounts SET workspace_id=?, updated_at=?
+                   WHERE platform=? AND account_id=?""",
+                (ws, time.time(), str(platform or "").lower(), str(account_id or "")),
+            )
+            self._conn.commit()
+        _invalidate_business_line_cache(platform, account_id)
+        return bool(cur.rowcount)
+
+    def workspace_of(self, platform: str, account_id: str) -> str:
+        """账号归属工作区；未登记 → ''。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT workspace_id FROM platform_accounts WHERE platform=? AND account_id=?",
+                (str(platform or "").lower(), str(account_id or "")),
+            ).fetchone()
+        return str(row[0] or "") if row else ""
+
     def set_status(self, platform: str, account_id: str, status: str) -> None:
         if status not in VALID_STATUS:
             return
@@ -419,6 +445,29 @@ def _bl_cache_key(platform: str, account_id: str) -> str:
 
 def _invalidate_business_line_cache(platform: str, account_id: str) -> None:
     _BL_CACHE.pop(_bl_cache_key(platform, account_id), None)
+    _WS_CACHE.pop(_bl_cache_key(platform, account_id), None)
+
+
+#: 账号归属工作区缓存（代运营工作区第二段；与业务线缓存同 TTL、同失效点）
+_WS_CACHE: Dict[str, tuple] = {}
+
+
+def cached_account_workspace(platform: str, account_id: str) -> str:
+    """账号归属工作区（'' = 未登记 / 注册表不可用）。只读现有单例，绝不隐式建库。"""
+    key = _bl_cache_key(platform, account_id)
+    now = time.time()
+    hit = _WS_CACHE.get(key)
+    if hit is not None and (now - hit[1]) < _BL_CACHE_TTL:
+        return hit[0]
+    val = ""
+    try:
+        reg = _registry
+        if reg is not None:
+            val = reg.workspace_of(platform, account_id)
+    except Exception:
+        val = ""
+    _WS_CACHE[key] = (val, now)
+    return val
 
 
 def peek_account(platform: str, account_id: str) -> Optional[Dict[str, Any]]:
