@@ -53,7 +53,8 @@ async def test_translation_service_uses_ai_client():
             return "你好朋友"
 
     svc = TranslationService(ai_client=FakeAI())
-    rv = await svc.translate("hello friend", target_lang="zh")
+    # ai 是付费通道；这条测的是 AI 管线，显式 pro。免费档由 *_zhiyu 用例钉住。
+    rv = await svc.translate("hello friend", target_lang="zh", tier="pro")
     assert rv.ok is True
     assert rv.provider == "ai"
     assert rv.translated_text == "你好朋友"
@@ -86,13 +87,13 @@ async def test_translate_zh_to_traditional_and_cantonese_not_identity():
             return self._out
 
     svc_tw = TranslationService(ai_client=FakeAI("謝謝你的幫忙"))
-    r_tw = await svc_tw.translate("谢谢你的帮忙", target_lang="zh-TW")
+    r_tw = await svc_tw.translate("谢谢你的帮忙", target_lang="zh-TW", tier="pro")
     assert r_tw.ok is True and r_tw.provider == "ai"
     assert r_tw.translated_text == "謝謝你的幫忙"
     assert r_tw.target_lang == "zh-tw"
 
     svc_yue = TranslationService(ai_client=FakeAI("唔該晒你幫手"))
-    r_yue = await svc_yue.translate("谢谢你的帮忙", target_lang="yue")
+    r_yue = await svc_yue.translate("谢谢你的帮忙", target_lang="yue", tier="pro")
     assert r_yue.ok is True and r_yue.provider == "ai"
     assert r_yue.translated_text == "唔該晒你幫手"
 
@@ -140,7 +141,7 @@ async def test_memory_hit_with_refusal_is_purged_and_retranslated():
     svc = TranslationService(ai_client=ai, memory_store=store)
     key = _seed(store, svc, _BAD_SRC, _BAD_OUT)
     before = int(TranslationService._refusal_purged.get("memory", 0))
-    rv = await svc.translate(_BAD_SRC, target_lang="zh")
+    rv = await svc.translate(_BAD_SRC, target_lang="zh", tier="pro")
     # 坏记忆没被原样吐出：走引擎重译拿到真译文，且不是缓存命中
     assert rv.ok is True and rv.translated_text == "没错" and rv.cached is False
     assert ai.calls == 1
@@ -149,7 +150,7 @@ async def test_memory_hit_with_refusal_is_purged_and_retranslated():
     assert row is not None and row["translated_text"] == "没错"
     assert int(TranslationService._refusal_purged.get("memory", 0)) == before + 1
     # 再来一次：L1 命中正常译文，不再打引擎
-    rv2 = await svc.translate(_BAD_SRC, target_lang="zh")
+    rv2 = await svc.translate(_BAD_SRC, target_lang="zh", tier="pro")
     assert rv2.cached is True and rv2.translated_text == "没错" and ai.calls == 1
 
 
@@ -172,7 +173,7 @@ async def test_memory_hit_refusal_retranslate_failure_does_not_reseed_memory():
     ai = _CountingAI(_BAD_OUT)
     svc = TranslationService(ai_client=ai, memory_store=store)
     key = _seed(store, svc, _BAD_SRC, _BAD_OUT)
-    rv = await svc.translate(_BAD_SRC, target_lang="zh")
+    rv = await svc.translate(_BAD_SRC, target_lang="zh", tier="pro")
     assert rv.ok is False and rv.error == "engine_refusal"
     assert store.get(key) is None          # 旧坏行已删、新坏译文没入库
 
