@@ -2401,7 +2401,7 @@ class SkillManager(LoggerMixin):
                 user_context.pop("_kb_nohit_block", None)
                 user_context.pop("_kb_decision", None)
                 if _kb is not None:
-                    from src.utils.kb_gate import lexical_overlap_ok, should_log_kb_miss
+                    from src.utils.kb_gate import judge_kb_hit, lexical_overlap_ok, should_log_kb_miss
                     from src.utils.kb_policy import resolve_kb_policy
                     _kbg_p, _kbg_tier = None, ""
                     try:
@@ -2491,6 +2491,17 @@ class SkillManager(LoggerMixin):
 
                     _kb_ctx = _kb.build_ai_context_from_result(_search_result, lang=_lang)
                     _hit = bool(_kb_ctx)
+                    # 命中率口径（2026-10-08）：_hit 仍决定注入 / 直出流程（行为不变）；
+                    # 查询日志与 _EMBED_STATS 改记 _hit_q——首条实词重叠或向量余弦达标才算，
+                    # 规则 / 示例撑起来的非空 kb_ctx 不再算命中（此前 hits 恒等于 queries）。
+                    try:
+                        _vec_min = float(
+                            ((getattr(self.config, "config", None) or {}).get("knowledge_base") or {})
+                            .get("hit_min_vec_sim", 0.55))
+                    except Exception:
+                        _vec_min = 0.55
+                    _hit_q, _hit_why = judge_kb_hit(text, _search_result, vec_min_sim=_vec_min)
+                    _kb_logged = False
                     _mode = _search_result.get("search_mode", "bm25")
                     _cat  = (_search_result["entries"][0]["category"]
                              if _search_result.get("entries") else "")
@@ -2597,12 +2608,18 @@ class SkillManager(LoggerMixin):
                                     _dm.get("path"), _dm.get("branch"), _dm.get("router"),
                                 )
                                 try:
+                                    # direct 直出也按统一口径记一次；companion 清掉 _direct
+                                    # 落回 AI 路径时不再重复记（此前同一问被记两次）。
                                     _kb.log_query(
-                                        text, hit=True, search_mode=_mode,
+                                        text, hit=_hit_q, search_mode=_mode,
                                         category=_cat, lang=_lang,
                                         score=_top_bm25_score,
                                         matched_entry_id=_matched_eid,
                                     )
+                                    _kb_logged = True
+                                    _EMBED_STATS["kb_queries"] += 1
+                                    if _hit_q:
+                                        _EMBED_STATS["kb_hits"] += 1
                                 except Exception:
                                     pass
                                 if _direct is not None:
@@ -2657,15 +2674,19 @@ class SkillManager(LoggerMixin):
 
                     #写入查�日志（含分数 + 匹配条目ID，用于弱命中分析�?
                     try:
-                        _kb.log_query(
-                            text, hit=_hit,
-                            search_mode=_mode, category=_cat, lang=_lang,
-                            score=_top_bm25_score,
-                            matched_entry_id=_matched_eid,
-                        )
-                        _EMBED_STATS["kb_queries"] += 1
-                        if _hit:
-                            _EMBED_STATS["kb_hits"] += 1
+                        if not _kb_logged:
+                            _kb.log_query(
+                                text, hit=_hit_q,
+                                search_mode=_mode, category=_cat, lang=_lang,
+                                score=_top_bm25_score,
+                                matched_entry_id=_matched_eid,
+                            )
+                            _EMBED_STATS["kb_queries"] += 1
+                            if _hit_q:
+                                _EMBED_STATS["kb_hits"] += 1
+                        if _hit and not _hit_q:
+                            self.logger.info(
+                                "%sKB 弱命中（注入但不计命中）: %s", log_prefix, _hit_why)
                     except Exception:
                         pass
             except Exception as _kb_err:
