@@ -66,7 +66,7 @@ LOCKED_BY = "stop_gate"
 _POLITE_TAIL = (
     "po", "pls", "plz", "please", "lang", "ha", "bro", "sis", "ok", "okay", "kayo", "ka",
     "thanks", "thank you", "ty", "now", "already", "nalang", "sana", "salamat", "talaga",
-    "ji", "bhai", "yaar", "请", "谢谢", "了", "吧", "啊", "啦",
+    "ji", "bhai", "yaar", "palihug", "palihog", "pls lang", "请", "谢谢", "了", "吧", "啊", "啦",
 )
 _POLITE_HEAD = ("please", "pls", "plz", "po", "hoy", "uy", "bro", "sis", "请")
 
@@ -77,22 +77,44 @@ _WHOLE: Tuple[str, ...] = (
     "stop sending", "stop the messages", "no more messages", "no more msgs",
     "unsubscribe", "unsub", "unsubscribe me", "opt out", "opt-out", "optout", "opt me out",
     "remove me", "stop contacting", "dont message", "don't message", "dont text", "don't text",
+    # 智语 2026-10-08：enough 单独成句按停联（CANCEL / END / QUIT 见下方 _STRICT_WHOLE：只认裸词）
+    "enough",
     # tl / Taglish
     "tigil", "tigil na", "tigilan", "tigilan mo na", "tigilan mo na ako", "tigilan nyo na ako",
     "tama na", "ayoko na", "ayaw ko na", "stop na", "stop mo na", "stop nyo na", "stop niyo na", "itigil mo na", "itigil nyo na",
-    "wag mo na ako i-chat", "unsubscribe na",
+    "wag mo na ako i-chat", "unsubscribe na", "pakitigil", "pakitigil na", "pakihinto na", "enough na",
     # Bisaya / Cebuano
     "hunong na", "hunong", "undang na", "undang", "ayaw na", "ayaw na ko", "ayaw nako",
-    "ayaw na pag message", "ayaw na pag-message",
+    "ayaw na pag message", "ayaw na pag-message", "hunonga", "hunonga na", "pahunong", "pahunong na",
+    "undanga na", "paundang na",
     # hi / Hinglish（天城文 + 罗马化）
     "band karo", "bandh karo", "band kro", "bas karo", "mat bhejo", "message mat karo",
     "msg mat karo", "बंद करो", "बस करो", "मत भेजो", "मैसेज मत करो", "मैसेज मत भेजो",
+    "अनसब्सक्राइब", "unsubscribe karo", "band karo messages", "band karo message",
     # zh（旧正则已覆盖「别再发了 / 不要再联系」等，这里补短指令；TD / T 是国内短信退订惯例）
     "停", "停止", "退订", "取消订阅", "td", "别发了", "不要发了", "不要再发",
+    "停止发送", "停发", "别再发送", "不要再发送",
 )
 _WHOLE_SET = frozenset(_WHOLE)
 
-_MSG = r"(?:i-?)?(?:chat|message|msg|mesg|text|txt|pm|dm|kontak|contact|tawagan|tawag|istorbohin|guluhin|spam)"
+# 蛋博士 2026-10-08 拍板：整条消息**只有**一个 CANCEL / END / QUIT（大小写不限，前后只允许标点 / 空格）
+# → 按短信行业惯例（CTIA）硬停，与 STOP / UNSUBSCRIBE / STOPALL 同等；「STOP 后继续发」是红线，宁可多拦。
+# 不剥礼貌词（「please cancel」「cancel po」不在此列，走句中规则 / review_hint）；句中出现（cancel my order、
+# the end）同样不在此列。
+_STRICT_WHOLE = frozenset({"cancel", "end", "quit"})
+_STRICT_STRIP = re.compile(r"^[\W_]+|[\W_]+$", re.UNICODE)
+
+
+def _strict_whole_hit(text: Any) -> str:
+    try:
+        t = unicodedata.normalize("NFKC", str(text or "")).strip()
+        t = _STRICT_STRIP.sub("", t).lower()
+        return t if t in _STRICT_WHOLE else ""
+    except Exception:
+        return ""
+
+_MSG = (r"(?:i-?)?(?:chat|message|msg|mesg|text|txt|pm|dm|kontakin|kontakon|contactin|kontak|contact"
+        r"|tawagan|tawag|istorbohin|guluhin|spam)")
 # B. 句中短语（ASCII 词边界 lookaround；中文 / 天城文用子串）
 _PHRASES = re.compile(
     r"(?<![a-z0-9_])(?:"
@@ -107,28 +129,43 @@ _PHRASES = re.compile(
     r"|ayaw\s+ko\s+na\s+(?:ng|sa|ma-?)\s*(?:chat|message|messages|text|msg|makatanggap)"
     r"|stop\s+(?:mo|nyo|niyo)\s+na\s+(?:ang\s+)?(?:pag[-\s]?)?(?:chat|message|text|pagmemessage)"
     r"|(?:h?uwag|wag)\s+(?:mo|nyo|niyo)\s+na\s+(?:akong|ako)\s+(?:i-?)?(?:istorbohin|guluhin|kulitin)"
+    # 智语 2026-10-08：句中带 po / mag-send / 名单删除 / 不想再收
+    r"|(?:h?uwag|wag)\s+na\s+(?:po\s+)?(?:kayong|kang|kayo|ka)\s+(?:po\s+)?(?:mag-?)?(?:send|chat|message|text|msg|pm|txt)"
+    r"|(?:h?uwag|wag)\s+(?:mo|nyo|niyo)\s+na\s+(?:po\s+)?(?:akong|ako)\s+" + _MSG
+    + r"|(?:ayoko|ayaw\s+ko)\s+na\s+(?:po\s+)?(?:(?:ng|sa)\s+)?(?:makatanggap|matanggap|ma-?(?:message|chat|text))"
+    r"|(?:alisin|tanggalin|pakitanggal|pakialis|tanggal|alis)\s+(?:mo\s+|nyo\s+|niyo\s+)?(?:na\s+)?(?:po\s+)?"
+    r"(?:ako|kami)\s+sa\s+(?:listahan|list|contacts?|contact\s+list)"
+    r"|stop\s+na\s+(?:po\s+)?(?:sa\s+)?(?:pag[-\s]?)?(?:chat|text|message|txt|msg|pagtext|pagmessage)"
+    r"|(?:stop|tigil)(?:\s+it)?(?:\s+na)?(?:\s+po)?\s+(?:i'?m\s+|im\s+)?(?:not|di|hindi)\s+(?:po\s+)?(?:ako\s+)?(?:interested|interesado)"
     # ── Bisaya ──
-    r"|ayaw\s+(?:na\s+)?(?:ko|ko'g|ko\s+og|nako|mi|kami)\s+(?:i-?)?(?:message|chat|text|txt|msg|pm|hasla|samoka)"
+    r"|ayaw\s+(?:na\s+)?(?:ko|ko'g|ko\s+og|nako|mi|kami)\s+(?:i-?|pag-?|pag\s+)?(?:message|chat|text|txt|msg|pm|hasla|hasola|hasolon|samoka)"
+    r"|ayaw\s+na\s+(?:mo|kamo|kayo|ka)\s+(?:pag-?|pag\s+)?(?:message|chat|text|txt|msg)"
     r"|ayaw\s+na\s+(?:pag[-\s]?|og\s+)?(?:message|chat|text|txt|msg)"
     r"|(?:hunong|undang)\s+na\s+(?:sa\s+)?(?:pag[-\s]?)?(?:message|chat|text|txt)"
-    r"|dili\s+na\s+ko\s+(?:gusto|ganahan)\s+(?:og|ug|sa)\s+(?:message|chat|text)"
+    r"|(?:dili|di)\s+na\s+ko\s+(?:gusto|ganahan)\s+(?:og\s+|ug\s+|sa\s+|ma-?)(?:message|chat|text|ma-?message)"
     # ── en（旧正则之外的漏网）──
-    r"|stop\s+(?:sending|messaging|texting|contacting|spamming|dming|pming)\b"
+    r"|(?:stop|quit)\s+(?:sending|messaging|texting|contacting|spamming|dming|pming)\b"
     r"|no\s+more\s+(?:messages|texts|msgs|chats)"
     r"|(?:remove|take)\s+me\s+(?:off|from)\s+(?:your|this|the)\s+(?:list|contacts?|mailing\s+list)"
     r"|(?:i\s+(?:want|wanna|would\s+like)\s+to\s+)?unsubscribe(?:\s+me)?"
     r"|opt\s*-?\s*(?:me\s+)?out"
-    r"|i\s+(?:don'?t|do\s+not)\s+want\s+(?:any\s+more|anymore|more)?\s*(?:your\s+)?(?:messages|texts|msgs)"
+    r"|i\s+(?:don'?t|do\s+not)\s+want\s+(?:(?:any\s+more|anymore|any|more|these|those|your)\s+)*(?:messages|texts|msgs)"
     # ── hi 罗马化 ──
     r"|(?:mujhe|muje|mjhe)\s+(?:message|msg|messages|text)\s+(?:mat|na|mt)\s+(?:karo|kro|bhejo|kariye|kijiye|bhejna)"
     r"|(?:message|msg|messages|text)\s+(?:mat|mt)\s+(?:karo|kro|bhejo|kariye|kijiye|bhejna)"
     r"|pareshan\s+(?:mat|mt)\s+(?:karo|kro|kijiye)"
+    r"|(?:band|bandh)\s+(?:karo|kro|kardo|kar\s+do)\s+(?:messages?|msgs?|texts?)"
+    r"|(?:messages?|msgs?|texts?)\s+(?:bhejna|karna)\s+(?:band|bandh)\s+(?:karo|kro|kardo|kar\s+do)"
     r")(?![a-z0-9_])"
     # ── 天城文 / 中文：子串 ──
     r"|मुझे\s*(?:मैसेज|संदेश|मेसेज)\s*(?:मत|न)\s*(?:करो|करें|भेजो|भेजें|कीजिए)"
     r"|(?:मैसेज|संदेश|मेसेज)\s*(?:मत|न)\s*(?:करो|करें|भेजो|भेजें|कीजिए)"
     r"|परेशान\s*मत\s*(?:करो|करें|कीजिए)|संपर्क\s*मत\s*(?:करो|करें|कीजिए)"
-    r"|退订|取消订阅|别再给我发|不要再给我发|别给我发消息|不要给我发消息",
+    r"|(?:मैसेज|संदेश|मेसेज)\s*(?:भेजना|करना)\s*बंद\s*(?:करो|करें|कीजिए|कर\s*दो)"
+    r"|(?:मैसेज|संदेश|मेसेज)\s*नहीं\s*चाहिए|(?:लिस्ट|सूची)\s*से\s*(?:हटाओ|हटा\s*दो|हटाएं|निकालो)|अनसब्सक्राइब"
+    # 退订：排除「退订单 / 退订货 / 退订金 / 退订房 / 退订机票……」（退单退款不是停联，智语 2026-10-08）
+    r"|退订(?!的?[单货款金房酒机票座位餐车船团])|取消订阅|别再给我发|不要再给我发|别给我发消息|不要给我发消息"
+    r"|停止发送|停发(?:消息|信息|短信)|(?:以后)?(?:别|不要)(?:再)?给我发(?:消息|信息|短信)?了",
     re.IGNORECASE,
 )
 
@@ -216,6 +253,9 @@ def match_lexicon(text: Any) -> str:
     直接调用也可（测试 / 审计）。
     """
     try:
+        strict = _strict_whole_hit(text)
+        if strict:
+            return strict
         s = normalize(text)
         if not s:
             return ""
@@ -254,6 +294,61 @@ def detect(text: Any) -> str:
 
 def is_stop_message(text: Any) -> bool:
     return bool(detect(text))
+
+
+# ── 含糊停联信号 → 待人工确认（智语 2026-10-08，「宁可多拦」）─────────────────────
+#
+# 不够硬停（不冻结、不进名单、不发确认），但出现了停联 / 退出类关键词，又不属于已知无害用法：
+# 「stop it haha」「omg stop」「should I stop playing?」「cancel na lang」「取消」「别烦」……
+# 调用方据此**不自动回复**，打「需人工」让坐席确认：replybus → silent/reason=stop_review；
+# 收件箱 → 草稿降 L1 + needs_human；协议直发链 → 不生成、只提醒坐席。
+REVIEW_REASON = "stop_review"
+
+_REVIEW_KEYS = re.compile(
+    r"(?<![a-z0-9_])(?:stop+|stopping|tigil|itigil|hinto|hunong|undang|unsub(?:scribe)?|"
+    r"opt\s*-?\s*out|cancel|quit|enough|block)(?![a-z0-9_])"
+    r"|停止|停发|退订(?!的?[单货款金房酒机票座位餐车船团])|取消|别烦|烦死|拉黑|屏蔽|别发(?![呆烧胖福财愁火疯抖誓脾])|不要发(?![呆烧胖福财愁火疯抖誓脾])|别再发(?![呆烧胖福财愁火疯抖])|不要再发(?![呆烧胖福财愁火疯抖])"
+    r"|बंद\s*कर|अनसब्सक्राइब|मत\s*भेजो",
+    re.IGNORECASE,
+)
+# 已知无害用法（命中关键词但明显不是要我们停）：剥掉这些片段后再看还剩不剩关键词。
+_REVIEW_BENIGN = re.compile(
+    r"(?:bus|pit|full|jeep|tricycle|last|next|first)\s+stop|tigil-?\s*pasada|"
+    r"(?:quit|stop)\s+(?:my|his|her|the\s+job|smoking|drinking|eating|crying|laughing|worrying|overthinking|thinking)\b|stop\s*over|stop\s+(?:by|in|at|sign|light)|non-?stop|one-?stop|"
+    r"(?:don'?t|do\s+not|didn'?t|did\s+not|never|can'?t|cannot|couldn'?t|won'?t|wouldn'?t|not)\s+"
+    r"(?:want\s+to\s+|wanna\s+|really\s+|ever\s+|gonna\s+)*stop|"
+    r"cancel(?:l?ed|ling)?\s+(?:my|the|this|that|our|an?|his|her)\s+(?:order|booking|reservation|appointment|"
+    r"flight|ticket|trip|meeting|plan|plans|payment|transaction|deposit|withdrawal)|"
+    r"(?:order|booking|reservation|appointment|payment)\s+(?:was\s+|is\s+|got\s+)?cancel(?:l?ed)?|"
+    r"取消(?:订单|预订|预约|付款|支付|交易|航班|行程|会议|发货|退款|提现|充值)|(?:订单|预约|预订)\S{0,4}取消|"
+    r"block\s*chain|(?:pa-?)?cancel\w*\s+(?:po\s+)?(?:ng\s+|yung\s+|ang\s+|the\s+|my\s+)?(?:order|booking|reservation|appointment)|"
+    r"hindi\s+(?:ako\s+)?(?:titigil|hihinto)",
+    re.IGNORECASE,
+)
+
+
+#: 整句（剥礼貌词后）恰好是这些 → 含糊停联（短信行业 STOP 同义词，聊天里可能指取消订单 / 结束话题）
+_REVIEW_WHOLE = frozenset({"cancel", "end", "quit", "stop it", "end it", "cancel na", "quit na", "please cancel",
+                           "cancel po", "end po", "quit po", "取消", "算了别发"})
+
+
+def review_hint(text: Any) -> str:
+    """含糊停联信号 → 命中关键词（≤40 字）；硬停（:func:`detect` 命中）或无害用法 → ""。绝不抛。"""
+    try:
+        t = str(text or "").strip()
+        if not t or detect(t):
+            return ""
+        for v in _polite_variants(normalize(t)):
+            if v in _REVIEW_WHOLE:
+                return v
+        s = unicodedata.normalize("NFKC", t).lower().replace("\u2019", "'")
+        s = _REVIEW_BENIGN.sub(" ", s)
+        m = _REVIEW_KEYS.search(s)
+        if m:
+            return re.sub(r"\s+", " ", m.group(0)).strip()[:40]
+    except Exception:
+        logger.debug("[stop-gate] review 判定异常（按未命中）", exc_info=True)
+    return ""
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -30,11 +30,17 @@ logger = logging.getLogger(__name__)
 #: 整句「重新订阅」词（normalize 后逐字比较；不做子串匹配——「don't start」「start again later?」不算）。
 #: ``start`` / ``unstop`` 是短信 / WhatsApp 退订体系的通行恢复词；Telegram 用户解除拉黑后点
 #: 「开始」客户端会发 ``/start``（含深链参数 ``/start xxx`` 与群内 ``/start@BotName``）。
+#: 单独的「订阅」「subscribe」（含 ``/subscribe``）**不算**（智安 2026-10-08，蛋博士拍板）：客户问产品
+#: 订阅（「订阅？」「subscribe」）与重新同意接收消息分不开，误解冻 = 停联后继续发（红线①）。
+#: 只留整句 START / ``/start`` 与明确表示「恢复接收」的说法。
 DEFAULT_RESUBSCRIBE_KEYWORDS: Tuple[str, ...] = (
-    "start", "unstop", "resubscribe", "subscribe", "yes start",
-    "/start", "/unstop", "/subscribe",
-    "重新订阅", "恢复订阅", "重新开始接收", "订阅",
+    "start", "unstop", "resubscribe", "yes start",
+    "/start", "/unstop", "/resubscribe",
+    "重新订阅", "恢复订阅", "重新开始接收",
 )
+
+#: 明确排除的歧义词（防被加回缺省表；测试钉住）。
+AMBIGUOUS_NOT_RESUBSCRIBE: Tuple[str, ...] = ("subscribe", "/subscribe", "订阅")
 
 #: 审计 path 前缀与动作名（stop_gate_audit.action 列 ≤20 字）。
 ACTION_RESUBSCRIBED = "resubscribed"
@@ -249,6 +255,7 @@ def agent_unfreeze(store: Any, conversation_id: str, *, actor: str, note: str,
 
 
 __all__ = [
-    "DEFAULT_RESUBSCRIBE_KEYWORDS", "ACTION_RESUBSCRIBED", "ACTION_UNFROZEN", "ACTION_REFUSED",
+    "DEFAULT_RESUBSCRIBE_KEYWORDS", "AMBIGUOUS_NOT_RESUBSCRIBE",
+    "ACTION_RESUBSCRIBED", "ACTION_UNFROZEN", "ACTION_REFUSED",
     "resubscribe_hit", "resubscribe", "agent_unfreeze",
 ]

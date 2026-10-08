@@ -142,30 +142,59 @@ def test_escalation_snapshot_uses_last_in_ts_and_skips_bad_ts(tmp_path):
 
 
 def test_unclaimed_alert_cooldown_one_per_hour():
+    """单连接视角：同会话 1 小时 1 次，会话互不影响，其他原因不节流。"""
     from src.web.routes.unified_inbox_realtime_routes import (
-        UNCLAIMED_ALERT_COOLDOWN_SEC, _esc_alert_allowed,
+        UNCLAIMED_ALERT_COOLDOWN_SEC, EscalationAlertLedger,
     )
     assert UNCLAIMED_ALERT_COOLDOWN_SEC == 3600.0
-    led: dict = {}
+    led = EscalationAlertLedger()
     t = 1_800_000_000.0
-    assert _esc_alert_allowed(led, "c1", "unclaimed", t) is True
-    assert _esc_alert_allowed(led, "c1", "unclaimed", t + 60) is False
-    assert _esc_alert_allowed(led, "c1", "unclaimed", t + 3599) is False
-    assert _esc_alert_allowed(led, "c2", "unclaimed", t + 60) is True      # 会话之间互不影响
-    assert _esc_alert_allowed(led, "c1", "unclaimed", t + 3600) is True    # 满 1 小时再报
+    d: dict = {}
+    ok = lambda cid, reason, now: led.allow(cid, reason, now, conn_started=t - 10, delivered=d)  # noqa: E731
+    assert ok("c1", "unclaimed", t) is True
+    assert ok("c1", "unclaimed", t + 60) is False
+    assert ok("c1", "unclaimed", t + 3599) is False
+    assert ok("c2", "unclaimed", t + 60) is True      # 会话之间互不影响
+    assert ok("c1", "unclaimed", t + 3600) is True    # 满 1 小时再报
     # 其他原因不节流（保持原语义）
-    assert _esc_alert_allowed(led, "c1", "holder_offline", t + 3601) is True
-    assert _esc_alert_allowed(led, "c1", "holder_offline", t + 3602) is True
+    assert ok("c1", "holder_offline", t + 3601) is True
+    assert ok("c1", "holder_offline", t + 3602) is True
     # 软上限
-    big: dict = {f"k{i}": t for i in range(2100)}
-    _esc_alert_allowed(big, "new", "unclaimed", t + 1)
-    assert len(big) <= 2048 and "new" in big
+    small = EscalationAlertLedger(cap=100)
+    for i in range(300):
+        small.allow(f"k{i}", "unclaimed", t + i, conn_started=0, delivered={})
+    assert len(small._events) <= 100
+
+
+def test_unclaimed_alert_is_global_across_sse_connections():
+    """二批④：全局只推一次——告警时在线的连接各一份；之后的新连接/重连不补推；冷却后再报。"""
+    from src.web.routes.unified_inbox_realtime_routes import EscalationAlertLedger
+    led = EscalationAlertLedger()
+    t = 1_800_000_000.0
+    a, b = {}, {}
+    # A、B 都在 t-100 建连；A 在 t 先判到边沿，B 在自己的心跳 t+25 才判到
+    assert led.allow("c1", "unclaimed", t, conn_started=t - 100, delivered=a) is True
+    assert led.allow("c1", "unclaimed", t + 25, conn_started=t - 100, delivered=b) is True
+    # 同一连接同一次告警不再推（恢复后再越线也一样）
+    assert led.allow("c1", "unclaimed", t + 600, conn_started=t - 100, delivered=a) is False
+    assert led.allow("c1", "unclaimed", t + 900, conn_started=t - 100, delivered=b) is False
+    # 告警之后才建的连接（重连 / 新标签页）：冷却期内不补推
+    c = {}
+    assert led.allow("c1", "unclaimed", t + 1200, conn_started=t + 1000, delivered=c) is False
+    # 冷却期满：重新算一次告警，所有在线连接（含 C）各收一份
+    assert led.allow("c1", "unclaimed", t + 3700, conn_started=t + 1000, delivered=c) is True
+    assert led.allow("c1", "unclaimed", t + 3710, conn_started=t - 100, delivered=a) is True
+    assert led.allow("c1", "unclaimed", t + 3720, conn_started=t - 100, delivered=b) is True
+    assert led.allow("c1", "unclaimed", t + 3730, conn_started=t - 100, delivered=a) is False
 
 
 def test_realtime_wiring_records_with_cooldown():
     rt = (_ENGINE / "src" / "web" / "routes" / "unified_inbox_realtime_routes.py").read_text(encoding="utf-8")
+    rt = rt.replace("\r\n", "\n")
     assert "dedup_sec=UNCLAIMED_ALERT_COOLDOWN_SEC" in rt
-    assert "_esc_alert_allowed(\n" in rt.replace("\r\n", "\n")
+    assert "ESC_ALERT_LEDGER.allow(\n" in rt
+    assert "conn_started=_conn_started, delivered=_esc_delivered" in rt
+    assert "_esc_last_emit" not in rt  # 不再按连接各记各的
 
 
 def _mk_escalation_db(path: Path) -> None:
@@ -355,12 +384,15 @@ def test_aline_mirror_rows_tagged_ai():
 
 
 def test_script_sender_account_outbound_is_script(tmp_path, monkeypatch):
-    """Morgan 2026-10-08：报障群支持号 6834964252 的出站是脚本测试 → sent_by=script。"""
+    """Morgan 2026-10-08：报障群支持号（6834…252，测试里用假 id）的出站是脚本测试 → sent_by=script（名单走配置）。"""
+    from src.compliance import runtime as _rt
     from src.inbox.store import script_sender_accounts
     monkeypatch.delenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", raising=False)
-    assert "6834964252" in script_sender_accounts()
+    cfg = {"compliance": {"send_rate_gate": {"script_accounts": ["telegram:7000000001"]}}}
+    monkeypatch.setattr(_rt, "_PROVIDER", lambda: cfg)
+    assert "telegram:7000000001" in script_sender_accounts()
     store = InboxStore(tmp_path / "inbox.db")
-    cid = "telegram:6834964252:-1001234567890"
+    cid = "telegram:7000000001:-1001234567890"
     t = 1_757_000_000.0
     store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="d1", direction="out",
                                       text="值守播报", ts=t))
@@ -370,7 +402,7 @@ def test_script_sender_account_outbound_is_script(tmp_path, monkeypatch):
                                       text="坐席亲手", ts=t + 2, sent_by="agent"))
     store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="c1", direction="in",
                                       text="收到", ts=t + 3))
-    conv = InboxConversation(conversation_id=cid, platform="telegram", account_id="6834964252",
+    conv = InboxConversation(conversation_id=cid, platform="telegram", account_id="7000000001",
                              chat_key="-1001234567890")
     store.ingest_batch(conv, [InboxMessage(conversation_id=cid, platform_msg_id="d4", direction="out",
                                            text="批量播报", ts=t + 4)])
@@ -388,6 +420,84 @@ def test_script_sender_account_outbound_is_script(tmp_path, monkeypatch):
                                       text="关闭后", ts=t + 9))
     assert {r["platform_msg_id"]: r for r in store.list_recent_messages(cid, limit=20)}["d5"]["sent_by"] == "phone"
     store.close()
+
+
+def test_script_accounts_single_source_config_first_env_overrides(monkeypatch):
+    """二批⑤：限速闸与 sent_by 归因共用一份名单——以配置为准，环境变量只覆盖。"""
+    from src.compliance import runtime as _rt
+    from src.compliance import send_rate_gate as g
+    from src.inbox import store as st
+    monkeypatch.delenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", raising=False)
+    # 无 provider、无配置：名单为空（缺省不臆造脚本号），两边都不判 script
+    monkeypatch.setattr(_rt, "_PROVIDER", None)
+    assert g.script_accounts() == [] and g.DEFAULTS["script_accounts"] == []
+    assert st._is_script_sender_conv("telegram:7000000001:1") is False
+    assert g.classify_origin("auto", platform="telegram", account_id="7000000001") == "ai"
+    # 实时配置（overlay 热重载走 provider）：两边同时生效
+    cfg = {"compliance": {"send_rate_gate": {"script_accounts": ["telegram:7000000001"]}}}
+    monkeypatch.setattr(_rt, "_PROVIDER", lambda: cfg)
+    assert g.script_accounts() == ["telegram:7000000001"]
+    assert st._is_script_sender_conv("telegram:7000000001:1") is True
+    assert st._is_script_sender_conv("telegram:111:1") is False
+    assert g.classify_origin("auto", platform="telegram", account_id="7000000001") == "script"
+    # 显式传入的 config 优先于 provider（限速闸调用方传 config 的路径不变）
+    assert g.script_accounts({"compliance": {"send_rate_gate": {"script_accounts": "a1, b2"}}}) == ["a1", "b2"]
+    # 环境变量覆盖：设了就整体替换（两边一起），空串＝清空
+    monkeypatch.setenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", "999")
+    assert g.script_accounts(cfg) == ["999"]
+    assert st._is_script_sender_conv("telegram:7000000001:1") is False
+    assert st._is_script_sender_conv("whatsapp:999:x") is True
+    assert g.classify_origin("auto", platform="telegram", account_id="7000000001", config=cfg) == "ai"
+    monkeypatch.setenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", "")
+    assert g.script_accounts(cfg) == [] and st.script_sender_accounts() == frozenset()
+
+
+def test_zhiliao_overlay_template_declares_script_accounts():
+    """模板只留占位，不入库真实号；cap 覆盖 60、缺省 20 不动。"""
+    import yaml
+    p = _ENGINE.parents[1] / "deploy" / "instances" / "zhiliao" / "config.local.yaml"
+    text = p.read_text(encoding="utf-8")
+    doc = yaml.safe_load(text)
+    node = doc["compliance"]["send_rate_gate"]
+    assert node["script_accounts"] == ["telegram:<SCRIPT_TEST_ACCOUNT_ID>"]
+    assert node["script_daily_cap_overrides"] == {"telegram:<SCRIPT_TEST_ACCOUNT_ID>": 60}
+    assert "script_daily_cap" not in node and "enabled" not in node
+    assert "封号风险" in text
+    import re as _re
+    assert not _re.search(r"\d{8,}", text), "模板里不得出现真实账号 id / 号码"
+
+
+def test_script_daily_cap_per_account_override(tmp_path, monkeypatch):
+    """蛋博士 10-08：script_daily_cap 缺省 20；测试号每号覆盖 60（platform:id 与裸 id 都认）。"""
+    from src.compliance import send_rate_gate as g
+    monkeypatch.setenv("ZHILIAO_SEND_RATE_GATE", "on")
+    monkeypatch.delenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", raising=False)
+    cfg = {"compliance": {"send_rate_gate": {
+        "enabled": True, "warmup_block": False,
+        "script_accounts": ["telegram:7000000001", "other1"],
+        "script_daily_cap_overrides": {"telegram:7000000001": 60, "other1": "bad"},
+    }}}
+    assert g.DEFAULTS["script_daily_cap"] == 20
+    assert g.script_daily_cap_for("telegram", "7000000001", cfg) == 60
+    assert g.script_daily_cap_for("telegram", "123", cfg) == 20
+    assert g.script_daily_cap_for("whatsapp", "other1", cfg) == 20      # 非法值回落缺省
+    assert g.script_daily_cap_for("telegram", "7000000001", {}) == 20
+    st = g.SendRateStore(tmp_path / "rate.db")
+    import time as _time
+    t0 = _time.time() - 3600   # store 按真实时钟清 24h 前的事件
+    def send(acct, i):
+        return g.check("telegram", acct, origin="auto", chat_key="c", config=cfg, now=t0 + i,
+                       store=st, age_days=999)
+    assert all(send("7000000001", i)["allowed"] for i in range(60))
+    r = send("7000000001", 60)
+    assert r["allowed"] is False and r["reason"] == g.REASON_SCRIPT and r["cap"] == 60
+    cfg2 = {"compliance": {"send_rate_gate": dict(cfg["compliance"]["send_rate_gate"],
+                                                  script_accounts=["telegram:7000000001", "telegram:7000000002"])}}
+    for i in range(20):
+        assert g.check("telegram", "7000000002", config=cfg2, now=t0 + i, store=st, age_days=999)["allowed"]
+    r2 = g.check("telegram", "7000000002", config=cfg2, now=t0 + 21, store=st, age_days=999)
+    assert r2["allowed"] is False and r2["cap"] == 20
+    assert g.snapshot("telegram", "7000000001", config=cfg)["script_daily_cap"] == 60
 
 
 def test_orchestrator_mirror_follows_send_rate_gate_script_scope():
