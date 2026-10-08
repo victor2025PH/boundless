@@ -479,6 +479,22 @@ async def run_autoreply(
     if _rh_reason:
         return _result("risk_hold", inbound=text, risk_hold=_rh_reason)
 
+    # 智安 P0-2（2026-10-08）STOP 硬闸：对端已要求停联（会话冻结 / 本账号名单 / 同平台同
+    # external_id 在别的账号停联过 / 同一手机号停联过）→ 不生成、不发，只留痕（审计表 + 日志）。
+    # 档位读不出（inbox_mode_fn 缺席）时这是唯一一道「停联后不再发」的闸。
+    try:
+        from src.compliance.stop_gate import outbound_check as _sg_check
+        from src.integrations.protocol_bridge import get_inbox_store as _gis_sg
+        _sg_src = _sg_check(
+            _gis_sg(), path="protocol_autoreply", platform=platform, account_id=account_id,
+            peer=chat_key, phone=str(payload.get("peer_phone") or (_src0 or {}).get("peer_phone") or ""),
+            config=cfg)
+    except Exception:
+        logger.debug("[protocol-autoreply] STOP 硬闸查询异常（继续后续硬停判定）", exc_info=True)
+        _sg_src = ""
+    if _sg_src:
+        return _result("stop_gate", inbound=text, stop_gate=_sg_src)
+
     # 双面板融合驾驶权锁（surface_fusion，2026-08-13 第二批）：该账号自动化持有者
     # 是「原生面板」→ 本直发链让位（与上方 automation_mode 同族的归属判定）。
     # P0 只闸了 AutosendWorker，但 ChatX 独立包默认档（l2_autosend.deliver=false）
@@ -619,11 +635,12 @@ async def run_autoreply(
             logger.debug("[protocol-autoreply] 停联判定异常（放行）", exc_info=True)
             _hard = ""
     if _hard:
-        # R88（2026-09-17）：硬停只对运营在「敏感话题」卡**锁定**的类别执行；未锁定 → 只记日志，
-        # AI 照常往下生成 / 发送（与 B 线 risk_grader.regrade_inbound 同一把锁 inbox.risk_grading.locked）
+        # R88（2026-09-17）：硬停只对**锁定**的类别执行；未锁定 → 只记日志，AI 照常往下生成 / 发送
+        # （与 B 线 risk_grader.regrade_inbound 同一把锁）。智安 P0-2：锁定看「有效锁定」——
+        # stop_contact 由 STOP 硬闸默认隐含锁定，不再依赖运营在「敏感话题」卡手动勾。
         try:
-            from src.inbox.risk_grader import is_locked as _rk_locked
-            if not _rk_locked(_hard, cfg):
+            from src.inbox.risk_grader import is_locked_effective as _rk_eff_lock
+            if not _rk_eff_lock(_hard, cfg)[0]:
                 logger.info("[protocol-autoreply] hard_stop=%s conv=%s unlocked → record only, reply continues hits=%s",
                             _hard, key, "|".join(_hard_hits[:4]) or "-")
                 _hard = ""
@@ -654,6 +671,14 @@ async def run_autoreply(
         if _sc_log is not None:
             _sc_log("held", conversation_id=_cid_sc, reason=_hard, hits=_hard_hits,
                     extra=f"stage=protocol notify_only was_frozen={_was_frozen or '-'}")
+        if _hard == "stop_contact":
+            try:
+                from src.compliance.stop_gate import audit as _sg_audit
+                _sg_audit(_store_sc, path="protocol_autoreply", action="detected",
+                          platform=platform, account_id=account_id, peer=chat_key,
+                          conversation_id=str(_cid_sc or ""), hit=(_hard_hits or [""])[0])
+            except Exception:
+                logger.debug("[protocol-autoreply] STOP 审计失败（忽略）", exc_info=True)
         return _result(_hard, inbound=text, hard_stop=_hard)
 
     # 锁定的需人工类（索钱 / 诈骗 / 威胁 / 未成年）：不回客户，只打标提醒坐席。

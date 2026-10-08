@@ -2712,6 +2712,40 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 assistant.logger.debug("[proactive] outreach 落库失败", exc_info=True)
 
         async def _send(plan):
+            # -3) 智安 P0-2（2026-10-08）STOP 硬闸：主动触达发送前、生成前查停联——会话冻结 /
+            # 账号级名单 / 跨账号同 external_id / 同手机号，或对方最近一条入站就是 STOP（入站链
+            # 还没来得及冻结）→ 登记停联并放弃，只留痕（审计表 + 日志），绝不出站。
+            try:
+                from src.compliance import stop_gate as _sg
+                _cid_sg = str(plan.get("conversation_id") or "")
+                _p_sg, _a_sg, _k_sg = (_cid_sg.split(":", 2) + ["", "", ""])[:3]
+                _store_sg = getattr(assistant, "inbox_store", None)
+                _cfg_sg = getattr(assistant.config, "config", None) or {}
+                if _sg.outbound_check(_store_sg, path="companion_proactive", platform=_p_sg,
+                                      account_id=_a_sg, peer=_k_sg, conversation_id=_cid_sg,
+                                      config=_cfg_sg):
+                    return False
+                if _sg.enforced(_cfg_sg) and _store_sg is not None:
+                    _hit_sg = ""
+                    # 我方最后一条出站之后的全部入站（最多 10 条）逐条判
+                    for _m in reversed(_store_sg.list_recent_messages(_cid_sg, limit=10) or []):
+                        _dir = str(_m.get("direction") or "")
+                        if _dir == "out":
+                            break
+                        if _dir == "in":
+                            _hit_sg = _sg.detect(str(_m.get("text") or ""))
+                            if _hit_sg:
+                                break
+                    if _hit_sg:
+                        _sg.record_stop(_store_sg, platform=_p_sg, account_id=_a_sg, peer=_k_sg,
+                                        conversation_id=_cid_sg, hit=_hit_sg,
+                                        source="companion_proactive")
+                        _sg.audit(_store_sg, path="companion_proactive", action="blocked",
+                                  platform=_p_sg, account_id=_a_sg, peer=_k_sg,
+                                  conversation_id=_cid_sg, hit=_hit_sg)
+                        return False
+            except Exception:
+                assistant.logger.debug("[proactive] STOP 硬闸检查异常（忽略）", exc_info=True)
             # -2) P1 opt-out 检测（发送前、生成前——省 LLM/GPU）：对方在我们上次
             # 静默记录之后的入站里说过「别再发了」→ 静默 mute_days 天并放弃本次。
             # 检测窗口限定「上次静默记录之后的入站」防循环：静默因对方回归解除后，
