@@ -123,6 +123,8 @@ class _CoolingMT(OllamaMTEngine):
 
 
 def _svc(*engines, **kw):
+    """本文件里没写开关的服务 = enforce，专门钉「拦住泄漏」。默认构造另有用例。"""
+    kw.setdefault("free_tier_zero_cost", True)
     return TranslationService(engines=list(engines), **kw)
 
 
@@ -144,10 +146,13 @@ def test_production_engine_classes_are_classified():
 
 
 def test_guard_switch_and_ollama_openai_mode_stays_zero_cost():
-    assert free_tier_guard_enabled(None) is True
-    assert free_tier_guard_enabled("enforce") is True
+    assert free_tier_guard_enabled(None) is False
     assert free_tier_guard_enabled("legacy") is False
+    assert free_tier_guard_enabled("off") is False
+    assert free_tier_guard_enabled("enforce") is True
+    assert free_tier_guard_enabled(True) is True
     assert free_tier_guard_enabled(False) is False
+    assert TranslationService().free_tier_zero_cost is False
     mt = OllamaMTEngine("http://127.0.0.1:9", "m", api="openai")
     assert is_paid_engine(mt) is False
     built = build_engines(
@@ -163,6 +168,7 @@ def test_config_example_and_web_app_wire_the_switch():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     example = (root / "config" / "config.example.yaml").read_text(encoding="utf-8")
+    assert "free_tier_zero_cost: legacy" in example
     assert "free_tier_zero_cost: enforce" in example
     web = (root / "src" / "bootstrap" / "web_app.py").read_text(encoding="utf-8")
     assert "free_tier_zero_cost" in web
@@ -236,13 +242,14 @@ async def test_std_failover_and_default_order_never_call_ai():
     bare = _RecAI()
     engines = build_engines({}, bare.client)
     assert any(isinstance(e, AIEngine) for e in engines)
-    r2 = await TranslationService(engines=engines).translate(
+    r2 = await TranslationService(engines=engines, free_tier_zero_cost=True).translate(
         "hello friend", target_lang="zh", source_lang="en")
     assert bare.client.calls == 0
     assert r2.ok is False and r2.error == "free_tier_no_zero_cost_engine"
     assert r2.needs_human is True
     stats = get_translation_engine_stats().dump()
     assert stats["paid_blocked"].get("ai", 0) >= 1
+    assert stats["paid_would_block_total"] == 0
     assert 'translation_engine_paid_blocked_total{engine="ai"}' in (
         get_translation_engine_stats().dump_prom())
 
@@ -252,7 +259,7 @@ async def test_per_lang_tail_does_not_append_paid_call_for_std():
     local = _Local(fail=True)
     ai = _RecAI()
     router = EngineRouter([local, ai], per_lang_order={"en": ["ollama_mt"]})
-    svc = TranslationService(engine_router=router)
+    svc = TranslationService(engine_router=router, free_tier_zero_cost=True)
     r = await svc.translate("hello friend", target_lang="en", source_lang="zh")
     assert local.calls == 1 and ai.calls == 0
     assert r.free_tier_blocked and r.needs_human
@@ -280,12 +287,39 @@ async def test_std_tiers_block_and_paid_tiers_reach_engines():
 
 
 @pytest.mark.asyncio
+async def test_default_is_legacy_and_counts_would_block_without_skipping():
+    """缺省构造 = legacy：免费请求仍打到付费引擎，同时记 would_block。"""
+    ai = _RecAI()
+    local = _Local(fail=True)
+    svc = TranslationService(engines=[local, ai])
+    assert svc.free_tier_zero_cost is False
+    r = await svc.translate("hello friend", target_lang="zh", source_lang="en")
+    assert r.ok and r.provider == "ai" and ai.calls == 1 and local.calls == 1
+    assert r.free_tier_blocked is False and r.needs_human is False
+    stats = get_translation_engine_stats().dump()
+    assert stats["paid_would_block"].get("ai", 0) >= 1
+    assert stats["paid_blocked_total"] == 0
+    assert 'translation_engine_paid_would_block_total{engine="ai"}' in (
+        get_translation_engine_stats().dump_prom())
+    # 付费档不记 would_block，引擎照旧可达。
+    before = stats["paid_would_block_total"]
+    ai.calls = 0
+    pro = await svc.translate(
+        "good morning friend", target_lang="zh", source_lang="en", tier="pro")
+    assert pro.ok and pro.provider == "ai" and ai.calls == 1
+    assert get_translation_engine_stats().dump()["paid_would_block_total"] == before
+    # legacy 的换引擎重试仍能选到付费引擎；真正调用时再记 would_block。
+    assert svc.next_engine_after("ollama_mt", "zh") == "ai"
+
+
+@pytest.mark.asyncio
 async def test_legacy_switch_keeps_std_on_the_old_engine_chain():
     ai = _RecAI()
     r = await _svc(ai, free_tier_zero_cost=False).translate(
         "hello friend", target_lang="zh", source_lang="en")
     assert r.ok and r.provider == "ai" and ai.calls == 1
     assert r.free_tier_blocked is False
+    assert get_translation_engine_stats().dump()["paid_would_block"].get("ai", 0) >= 1
 
 
 # ── 泄漏 3：会话首选引擎 ────────────────────────────────────────────────────
@@ -372,7 +406,7 @@ async def test_low_confidence_does_not_switch_std_onto_ai():
     local = _Local(text="我想你了")
     ai = _RecAI("君が恋しい")
     router = EngineRouter([local, ai], min_confidence=0.5)
-    svc = TranslationService(engine_router=router)
+    svc = TranslationService(engine_router=router, free_tier_zero_cost=True)
     r = await svc.translate("我想你了", target_lang="ja", source_lang="zh")
     assert ai.calls == 0 and local.calls >= 1
     assert r.ok and r.provider == "ollama_mt"
@@ -385,7 +419,8 @@ async def test_compare_skips_paid_engines_on_std():
     local = _Local()
     ai = _RecAI()
     router = EngineRouter([local, ai])
-    rows = await router.compare("hi", source_lang="en", target_lang="zh", tier="")
+    rows = await router.compare(
+        "hi", source_lang="en", target_lang="zh", tier="", free_tier_enforce=True)
     by = {row.engine: row for row in rows}
     assert by["ollama_mt"].ok and by["ai"].error == "free_tier_paid_engine_blocked"
     assert ai.calls == 0
@@ -397,7 +432,7 @@ async def test_compare_skips_paid_engines_on_std():
 @pytest.mark.asyncio
 async def test_fusion_bare_chat_blocked_on_std_and_runs_on_pro():
     client = _Chat("你好呀，明天见！")
-    svc = TranslationService(engines=[AIEngine(client)])
+    svc = TranslationService(engines=[AIEngine(client)], free_tier_zero_cost=True)
     cands = [
         {"engine": "m1", "ok": True, "translated_text": "你好，明天见", "confidence": 0.8},
         {"engine": "m2", "ok": True, "translated_text": "您好呀明天见面", "confidence": 0.7},
@@ -408,6 +443,13 @@ async def test_fusion_bare_chat_blocked_on_std_and_runs_on_pro():
     assert blocked["ok"] is False and blocked["reason"] == "free_tier_paid_engine_blocked"
     assert client.calls == 0
     assert get_translation_engine_stats().dump()["paid_blocked"].get("fusion", 0) >= 1
+
+    legacy = TranslationService(engines=[AIEngine(client)])
+    observed = await fuse_compare_candidates(
+        legacy, text="hi, see you tomorrow", candidates=cands,
+        source_lang="en", target_lang="zh", tier="")
+    assert observed["ok"] is True and client.calls >= 1
+    assert get_translation_engine_stats().dump()["paid_would_block"].get("fusion", 0) >= 1
 
     ok = await fuse_compare_candidates(
         svc, text="hi, see you tomorrow", candidates=cands,
