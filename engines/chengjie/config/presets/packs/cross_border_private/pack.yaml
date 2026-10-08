@@ -1,0 +1,25 @@
+# 垂直模板包：跨境私域（cross-border private-domain）
+# 适用：跨境品牌 / 卖家把买家沉淀到 WhatsApp / LINE / Telegram / Messenger 私域，做售前咨询、
+# 订单物流、售后与复购跟进；多语种（中 / 英 / 他加禄）。
+# 开局：python main.py --init 选 cross_border_private（config/presets/cross_border_private.yaml），
+# 再按本目录导入人设（persona.yaml）、知识库种子（kb_seed.yaml，POST /api/kb/import format=yaml）、
+# STOP 确认文案（stop_confirm.yaml）、待人工 SOP（handoff_sop.yaml）。
+# 种子里的价格 / 时效全是占位说明，上线前必须替换成自己的真实政策。
+
+schema: zhiliao.vertical_pack.v1
+id: cross_border_private
+name: 跨境私域
+edition: public
+preset: cross_border_private
+langs:
+- zh
+- en
+- tl
+files:
+  persona: persona.yaml
+  kb_seed: kb_seed.yaml
+  stop_confirm: stop_confirm.yaml
+  handoff_sop: handoff_sop.yaml
+compliance:
+  disclosure:
+    honest_identity: true

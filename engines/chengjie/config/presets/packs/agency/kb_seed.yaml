@@ -1,0 +1,81 @@
+# 代运营 · 品牌知识库骨架（每个品牌一份；{占位} 全部替换后再导入该品牌的知识库）
+
+version: 1
+entries:
+- category: 产品介绍
+  title: 品牌与主营介绍
+  triggers:
+  - 你们是做什么的
+  - 介绍一下
+  - what do you sell
+  - about
+  - ano ang binebenta nyo
+  scenario: 客户问品牌做什么
+  steps: 一句话介绍品牌和主营，再问客户需求
+  principles: 只讲该品牌，不提运营方
+  example_reply_zh: '{brand_name} 主要做 {main_products}。你想了解哪一款？'
+- category: 价格与支付
+  title: 价格咨询
+  triggers:
+  - 价格
+  - 多少钱
+  - price
+  - how much
+  - magkano
+  scenario: 客户问价
+  steps: 按品牌价格表回复；价格例外转人工
+  principles: 不私自让价
+  example_reply_zh: '{product} 的价格是 {price}。量大或特殊需求我帮你转给负责同事～'
+- category: 账户会员
+  title: 营业时间与联系方式
+  triggers:
+  - 营业时间
+  - 几点
+  - 门店
+  - business hours
+  - open
+  - anong oras
+  scenario: 客户问营业时间 / 门店
+  steps: 给出品牌公开的营业时间与地址
+  principles: 只给品牌公开信息
+  example_reply_zh: '{brand_name} 营业时间 {hours}，地址 {address}。'
+- category: 下单流程
+  title: 预约 / 留资
+  triggers:
+  - 预约
+  - 留电话
+  - 联系我
+  - book
+  - appointment
+  - call me
+  - pa-book
+  scenario: 客户想预约或留联系方式
+  steps: 收集称呼、方便的时间与需求，确认后告知会有同事联系
+  principles: 只收集必要信息
+  example_reply_zh: 好的，留一下称呼和方便联系的时间，我安排同事跟你确认～
+- category: 常见故障
+  title: 售后与投诉入口
+  triggers:
+  - 售后
+  - 坏了
+  - 投诉
+  - after-sales
+  - broken
+  - complaint
+  - sira
+  scenario: 客户售后或投诉
+  steps: 致歉 + 登记 + 转品牌负责人
+  principles: 投诉一律人工
+  example_reply_zh: 抱歉给你添麻烦了，我先登记，{brand_name} 的同事会尽快联系你处理。
+- category: 规则条款
+  title: 隐私与退订
+  triggers:
+  - 隐私
+  - 退订
+  - privacy
+  - unsubscribe
+  - stop
+  scenario: 客户关心隐私或退订
+  steps: 说明数据只用于本品牌服务；退订按 STOP 流程
+  principles: 不挽留
+  example_reply_zh: 你的信息只用于 {brand_name} 的服务。想退订回复 STOP 就好。
