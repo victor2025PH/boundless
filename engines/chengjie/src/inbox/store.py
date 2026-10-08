@@ -1175,6 +1175,22 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_guide_trial_acct ON guide_trial_events(account_id, chat_key)",
 ]
 
+# 代运营工作区第一段（2026-10-08，DESIGN_agency_workspace）：归属列 + 默认工作区，
+# 不改任何现有行为（读接口对外剥掉 workspace_id，见 src/tenancy/workspace.py）。
+# 单列成表便于测试模拟「升级前的老库」；追加在 _MIGRATIONS 末尾，sha 去重保证只跑一次。
+_AGENCY_WS_PHASE1_MIGRATIONS: List[str] = [
+    "ALTER TABLE conversations ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
+    "ALTER TABLE agent_sends ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
+    "ALTER TABLE outreach_log ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
+    "ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'client'",
+    "ALTER TABLE workspaces ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+    "ALTER TABLE workspaces ADD COLUMN report_token_hash TEXT NOT NULL DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS idx_conv_workspace ON conversations(workspace_id, last_ts DESC)",
+    "INSERT OR IGNORE INTO workspaces (workspace_id, display_name, config_json, created_at,"
+    " updated_at, kind, status) VALUES ('default', '', '{}', 0, 0, 'default', 'active')",
+]
+_MIGRATIONS.extend(_AGENCY_WS_PHASE1_MIGRATIONS)
+
 
 #: 出站行认领坐席打点的时间窗（秒）：打点在发送路由成功那一刻，镜像行 ts 是平台回执/
 #: 边车抓取时刻——正常几秒内，边车慢时几十秒；同 hash/ref 才认，窗口可以放宽。
@@ -1271,6 +1287,14 @@ def _message_pk(conversation_id: str, platform_msg_id: str, text: str, ts: Any) 
         return f"{conversation_id}:{pid}"
     digest = hashlib.sha256(f"{text}|{ts}".encode("utf-8")).hexdigest()[:16]
     return f"{conversation_id}:h:{digest}"
+
+
+def _conv_dict(row: Any) -> Dict[str, Any]:
+    """conversations 行 → 对外 dict。代运营工作区第一段：剥掉新加的 workspace_id，
+    保证迁移前后接口输出一致（第三段隔离时再有意暴露）。"""
+    d = dict(row)
+    d.pop("workspace_id", None)
+    return d
 
 
 class InboxStore:
@@ -2516,7 +2540,7 @@ class InboxStore:
         if not plat or not acct:
             return
         with self._lock:
-            convs = [dict(r) for r in self._conn.execute(
+            convs = [_conv_dict(r) for r in self._conn.execute(
                 "SELECT * FROM conversations WHERE platform=? AND account_id=?"
                 " ORDER BY last_ts ASC", (plat, acct)).fetchall()]
         for conv in convs:
@@ -2643,7 +2667,7 @@ class InboxStore:
         params.append(limit)
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        return [_conv_dict(r) for r in rows]
 
     def mark_conversation_request(
         self, conversation_id: str, category: str = "",
@@ -2862,7 +2886,7 @@ class InboxStore:
                 "SELECT * FROM conversations WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return _conv_dict(row) if row else None
 
     def find_private_conversation_id(self, *, account_id: str, username: str) -> str:
         """这个号的私聊里，username 对得上的那条会话。没有就是空串。"""
@@ -8625,11 +8649,14 @@ class InboxStore:
             self._conn.commit()
 
     def list_workspaces(self) -> List[Dict[str, Any]]:
-        """P3：列出所有工作区。"""
+        """P3：列出所有工作区。
+
+        代运营工作区第一段：迁移自动种下、从未被编辑过的默认工作区（kind='default' 且 updated_at=0）暂不列出，
+        保持本接口输出不变；第三段工作区切换器上线时再放出来。"""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT workspace_id, display_name, config_json, created_at, updated_at "
-                "FROM workspaces ORDER BY created_at"
+                "FROM workspaces WHERE NOT (kind = 'default' AND updated_at = 0) ORDER BY created_at"
             ).fetchall()
         result = []
         for row in rows:
@@ -9036,7 +9063,7 @@ class InboxStore:
             rows = self._conn.execute(
                 f"SELECT * FROM conversations WHERE conversation_id IN ({ph})", ids,
             ).fetchall()
-        return {r["conversation_id"]: dict(r) for r in rows}
+        return {r["conversation_id"]: _conv_dict(r) for r in rows}
 
     def get_conv_meta_for_ids(
         self, conversation_ids: List[str],
@@ -9375,7 +9402,7 @@ class InboxStore:
             rows = self._conn.execute(sql, (f"%{t}%", lim)).fetchall()
         out: List[Dict[str, Any]] = []
         for r in rows:
-            d = dict(r)
+            d = _conv_dict(r)
             try:
                 tags = json.loads(d.get("conv_tags") or "[]")
             except Exception:
@@ -9870,7 +9897,7 @@ class InboxStore:
         sql += " ORDER BY m.pinned_at DESC LIMIT 100"
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        return [_conv_dict(r) for r in rows]
 
     # ── V1: 坐席协作注解（Phase 25） ─────────────────────────────────────
     def add_conv_note(

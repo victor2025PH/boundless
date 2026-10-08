@@ -48,6 +48,14 @@ _MIGRATIONS: List[str] = [
     "ALTER TABLE platform_accounts ADD COLUMN business_line TEXT NOT NULL DEFAULT ''",
 ]
 
+# 代运营工作区第一段（2026-10-08）：账号是归属的根；对外 dict 暂不带此列（_row_to_dict）。
+# 单列成表便于测试模拟「升级前的老库」。
+_AGENCY_WS_PHASE1_MIGRATIONS: List[str] = [
+    "ALTER TABLE platform_accounts ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
+    "CREATE INDEX IF NOT EXISTS idx_platform_accounts_ws ON platform_accounts(workspace_id)",
+]
+_MIGRATIONS.extend(_AGENCY_WS_PHASE1_MIGRATIONS)
+
 VALID_STATUS = ("pending", "online", "offline", "removed")
 
 # 业务线合法值（'' = 未标注，不封顶不过滤 = 旧行为）
@@ -97,6 +105,7 @@ class AccountRegistry:
     def _row_to_dict(cls, row: sqlite3.Row) -> Dict[str, Any]:
         d = dict(row)
         d["meta"] = cls._decode_meta(d.pop("meta_json", "{}"))
+        d.pop("workspace_id", None)   # 代运营工作区第一段：不改现有输出
         return d
 
     @staticmethod
