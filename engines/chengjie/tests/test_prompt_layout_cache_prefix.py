@@ -9,7 +9,23 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from src.ai.ai_client import AIClient
+
+
+@pytest.fixture(autouse=True)
+def _fresh_persona_manager(monkeypatch):
+    """每条用例一个干净的 PersonaManager 单例。
+
+    _build_system_instruction 会查进程级 PersonaManager：chat_id 若已被别的用例绑过人设
+    （chat_binding tier，c1 这类通用 id 很常见），就压制全局身份 → ai_name 不注入 →
+    「【快速设置覆盖】」整段消失（i_quick == -1）。单跑绿、-n 并行按分片顺序时红。
+    """
+    from src.utils.persona_manager import PersonaManager
+
+    monkeypatch.setattr(PersonaManager, "_instance", PersonaManager())
+    yield
 
 
 class _Cfg:
