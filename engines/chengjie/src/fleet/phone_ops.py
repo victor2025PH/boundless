@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import math
 import os
 import re
@@ -53,6 +54,8 @@ from .protocol import (
     CAP_PHONE_OPS_V1, PHONE_TASK_KINDS, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED, TASK_PHONE_APP_RESTART,
     TASK_PHONE_KEY, TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP, TASK_PHONE_TEXT,
 )
+
+logger = logging.getLogger("fleet.phone_ops")
 
 SCREENCAP_TIMEOUT_SEC = 15
 INPUT_TIMEOUT_SEC = 10
@@ -482,6 +485,7 @@ class PhoneOps:
         try:
             found = self.read_foreground(serial)
         except Exception:
+            logger.debug("off-feed recovery skipped: foreground unread", exc_info=True)
             return
         if off_feed_page(found.get("package") or "", found.get("activity") or ""):
             self._paced_capture(

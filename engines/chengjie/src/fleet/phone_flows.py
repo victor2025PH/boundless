@@ -44,6 +44,7 @@ TikTok are unchanged. Warmup and watch are unchanged.
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 import subprocess
@@ -63,6 +64,8 @@ from .protocol import (
     STATUS_REJECTED, TASK_PHONE_KEY, TASK_PHONE_POST, TASK_PHONE_SCREENSHOT, TASK_PHONE_SWIPE, TASK_PHONE_TAP,
     TASK_PHONE_TEXT,
 )
+
+logger = logging.getLogger("fleet.phone_flows")
 
 _BUNDLED = Path(__file__).with_name("phone_ui_map.json")
 _MAX_MAP_BYTES = 256 * 1024
@@ -658,6 +661,7 @@ def _attach_foreground(ops: Any, serial: str, result: Dict[str, Any], code: str)
     try:
         found = reader(serial)
     except Exception:
+        logger.debug("foreground unread after login check", exc_info=True)
         return
     if not isinstance(found, dict):
         return
