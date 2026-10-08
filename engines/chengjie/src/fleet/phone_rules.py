@@ -117,7 +117,17 @@ def validate_payload(kind: str, payload: Any) -> Dict[str, Any]:
         pkg = str(raw).strip() if isinstance(raw, str) else ""
         if pkg not in _FB_PACKAGES:
             raise PhoneOpError("bad_package")
-        return {"package": pkg}
+        out = {"package": pkg}
+        prior = p.get("prior_detail", "")
+        if prior is None or prior == "":
+            return out
+        if not isinstance(prior, str):
+            raise PhoneOpError("bad_prior_detail")
+        token = prior.strip()
+        if not token or len(token) > 80 or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", token):
+            raise PhoneOpError("bad_prior_detail")
+        out["prior_detail"] = token
+        return out
     raise PhoneOpError("bad_kind")
 
 
@@ -332,6 +342,57 @@ def app_restart_host_block(node: Any, *, exclude: Any = None) -> str:
     return reason
 
 
+# A force-stop reprobe is only for a phone that never reached the feed, or
+# whose like task timed out. An in-feed miss (the row was searched) must not
+# be restarted: force-stop sends that phone back to the launcher.
+_REPROBE_RESTART_OK = frozenset({"app_not_ready", "timeout", "adb_timeout"})
+
+
+def app_restart_prior_block(detail: Any) -> str:
+    """``restart_not_warranted`` unless this result may force-stop Facebook.
+
+    Empty means no prior like result, so an operator restart still proceeds.
+    ``app_not_ready``, ``timeout``, and ``adb_timeout`` may restart.
+    ``like_row_not_found`` and every other code may not. The controller and
+    the node agent both call this.
+    """
+    if detail is None:
+        return ""
+    if not isinstance(detail, str):
+        return "restart_not_warranted"
+    text = detail.strip()
+    if not text:
+        return ""
+    if text in _REPROBE_RESTART_OK:
+        return ""
+    return "restart_not_warranted"
+
+
+def latest_like_detail(tasks: Any, serial: str) -> str:
+    """Detail of the newest finished ``phone_like`` for this serial.
+
+    ``tasks`` is newest first, the order ``list_tasks`` already uses.
+    Queued and pulled rows are skipped. Another phone's row is skipped.
+    """
+    if not isinstance(tasks, list):
+        return ""
+    want = str(serial or "")
+    if not want:
+        return ""
+    for rec in tasks:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("kind") or "") != "phone_like":
+            continue
+        if str(rec.get("status") or "") not in ("done", "failed"):
+            continue
+        target = rec.get("target") if isinstance(rec.get("target"), dict) else {}
+        if str(target.get("serial") or "") != want:
+            continue
+        return str(rec.get("detail") or "")
+    return ""
+
+
 def _sanitize_like_diag(raw: Any) -> Any:
     """Keep the probe's per-signal report. Drop pixels, unknown keys, and long text."""
     if not isinstance(raw, dict):
@@ -494,4 +555,5 @@ __all__ = [
     "OPS", "MAX_COORD", "TEXT_MAX", "KEYCODES", "TEXT_ALLOWED", "MAX_PNG_B64", "PhoneOpError", "valid_serial",
     "kind_for_op", "validate_payload", "check_target", "escape_input_text", "sanitize_phone_result",
     "scrub_phone_error_text", "scrub_phone_tree", "strip_png", "app_restart_host_block",
+    "app_restart_prior_block", "latest_like_detail",
 ]

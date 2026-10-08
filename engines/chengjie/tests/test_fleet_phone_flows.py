@@ -64,6 +64,10 @@ class FakeAdb:
             self.block.wait(5)
         if len(args) >= 4 and args[2:] == ("exec-out", "screencap"):
             return SimpleNamespace(returncode=0, stdout=self.frame if self.frame is not None else _frame(), stderr=b"")
+        if len(args) >= 6 and args[2:5] == ("shell", "pm", "path") and args[5] in (
+            "com.facebook.katana", "com.facebook.lite",
+        ):
+            return SimpleNamespace(returncode=0, stdout=f"package:{args[5]}\n".encode(), stderr=b"")
         return SimpleNamespace(returncode=self.rc, stdout=b"", stderr=self.stderr)
 
     def actions(self):
@@ -586,7 +590,7 @@ def test_ack_scrubs_raw_serial_from_phone_task_errors(st):
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
-    assert AGENT_VERSION == "0.3.26"
+    assert AGENT_VERSION == "0.3.27"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     bare = AgentConfig(tmp_path / "bare")
     bare.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})

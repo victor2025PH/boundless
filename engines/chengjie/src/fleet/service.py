@@ -149,13 +149,13 @@ def build_panel_run_key(state_dir: Path) -> List[str]:
     from .operator_alert import PANEL_RUN_KEY, PANEL_RUN_VALUE, panel_process_args
 
     value = subprocess.list2cmdline(panel_process_args(state_dir))
-    return ["reg", "add", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE, "/t", "REG_SZ", "/d", value, "/f"]
+    return ["reg", "add", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE, "/t", "REG_SZ", "/d", value, "/f", "/reg:64"]
 
 
 def build_panel_run_key_delete() -> List[str]:
     from .operator_alert import PANEL_RUN_KEY, PANEL_RUN_VALUE
 
-    return ["reg", "delete", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE, "/f"]
+    return ["reg", "delete", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE, "/f", "/reg:64"]
 
 
 def _ensure_panel_script(state_dir: Path) -> None:

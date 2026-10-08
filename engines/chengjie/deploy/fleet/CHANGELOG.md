@@ -1,5 +1,14 @@
 # 智拓群控节点更新日志
 
+## 0.3.27
+打开 Facebook：`am start` 之后轮询前台大约 9 秒，不再隔 0.5 秒就判定。启动前如果屏幕是灭的就发 KEYCODE_WAKEUP（224，不使用会来回切换的电源键 26），锁屏则从下往上滑开。轮询结束前台仍是别的应用时，回退到按 Home 再点 Facebook 图标；两种都进不去才回执失败。前台已经是 Facebook 时仍然不回桌面。`pm path` 解析不到 `com.facebook.katana` / `com.facebook.lite` 时回执 `fb_not_installed_or_store_redirect`，不再发 `am start`，因此也不会再把这件事报成 `adb_exit_1`。点进 Play 商店仍是 `fb_not_installed_or_store_redirect`；点进别的应用仍是 `wrong_app_launched:<包名>`。
+
+复探 force-stop 只对 `app_not_ready`、`timeout`、`adb_timeout`。已经进了信息流的结果（包括 `like_row_not_found`、`empty_feed`、`not_verified`）不再重启。主控入队和节点执行用同一个判断：任务带了 `prior_detail` 就用它，否则主控看该手机最近一次已结束的 `phone_like`，节点看本机刚执行过的点赞回执。没有先前结果的操作员重启照旧。
+
+现场面板：锁被会话 0 的旧进程占着（会话文件缺失时诊断仍是 `panel_session_id=-1`）就结束那个会话 0 的 powershell，再在当前控制台会话拉起。会话号大于 0 的面板不动。Run 键写入带 `/reg:64`；读取同时查 64 位视图（`KEY_WOW64_64KEY`）和 `Wow6432Node`。诊断仍回报任务运行账户、Run 键是否存在、面板进程会话号。
+
+点赞仍要两路信号一致（截图窗口内对上 + 推断位置）或高模板分，点完仍要复核。频率上限、08:00–22:00（菲律宾时间）、`dry_run` 不碰手机、日志只写壁纸号或 `[redacted]` 都不变。±40 像素窗口不变。0.3.25 的自动派发排除和 0.3.13 的 `push_config` 不变。公开下载页的 latest 仍是 0.3.7。
+
 ## 0.3.26
 打开 Facebook 不再回桌面去点壁纸上的图标坐标。前台已经是 `com.facebook.katana` 或 `com.facebook.lite` 时留在原地。否则按包名 `am start`。点进去是别的应用（Telegram、桌面空位、启动器）回执 `wrong_app_launched:<包名>`；跳到 Play 商店回执 `fb_not_installed_or_store_redirect`。这两种都不再报未登录。
 

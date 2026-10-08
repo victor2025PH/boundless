@@ -26,6 +26,7 @@
     0.3.24 金丝雀把 0.3.21 的 dump 加固、0.3.22 的机房弹窗、0.3.23 的找赞定位和 phone_app_restart 收成同一份安装包。点赞仍要两信号一致并复核，like_probe 只定位，dry_run 不碰手机。公开 latest 仍是 0.3.7。
     0.3.25 直播机、173、受保护手机（序列号前缀 3B1F）和显式排除名单走同一个 fail-closed 判断，自动派发和手机操作都过这一关。现场待办面板由登录计划任务和 Run 键在交互桌面启动，服务进程只写快照。动作条有 Comment/Share 但没有 Like 时，按等距推出 Like 位置，再和截图对上才算两路。公开 latest 仍是 0.3.7。
     0.3.26 打开 Facebook 按包名 am start，前台已是 Facebook 时不回桌面；点进 Telegram、Play 商店或空位报 wrong_app_launched / fb_not_installed_or_store_redirect，不再报未登录。推断出来的 Like 只在 ±40px 且动作条行内接受截图落点。现场面板计划任务以交互用户运行；服务在会话 0 时用活动控制台会话拉起，会话 0 里启动成功不算已显示。已领取过期未回执的任务记 failed/timeout。横屏先尝试锁竖屏，否则报 landscape_orientation。公开 latest 仍是 0.3.7。
+    0.3.27 am start 之后轮询前台约 9 秒，启动前先亮屏并划开锁屏；超时前台仍不是 Facebook 时回退到 Home 再点图标，两种都失败才回执。解析不到包名回执 fb_not_installed_or_store_redirect，不再报 adb_exit_1。force-stop 复探只对 app_not_ready 和超时，已经在信息流里（含 like_row_not_found）不重启；主控和节点用同一条判断。面板启动时若锁被会话 0 的旧进程占着，结束该进程并在当前控制台会话拉起；Run 键读写都走 64 位注册表视图，32 位视图里已有的键也算存在。公开 latest 仍是 0.3.7。
     任何一步失败：指数退避（2s → 60s），不崩、不丢 node_key；401 → 标记 revoked 停止（等重新注册）。
     machine_id 换了（克隆盘 / 主控报冲突）→ 丢掉旧 node_key，以新 machine_id 重新登记待批准，绝不顶掉别的电脑。
 
@@ -101,14 +102,14 @@ from .protocol import (
     CAP_PHONE_FLOWS_V1, CAP_PHONE_FLOWS_V2, CAP_PHONE_OPS_V1, DEFAULT_HEARTBEAT_SEC, MAX_LONGPOLL_WAIT_SEC,
     PHONE_APP_KINDS, PHONE_FLOW_KINDS, PHONE_SESSION_KINDS,
     PROTO_VERSION, STATUS_DONE, STATUS_FAILED, STATUS_REJECTED,
-    TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PING, TASK_PULL_OVERVIEW, TASK_PUSH_CONFIG,
-    TASK_ENABLE_PHONE_ADB, TASK_NET_HEALTH, TASK_OPERATOR_ALERT_DIAG, TASK_RESTART_INSTANCE, TASK_SITE_TODO,
-    TASK_STOP_ACCOUNT, TASK_UPGRADE,
+    TASK_ACCOUNT_HEALTH, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_PHONE_LIKE, TASK_PING, TASK_PULL_OVERVIEW,
+    TASK_PUSH_CONFIG, TASK_ENABLE_PHONE_ADB, TASK_NET_HEALTH, TASK_OPERATOR_ALERT_DIAG, TASK_RESTART_INSTANCE,
+    TASK_SITE_TODO, TASK_STOP_ACCOUNT, TASK_UPGRADE,
 )
 
 logger = logging.getLogger("fleet.agent")
 
-AGENT_VERSION = "0.3.26"
+AGENT_VERSION = "0.3.27"
 # push_config may set these and nothing else. Map content keys are not stored;
 # they become a file under the state dir and phone_ui_map is set to that path.
 # Operator-alert keys are stored as agent.json operator keys (hot-reloaded).
@@ -1141,6 +1142,9 @@ class NodeAgent:
                 return status, result, detail
             if kind in PHONE_FLOW_KINDS or kind in PHONE_SESSION_KINDS:
                 status, result, detail = self.phone_flows.execute(kind, payload, target, ops=self.phone_ops)
+                if kind == TASK_PHONE_LIKE:
+                    serial_note = str(target.get("serial") or "") if isinstance(target, dict) else ""
+                    self.phone_ops.note_like_detail(serial_note, detail)
                 self._note_phone_action(target, result, status)
                 result, detail = self._scrub_phone_report(target, result, detail)
                 return status, result, detail

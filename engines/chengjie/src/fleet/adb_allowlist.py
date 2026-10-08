@@ -358,6 +358,11 @@ def _media_pause_ok(args: Tuple[str, ...]) -> bool:
     }
 
 
+def _screen_wake(args: Tuple[str, ...]) -> bool:
+    """KEYCODE_WAKEUP. The power key (26) stays denied because it toggles."""
+    return args == ("input", "keyevent", "224")
+
+
 def _getprop_ok(args: Tuple[str, ...]) -> bool:
     if args == ("getprop",):
         return True
@@ -414,6 +419,8 @@ def _classify_shell(args: Tuple[str, ...]) -> AdbClass:
         return AdbClass("read_only", "cmd_package")
     # Hierarchy: stdout, or one fixed file, optionally --compressed before the path.
     # A bare dump, window_dump.xml, any other path, or the flag after the path stay denied.
+    if _screen_wake(args):
+        return AdbClass("phone_control", "screen_wake")
     if _media_pause_ok(args):
         return AdbClass("phone_control", "media_pause")
     if _uiautomator_dump_ok(args):
@@ -722,6 +729,9 @@ CATALOG: Tuple[Dict[str, Any], ...] = (
     {"since": "0.3.26", "category": "phone_control", "family": "portrait_lock",
      "example": ("-s", "S1", "shell", "settings", "put", "system", "user_rotation", "0"),
      "note": "Locks the user rotation to portrait (0). user_rotation 1, 2, and 3 stay closed."},
+    {"since": "0.3.27", "category": "phone_control", "family": "screen_wake",
+     "example": ("-s", "S1", "shell", "input", "keyevent", "224"),
+     "note": "Wakes the screen (KEYCODE_WAKEUP). Does not toggle the panel off. Keyevent 26 stays denied."},
     {"since": "0.3.18", "category": "guarded_write", "family": "airplane_mode",
      "example": ("-s", "S1", "shell", "cmd", "connectivity", "airplane-mode", "enable"),
      "note": "Turns airplane mode on. The no-argument query is read-only; enable and disable are this closed family."},

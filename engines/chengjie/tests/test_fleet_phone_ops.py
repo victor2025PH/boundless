@@ -860,6 +860,46 @@ def test_app_restart_endpoint_queues_only_facebook_on_an_operable_phone(st, capl
     assert (bad.status_code, bad.json()["detail"]) == (400, "bad_package")
     generic = c.post(f"/api/fleet/nodes/{nid}/tasks", headers=OP, json={"kind": "phone_app_restart", "payload": {}})
     assert (generic.status_code, generic.json()["detail"]) == (400, "phone_ops_use_phones_endpoint")
+    held = c.post(f"/api/fleet/nodes/{nid}/phones/S1/app_restart", headers=OP,
+                  json={"prior_detail": "like_row_not_found"})
+    assert (held.status_code, held.json()["detail"]) == (409, "restart_not_warranted")
+    ready = c.post(f"/api/fleet/nodes/{nid}/phones/S1/app_restart", headers=OP,
+                   json={"prior_detail": "timeout"})
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["task"]["payload"]["prior_detail"] == "timeout"
+    assert ready.json()["task"]["payload"]["package"] == "com.facebook.katana"
+
+
+def test_app_restart_uses_the_latest_like_on_the_host_and_on_the_agent(st):
+    """In-feed misses are not force-stopped. The controller and the agent share the rule."""
+    import time as _t
+
+    from src.fleet.protocol import CAP_PHONE_FLOWS_V1, STATUS_FAILED, TASK_PHONE_LIKE
+
+    c = _client(st)
+    nid = _capable(st, mid="m-reprobe")
+    st.heartbeat(
+        nid,
+        {"agent_version": "0.3.27", "proto_version": 1,
+         "caps": [CAP_PHONE_OPS_V1, CAP_PHONE_FLOWS_V1], "phones": PHONES_HB},
+        now=_t.time(),
+    )
+    like = st.enqueue(
+        nid, TASK_PHONE_LIKE, payload={"app": "facebook", "like_probe": True}, target={"serial": "S1"},
+        now=1_700_000_000.0,
+    )
+    assert like is not None
+    st.ack(like["task_id"], node_id=nid, status=STATUS_FAILED, detail="like_row_not_found", result={})
+    blocked = c.post(f"/api/fleet/nodes/{nid}/phones/S1/app_restart", headers=OP, json={})
+    assert (blocked.status_code, blocked.json()["detail"]) == (409, "restart_not_warranted")
+    other = st.enqueue(
+        nid, TASK_PHONE_LIKE, payload={"app": "facebook", "like_probe": True}, target={"serial": "S1"},
+        now=1_700_000_100.0,
+    )
+    st.ack(other["task_id"], node_id=nid, status=STATUS_FAILED, detail="app_not_ready", result={})
+    allowed = c.post(f"/api/fleet/nodes/{nid}/phones/S1/app_restart", headers=OP, json={})
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["task"]["payload"]["prior_detail"] == "app_not_ready"
 
 
 def test_app_restart_refuses_a_phone_outside_the_operable_pool(st):
@@ -942,6 +982,38 @@ def test_agent_app_restart_stops_then_launches_and_scrubs_the_serial(tmp_path, m
         {"package": "com.facebook.katana"}, {"serial": "3B1F4KE5MS140P4X"},
     )[2] == "protected_phone"
     assert len(fake.calls) == n
+    monkeypatch.setattr(agent_mod, "host_name", lambda: "PC-A")
+    ag.phone_ops.note_like_detail(serial, "like_row_not_found")
+    status, _result, detail = ag.execute({
+        "kind": "phone_app_restart", "payload": {}, "target": {"serial": serial},
+    })
+    assert (status, detail) == (STATUS_REJECTED, "restart_not_warranted")
+    assert len(fake.calls) == n
+    status, _result, detail = ag.execute({
+        "kind": "phone_app_restart",
+        "payload": {"prior_detail": "app_not_ready"},
+        "target": {"serial": serial},
+    })
+    assert (status, detail) == (STATUS_DONE, "ok")
+    assert len(fake.calls) > n
+    from src.fleet.phone_rules import app_restart_prior_block, latest_like_detail
+
+    assert app_restart_prior_block("like_row_not_found") == "restart_not_warranted"
+    assert app_restart_prior_block("empty_feed") == "restart_not_warranted"
+    assert app_restart_prior_block("not_verified") == "restart_not_warranted"
+    assert app_restart_prior_block("") == ""
+    assert app_restart_prior_block(None) == ""
+    assert app_restart_prior_block("app_not_ready") == ""
+    assert app_restart_prior_block("timeout") == ""
+    assert app_restart_prior_block("adb_timeout") == ""
+    rows = [
+        {"kind": "phone_like", "status": "failed", "detail": "like_row_not_found",
+         "target": {"serial": "S1"}},
+        {"kind": "phone_like", "status": "failed", "detail": "app_not_ready",
+         "target": {"serial": "S2"}},
+    ]
+    assert latest_like_detail(rows, "S1") == "like_row_not_found"
+    assert latest_like_detail(rows, "S9") == ""
 
 
 # ── 5) agent.json 热加载 / save 不盖手工改动 / 单文件孤儿进程 ──────────────────

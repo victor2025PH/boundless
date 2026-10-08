@@ -1017,16 +1017,27 @@ def present_operator_alert(state_dir: Path, payload: Dict[str, Any]) -> Dict[str
 
 
 def launch_panel(state_dir: Path) -> Dict[str, Any]:
-    """Start the panel if it is not already holding the lock. Never raises."""
+    """Start the panel unless a desktop session already holds the lock. Never raises.
+
+    A session-0 holder (or a lock with no session file, the 0.3.25 leftover)
+    is stopped and the lock is taken for the active console session. A
+    session above 0 is left alone.
+    """
     try:
-        state_dir = Path(state_dir)
-        state_dir.mkdir(parents=True, exist_ok=True)
-        script = state_dir / SCRIPT_NAME
+        # Keep the caller's path object. ``Path()`` follows ``os.name``, and a
+        # Linux test that only flips ``os.name`` cannot construct a WindowsPath.
+        root = state_dir
+        root.mkdir(parents=True, exist_ok=True)
+        script = root / SCRIPT_NAME
         _ensure_script(script)
-        lock = state_dir / LOCK_NAME
+        lock = root / LOCK_NAME
         if _lock_held(lock):
-            return {"ok": True, "mode": "already_running", "shown": True}
-        if not _spawn_interactive(script, state_dir / SNAP_NAME, state_dir / LANG_NAME, lock):
+            holder = _holder_session_while_locked(root)
+            if holder > 0:
+                return {"ok": True, "mode": "already_running", "shown": True}
+            if not _end_session0_panel(root) or _lock_held(lock):
+                return {"ok": True, "mode": "headless", "shown": False}
+        if not _spawn_interactive(script, root / SNAP_NAME, root / LANG_NAME, lock):
             return {"ok": True, "mode": "headless", "shown": False}
         return {"ok": True, "mode": "gui", "shown": True}
     except Exception:
@@ -1272,6 +1283,63 @@ def _remember_panel_session(snapshot: Path, session_id: int) -> None:
         logger.debug("[operator_alert] panel session was not recorded", exc_info=True)
 
 
+def _holder_session_while_locked(state_dir: Path) -> int:
+    """Session recorded for a lock the caller already knows is held.
+
+    ``-1`` means the session file is missing or unreadable. That is the
+    0.3.25 process left in session 0: diagnostics show ``panel_session_id=-1``.
+    ``0`` is a real session-0 holder. A value above 0 is a desktop panel.
+    """
+    root = state_dir if isinstance(state_dir, Path) else Path(state_dir)
+    try:
+        raw = json.loads((root / PANEL_SESSION_NAME).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        return -1
+    if not isinstance(raw, dict):
+        return -1
+    sid = raw.get("session_id")
+    if isinstance(sid, bool) or not isinstance(sid, int) or not 0 <= sid <= 10_000_000:
+        return -1
+    return sid
+
+
+def _end_session0_panel(state_dir: Path) -> bool:
+    """Stop a session-0 powershell whose command line names this panel lock.
+
+    Does not stop a panel in any other session. The lock path is passed in
+    the environment, not interpolated into the script.
+    """
+    if os.name != "nt":
+        return False
+    root = _state_path(state_dir)
+    lock = str(root / LOCK_NAME)
+    if not lock or len(lock) > 240:
+        return False
+    env = os.environ.copy()
+    env["CHATX_PANEL_LOCK"] = lock
+    try:
+        proc = subprocess.run(
+            session0_panel_stop_command(),
+            capture_output=True, timeout=20, env=env,
+        )
+        return int(getattr(proc, "returncode", 1) or 0) == 0
+    except Exception:
+        logger.warning("[operator_alert] session-0 panel was not stopped", exc_info=True)
+        return False
+
+
+def session0_panel_stop_command() -> List[str]:
+    """PowerShell argv. Session 0 only, and only when the command line contains the lock."""
+    script = (
+        "$lock = $env:CHATX_PANEL_LOCK; "
+        "if (-not $lock) { exit 0 }; "
+        "Get-CimInstance Win32_Process -Filter \"Name = 'powershell.exe'\" | "
+        "Where-Object { $_.SessionId -eq 0 -and $_.CommandLine -and $_.CommandLine.Contains($lock) } | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
+    return [_powershell(), "-NoProfile", "-NonInteractive", "-Command", script]
+
+
 def _stored_panel_session(state_dir: Path) -> int:
     """Panel process session, or -1 when the panel is not holding the lock.
 
@@ -1374,19 +1442,61 @@ def _query_panel_task_text() -> str:
     return str(raw)
 
 
+def run_key_probe_commands() -> List[List[str]]:
+    """Read the Run value in the 64-bit view and in Wow6432Node.
+
+    Writes use ``/reg:64``. A 32-bit query of the same path would miss that
+    value, so the probe names the view explicitly and also checks the
+    32-bit node where an older write may have landed.
+    """
+    wow = r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"
+    return [
+        ["reg", "query", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE, "/reg:64"],
+        ["reg", "query", wow, "/v", PANEL_RUN_VALUE, "/reg:32"],
+    ]
+
+
+def _run_key_in_winreg_view(flag: int) -> bool:
+    try:
+        import winreg
+    except Exception:
+        return False
+    try:
+        access = winreg.KEY_READ | flag
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            access,
+        ) as key:
+            winreg.QueryValueEx(key, PANEL_RUN_VALUE)
+        return True
+    except OSError:
+        return False
+
+
 def _run_key_present() -> bool:
-    """True when the HKLM Run value exists. The command line is not returned."""
+    """True when the HKLM Run value exists in the 64-bit or 32-bit view.
+
+    The command line is not returned.
+    """
     if os.name != "nt":
         return False
     try:
-        proc = subprocess.run(
-            ["reg", "query", PANEL_RUN_KEY, "/v", PANEL_RUN_VALUE],
-            capture_output=True, timeout=10,
-        )
-        return int(getattr(proc, "returncode", 1) or 0) == 0
+        import winreg
+
+        if _run_key_in_winreg_view(winreg.KEY_WOW64_64KEY) or _run_key_in_winreg_view(winreg.KEY_WOW64_32KEY):
+            return True
     except Exception:
-        logger.debug("[operator_alert] run key query failed", exc_info=True)
-        return False
+        logger.debug("[operator_alert] run key registry view failed", exc_info=True)
+    for cmd in run_key_probe_commands():
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=10)
+            if int(getattr(proc, "returncode", 1) or 0) == 0:
+                return True
+        except Exception:
+            logger.debug("[operator_alert] run key query failed", exc_info=True)
+    return False
 
 
 def panel_runtime_diag(state_dir: Path) -> Dict[str, Any]:

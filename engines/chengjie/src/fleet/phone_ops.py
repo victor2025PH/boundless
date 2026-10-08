@@ -45,7 +45,8 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 
 from .phone_flow_robust import MAX_DWELL_SEC
 from .phone_rules import (
-    KEYCODES, MAX_PNG_B64, PhoneOpError, check_target, escape_input_text, validate_payload,
+    KEYCODES, MAX_PNG_B64, PhoneOpError, app_restart_prior_block, check_target, escape_input_text,
+    validate_payload,
 )
 from .phones import (
     is_excluded, normalize_excludes, parse_adb_devices, parse_client_version, prepare_adb,
@@ -128,6 +129,32 @@ def off_feed_page(package: str, activity: str) -> bool:
     if not low or "fbmaintab" in low:
         return False
     return any(token in low for token in _OFF_FEED)
+
+
+def parse_screen_lock(text: str) -> Dict[str, Optional[bool]]:
+    """Awake and keyguard flags from ``dumpsys window``. Missing flags stay unknown."""
+    blob = text or ""
+    awake: Optional[bool] = None
+    if "mScreenOnFully=false" in blob or "mAwake=false" in blob or "screenState=OFF" in blob:
+        awake = False
+    elif "mScreenOnFully=true" in blob or "mAwake=true" in blob or "screenState=ON" in blob:
+        awake = True
+    locked: Optional[bool] = None
+    if (
+        "mShowingLockscreen=true" in blob
+        or "mDreamingLockscreen=true" in blob
+        or "isStatusBarKeyguard=true" in blob
+        or "mKeyguardShowing=true" in blob
+    ):
+        locked = True
+    elif (
+        "mShowingLockscreen=false" in blob
+        or "mDreamingLockscreen=false" in blob
+        or "isStatusBarKeyguard=false" in blob
+        or "mKeyguardShowing=false" in blob
+    ):
+        locked = False
+    return {"awake": awake, "locked": locked}
 
 
 _DUMP_NOISE = (
@@ -280,6 +307,7 @@ class PhoneOps:
         self._last_raw: Dict[str, bytes] = {}
         self._screen: Dict[str, Tuple[int, int]] = {}
         self._client_versions: Dict[str, Optional[int]] = {}
+        self._last_like_detail: Dict[str, str] = {}
         self.configure(adb_path=adb_path, exclude=exclude, enabled=enabled, allow_tcp=allow_tcp,
                        manage_server=manage_server, state_dir=state_dir)
 
@@ -493,16 +521,21 @@ class PhoneOps:
                 HIERARCHY_PAUSE_TIMEOUT_SEC,
             )
 
-    def facebook_package(self, serial: str) -> str:
-        """Katana or lite when ``pm path`` names it. Empty when the answer is missing.
+    def note_like_detail(self, serial: str, detail: str) -> None:
+        """Remember the last ``phone_like`` code for this phone. Not logged."""
+        if not isinstance(serial, str) or not serial or len(serial) > 80:
+            return
+        text = str(detail or "")
+        self._last_like_detail[serial] = text[:80]
 
-        Does not take the phone lock. An empty answer is not proof the app is
-        absent: the caller still launches and then reads the foreground.
+    def facebook_package(self, serial: str) -> str:
+        """Katana or lite when ``pm path`` names it. Empty when neither package is present.
+
+        Does not take the phone lock. An empty answer means the package could
+        not be resolved. The caller reports that as a store redirect and does
+        not ``am start`` (that failure used to surface as ``adb_exit_1``).
         """
-        try:
-            adb = self._ready_adb()
-        except PhoneOpError:
-            return ""
+        adb = self._ready_adb()
         for package in _FB_PACKAGES:
             _rc, out, err = self._paced_capture(
                 adb, serial, ("-s", serial, "shell", "pm", "path", package), 8.0,
@@ -511,6 +544,69 @@ class PhoneOps:
             if ("package:" + package) in text:
                 return package
         return ""
+
+    def read_screen_lock(self, serial: str) -> Dict[str, Optional[bool]]:
+        """Whether the panel is awake and whether the keyguard is showing.
+
+        Unknown stays ``None``. Does not take the phone lock. A dumpsys miss
+        does not wake or swipe.
+        """
+        blank: Dict[str, Optional[bool]] = {"awake": None, "locked": None}
+        try:
+            adb = self._ready_adb()
+        except PhoneOpError:
+            return dict(blank)
+        _rc, out, err = self._paced_capture(
+            adb, serial, ("-s", serial, "shell", "dumpsys", "window"), 6.0,
+        )
+        text = _hierarchy_text(out) or _hierarchy_text(err)
+        return parse_screen_lock(text)
+
+    def prepare_foreground(self, serial: str, width: int, height: int) -> None:
+        """Wake a dark panel and swipe the keyguard before ``am start``.
+
+        KEYCODE_WAKEUP does not toggle the screen off. A swipe runs only when
+        the panel is off or the lock screen is showing. Does not take the lock.
+        """
+        state = self.read_screen_lock(serial)
+        if state.get("awake") is False:
+            self._wake_screen(serial)
+            self._sleep(0.4)
+            self._last_op[serial] = self._clock()
+            state = self.read_screen_lock(serial)
+        if state.get("locked") is True or state.get("awake") is False:
+            self._dismiss_keyguard(serial, width, height)
+
+    def _wake_screen(self, serial: str) -> None:
+        adb = self._ready_adb()
+        self._pace(serial)
+        try:
+            self._adb(adb, ("-s", serial, "shell", "input", "keyevent", "224"), INPUT_TIMEOUT_SEC)
+        finally:
+            self._last_op[serial] = self._clock()
+
+    def _dismiss_keyguard(self, serial: str, width: int, height: int) -> None:
+        if isinstance(width, bool) or isinstance(height, bool):
+            return
+        if not isinstance(width, int) or not isinstance(height, int):
+            return
+        if width < 2 or height < 2:
+            return
+        x = max(0, min(width // 2, 9999))
+        y1 = max(0, min(height * 80 // 100, 9999))
+        y2 = max(0, min(height * 25 // 100, 9999))
+        if y1 <= y2:
+            return
+        adb = self._ready_adb()
+        self._pace(serial)
+        try:
+            self._adb(
+                adb,
+                ("-s", serial, "shell", "input", "swipe", str(x), str(y1), str(x), str(y2), "300"),
+                INPUT_TIMEOUT_SEC,
+            )
+        finally:
+            self._last_op[serial] = self._clock()
 
     def launch_facebook(self, serial: str, package: str) -> None:
         """Foreground one Facebook package with ``am start``. Does not take the lock.
@@ -694,6 +790,10 @@ class PhoneOps:
             p = validate_payload(TASK_PHONE_APP_RESTART, payload)
         except PhoneOpError as e:
             return STATUS_REJECTED, {}, e.code
+        prior = p.get("prior_detail") or self._last_like_detail.get(serial, "")
+        blocked = app_restart_prior_block(prior)
+        if blocked:
+            return STATUS_REJECTED, {"serial": serial, "package": p["package"]}, blocked
         if not self._slots.acquire(timeout=LOCK_WAIT_SEC):
             return STATUS_FAILED, {"serial": serial}, "node_busy"
         lock = self._lock_for(serial)
