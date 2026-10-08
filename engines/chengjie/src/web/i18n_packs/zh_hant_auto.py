@@ -3357,10 +3357,10 @@ ZH_HANT = {
     'ck.title': '駕駛艙',
     'ck.unread': '未讀',
     'ck.wait.label': '已持續',
-    'ck.why.draft_pending': 'AI 草稿已擬好，等人稽核 {age}',
+    'ck.why.draft_pending': 'AI 草稿寫好了，等人看過再發',
     'ck.why.needs_human': 'AI 判斷需要真人處理（高風險 / 生成失敗 / 配額觸頂等）',
-    'ck.why.takeover_overdue': '人工接管已 {age} 未交還——完成後記得交還 AI',
-    'ck.why.waiting': '客戶說了最後一句，已等 {age} 沒人回',
+    'ck.why.takeover_overdue': '接手後還沒交還，這段時間 AI 是停的',
+    'ck.why.waiting': '客戶說了最後一句，還沒人回',
     # ── cl_js_001 ──
     'cl_js_001': '無匹配客戶',
     # ── cl_js_002 ──
