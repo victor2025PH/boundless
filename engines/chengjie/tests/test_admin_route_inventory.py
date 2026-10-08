@@ -2336,6 +2336,14 @@ _ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS = """
 """
 _BASELINE += _ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS
 
+# 群脉导播台向导号（97d0fdfa，2026-10-06）：GET 读已钉的向导号 + 注册表可选号（不返回凭据），
+# POST 只能把注册表里已有的号钉进 overlay；两者都走 api_auth（group_show_routes.py）。
+_ADDITIONS_2026_10_06_GROUP_SHOW_GUIDE = """
+/api/group-show/guide-account	GET
+/api/group-show/guide-account	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_06_GROUP_SHOW_GUIDE
+
 
 def _parse_baseline():
     expected = set()

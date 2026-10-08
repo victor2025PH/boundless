@@ -54,7 +54,9 @@ class _Sender(TelegramSenderMixin):
         self.account_id = "acct7"
         self.logger = logging.getLogger("test_aline_disclosure")
 
-    def _presend_blocked(self, is_autoreply=True):
+    def _presend_blocked(self, is_autoreply=True, **kw):
+        # 真实签名后来加了 peer=（按会话的 STOP / 限速闸）等关键字；桩只关心「不拦」，
+        # 吞掉新增关键字，免得签名一扩展整组用例就在发送前 TypeError（被 _send_reply 吞成「发送失败」）
         return False
 
     async def _mark_peer_read(self, chat_id):
