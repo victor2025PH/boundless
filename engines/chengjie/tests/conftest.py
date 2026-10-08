@@ -43,6 +43,9 @@ os.environ["AITR_DATA_DIR"] = str(_TEST_DATA_ROOT)
 # 是引擎根，测试触发 decide/observe 会把账本写进仓库树；一并指到进程级 tmp。
 os.environ.setdefault("AITR_I4_GRAY_DIR", str(_TEST_DATA_ROOT / "logs" / "i4_gray"))
 atexit.register(lambda: shutil.rmtree(_TEST_DATA_ROOT, ignore_errors=True))
+# 智安发送限速闸（src/compliance/send_rate_gate，生产缺省开）：既有用例大量「新登记账号
+# 连发几条」，预热上限会误拦；套件缺省关，本闸自己的用例 monkeypatch.delenv 打开。
+os.environ.setdefault("ZHILIAO_SEND_RATE_GATE", "off")
 
 # reunion 草稿 prompt 配置（``config/reunion_prompts.yaml``）＝真实生产配置，
 # 且 ``POST /api/reunion-prompts/set-default`` 会**写**它。它不走 AITR_DATA_DIR，
@@ -627,3 +630,15 @@ def viewer_client(app, config_dir):
             follow_redirects=True,
         )
         yield c
+
+@pytest.fixture(autouse=True)
+def _reset_account_blocklist_singleton():
+    """智安 P0-2：account_blocklist 是进程级单例（无 _db_path 的假 store 回落到「首个真库」那份）。
+    CI 用 xdist ``-n auto``（按用例分发，不按文件），别的用例记下的停联（如 telegram u1）会漏进
+    同 worker 后续用例的 STOP 硬闸判定 → 每个用例后清掉，保证用例间互不串名单。"""
+    yield
+    try:
+        from src.inbox import account_blocklist as _ab
+        _ab.reset_for_tests()
+    except Exception:
+        pass

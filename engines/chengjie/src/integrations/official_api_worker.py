@@ -165,7 +165,8 @@ class OfficialApiWorker:
             return self._result(
                 out, str(((out.get("data") or {}).get("message_id")) or ""))
         if self.platform == "whatsapp":
-            from src.integrations.whatsapp_cloud import wa_send_text
+            from src.integrations.whatsapp_cloud import ensure_runtime, wa_send_text
+            ensure_runtime(_cfg_block(self.config, "whatsapp_cloud"))
             out = await wa_send_text(dest, text, c["phone_number_id"], c["access_token"])
             data = out.get("data") or {}
             mid = ""
@@ -173,7 +174,10 @@ class OfficialApiWorker:
                 mid = str(((data.get("messages") or [{}])[0]).get("id") or "")
             except Exception:
                 mid = ""
-            return self._result(out, mid)
+            res = self._result(out, mid)
+            if out.get("blocked"):
+                res["blocked"] = str(out["blocked"])
+            return res
         if self.platform == "instagram":
             from src.integrations.instagram_webhook import (
                 ig_send_text, ig_send_with_window_fallback,
@@ -233,7 +237,8 @@ class OfficialApiWorker:
         dest = dest_from_chat_key(chat_key)
         mt = str(media_type or "").lower()
         if self.platform == "whatsapp":
-            from src.integrations.whatsapp_cloud import wa_send_media
+            from src.integrations.whatsapp_cloud import ensure_runtime, wa_send_media
+            ensure_runtime(_cfg_block(self.config, "whatsapp_cloud"))
             out = await wa_send_media(
                 dest, media_path, c["phone_number_id"], c["access_token"],
                 media_type=mt, caption=caption)
@@ -242,7 +247,10 @@ class OfficialApiWorker:
                 mid = str((((out.get("data") or {}).get("messages") or [{}])[0]).get("id") or "")
             except Exception:
                 mid = ""
-            return self._result(out, mid)
+            res = self._result(out, mid)
+            if out.get("blocked"):
+                res["blocked"] = str(out["blocked"])
+            return res
         if self.platform == "line":
             pub = self._public_media_url(media_url)
             if not pub:

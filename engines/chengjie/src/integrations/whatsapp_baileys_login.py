@@ -10,12 +10,20 @@ WhatsApp 连接、回报账号上线。
   ``config.platform_login.whatsapp.protocol_enabled: true`` 显式开启。
 - 桥接通过 HTTP 调用微服务；服务不可达时**优雅降级**为错误提示，不影响主进程。
 - 网络调用集中在 ``_post_json`` / ``_get_json`` 两个可被测试替换的薄封装里。
+- 入站鉴权（P0-1，2026-10-08）：边车除 ``/health`` 外要求 ``Authorization: Bearer
+  <边车令牌>``。两个薄封装自动带上（:func:`sidecar_auth_headers`）；令牌是**独立的**，
+  不复用 web_admin 管理 token。来源：环境变量 ``WA_SIDECAR_TOKEN`` → 实例 config 目录的
+  ``wa_sidecar_token.key``（``services/whatsapp-baileys/start.ps1`` 首次启动生成，
+  ``*.key`` 已被 .gitignore 忽略）。都没有 = 不带头（兼容未开鉴权的回环边车/桌面壳）。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+import os
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 from src.integrations.account_registry import get_account_registry
 from src.integrations.platform_login import register_login_provider, resolve_login_switch
@@ -37,12 +45,92 @@ def protocol_enabled(config: Dict[str, Any]) -> bool:
     return resolve_login_switch(config, "platform_login.whatsapp.protocol_enabled")
 
 
+# ── 边车入站鉴权令牌（P0-1） ────────────────────────────────────────────────
+
+SIDECAR_TOKEN_ENV = "WA_SIDECAR_TOKEN"
+SIDECAR_TOKEN_FILE_ENV = "WA_SIDECAR_TOKEN_FILE"
+SIDECAR_TOKEN_FILENAME = "wa_sidecar_token.key"
+_token_cache: Dict[str, Any] = {"path": None, "mtime": None, "token": ""}
+_last_401_warn = 0.0
+
+
+def _config_dir() -> Path:
+    """复刻 config_manager 的 config 目录定位：AITR_CONFIG_PATH 父 → AITR_DATA_DIR/config → 引擎根/config。"""
+    env_path = (os.environ.get("AITR_CONFIG_PATH") or "").strip()
+    if env_path:
+        return Path(env_path).expanduser().parent
+    env_dir = (os.environ.get("AITR_DATA_DIR") or "").strip()
+    if env_dir:
+        return Path(env_dir).expanduser() / "config"
+    return Path(__file__).resolve().parents[2] / "config"
+
+
+def sidecar_token_path() -> Path:
+    override = (os.environ.get(SIDECAR_TOKEN_FILE_ENV) or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return _config_dir() / SIDECAR_TOKEN_FILENAME
+
+
+def sidecar_token() -> Tuple[str, str]:
+    """返回 ``(token, source)``；source ∈ {"env", "file", ""}。令牌本身绝不进日志。
+
+    文件按 mtime 缓存：start.ps1 轮换令牌后（重启边车），引擎下次调用即读到新值，无需重启引擎。
+    """
+    env_tok = (os.environ.get(SIDECAR_TOKEN_ENV) or "").strip()
+    if env_tok:
+        return env_tok, "env"
+    p = sidecar_token_path()
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        return "", ""
+    if _token_cache["path"] == str(p) and _token_cache["mtime"] == mtime:
+        tok = _token_cache["token"]
+    else:
+        try:
+            # utf-8-sig：PowerShell 5.1 写文件可能带 BOM
+            tok = p.read_text(encoding="utf-8-sig").strip()
+        except OSError:
+            tok = ""
+        _token_cache.update(path=str(p), mtime=mtime, token=tok)
+    return (tok, "file") if tok else ("", "")
+
+
+def sidecar_auth_headers() -> Dict[str, str]:
+    """调边车要带的鉴权头；未配置令牌时返回空 dict（兼容未开鉴权的回环边车）。"""
+    tok, _src = sidecar_token()
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
+def sidecar_auth_status() -> Dict[str, Any]:
+    """只读诊断：是否配了令牌、来源、文件路径（不含令牌值）。"""
+    tok, src = sidecar_token()
+    return {"configured": bool(tok), "source": src, "file": str(sidecar_token_path())}
+
+
+def _warn_if_unauthorized(r: Any, url: str) -> None:
+    global _last_401_warn
+    if getattr(r, "status_code", 0) != 401:
+        return
+    now = time.monotonic()
+    if now - _last_401_warn < 60:
+        return
+    _last_401_warn = now
+    st = sidecar_auth_status()
+    logger.warning(
+        "[wa_baileys] 边车拒绝鉴权（401）：%s —— 引擎侧令牌 configured=%s source=%s file=%s；"
+        "请确认边车 SIDECAR_TOKEN 与该文件/环境变量 %s 一致（重启边车会按 start.ps1 重新读取）。",
+        url.split("?", 1)[0], st["configured"], st["source"] or "-", st["file"], SIDECAR_TOKEN_ENV)
+
+
 # ── HTTP 薄封装（测试可 monkeypatch） ────────────────────────────────────────
 
 async def _post_json(url: str, payload: Dict[str, Any], timeout: float = 20.0) -> Dict[str, Any]:
     import httpx
     async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(url, json=payload)
+        r = await client.post(url, json=payload, headers=sidecar_auth_headers())
+        _warn_if_unauthorized(r, url)
         r.raise_for_status()
         return r.json()
 
@@ -50,7 +138,8 @@ async def _post_json(url: str, payload: Dict[str, Any], timeout: float = 20.0) -
 async def _get_json(url: str, timeout: float = 20.0) -> Dict[str, Any]:
     import httpx
     async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.get(url)
+        r = await client.get(url, headers=sidecar_auth_headers())
+        _warn_if_unauthorized(r, url)
         r.raise_for_status()
         return r.json()
 

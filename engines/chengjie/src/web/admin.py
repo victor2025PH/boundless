@@ -896,6 +896,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                                            resolve_ui_mode)
     cfg_dir = config_manager.config_path.parent
     user_store = WebUserStore(cfg_dir / "web_users.db")
+    if audit_store is not None:
+        # 会话过期清扫（智安 P1-6）结果写审计日志（动作 session_expire_sweep）
+        user_store.audit_fn = audit_store.log
     if user_store.user_count() == 0:
         if token:
             user_store._ensure_master("admin", token)
@@ -3073,17 +3076,35 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         }
 
     def _get_ai_stats(tc):
-        if not tc:
-            return {}
-        ai = getattr(tc, "ai_client", None)
+        ai = getattr(tc, "ai_client", None) if tc else None
+        if not ai:
+            # replybus-only / 协议号实例常无 telegram_client：退到 app.state.ai_client
+            # （bootstrap/web_app 注入的同一实例），否则 /health 看不到备用链状态。
+            # 只认真 AIClient（有 backup_status 且计数是数字），替身对象不冒充。
+            _st_ai = getattr(app.state, "ai_client", None)
+            if (_st_ai is not None and callable(getattr(_st_ai, "backup_status", None))
+                    and isinstance(getattr(_st_ai, "total_calls", None), int)):
+                ai = _st_ai
         if not ai:
             return {}
         tracker = getattr(ai, "_quality_tracker", None)
-        return {
+        out = {
             "total_calls": getattr(ai, "total_calls", 0),
             "total_tokens": getattr(ai, "total_tokens", 0),
             "quality": tracker.get_summary() if tracker else {},
         }
+        # P1-2：主备切换可观测——备用链顺序、各 lane 是否配置/可达、冗余结论。
+        # 只含 lane 名/布尔/计数（/health 免鉴权，绝不带端点地址、模型 key）。
+        # 只收 dict（测试替身/旧对象返回别的类型时不带，免得 /health 序列化 500）。
+        _bs = getattr(ai, "backup_status", None)
+        if callable(_bs):
+            try:
+                _b = _bs()
+                if isinstance(_b, dict):
+                    out["backup"] = _b
+            except Exception:
+                out["backup"] = {"redundancy": "error"}
+        return out
 
     # ── 配置导入导出 ──────────────────────────────────────────
 

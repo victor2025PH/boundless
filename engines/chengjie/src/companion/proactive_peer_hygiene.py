@@ -350,6 +350,16 @@ def proactive_candidate_ok(
             return (False, "stop_contact")
     except Exception:
         pass
+    # 智安 P0-2（2026-10-08）STOP 硬闸跨账号视角：同平台同 external_id 在别的账号停联过、
+    # 或同一手机号停联过 → 同样永不主动触达（开关显式关时跳过本扩展）。
+    try:
+        from src.compliance import stop_gate as _sg
+        if _sg.enforced(config) and _sg.contact_stopped(
+                None, str(r.get("platform") or ""), str(r.get("account_id") or ""),
+                str(r.get("chat_key") or ""), phone=str(r.get("phone") or r.get("peer_phone") or "")):
+            return (False, "stop_contact")
+    except Exception:
+        pass
     return (True, "")
 
 
