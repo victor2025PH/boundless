@@ -17,12 +17,17 @@ from src.utils.persona_manager import PersonaManager
 
 
 def _write_runtime(path, profiles):
+    prev_ns = path.stat().st_mtime_ns if path.exists() else 0
     path.write_text(
         yaml.safe_dump({"profiles": profiles}, allow_unicode=True),
         encoding="utf-8")
-    # Windows mtime 粒度 ~15ms，连续写可能同刻度；显式推后 mtime 保 sig 必变
+    # 签名＝(mtime_ns, size)。文件时间戳取的是内核粗粒度时钟（Linux 按 jiffy、
+    # Windows ~15ms），连续两次写常落同一刻度；若再赶上同字节数（「旧名」→「新名」），
+    # 旧写法「本次 mtime + 2s」会给两次写打出**同一个** mtime → 签名不变、重载不触发，
+    # 在 CI 上稳定复现。改为相对上一次写严格递增，保 sig 必变。
     st = path.stat()
-    os.utime(path, (st.st_atime, st.st_mtime + 2))
+    new_ns = max(st.st_mtime_ns, prev_ns) + 2_000_000_000
+    os.utime(path, ns=(st.st_atime_ns, new_ns))
 
 
 def _fresh_pm(tmp_path, profiles):
