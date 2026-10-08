@@ -44,6 +44,21 @@ _BARE_FETCH_CEILINGS = {
     # 群成员提取管理台：独立自包含页（不 extends base.html、无 _api_fetch.html include），
     # 全页仅 api() 一处原生 fetch（同源 + 内建 CSRF 头 + JSON 解析）。同 voice_call 结构性豁免。
     "tg_members.html": 1,
+    # ── 2026-10-08 蛋博士批准重定基线（2026-10-08 ci-baseline G15） ──
+    # 08-07 批清后约 2 个月的模板增量没走 apiFetch（33 处 / 11 文件），按实测登记，只降不升；
+    # 迁移计划见 CI_BASELINE.md「延迟迁移债」。_boot_error_guard 为结构性豁免候选
+    # （统一层可能尚未加载时的兜底上报），迁移时单独判定。
+    "_boot_error_guard.html": 1,
+    "base.html": 3,
+    "boss.html": 1,
+    "cockpit.html": 1,
+    "goal_report.html": 10,
+    "singing.html": 4,
+    "templates.html": 5,
+    "unified_inbox.html": 3,
+    "voice_eval.html": 2,
+    "workspace_assets.html": 2,
+    "workspace_base.html": 1,
 }
 
 

@@ -43,6 +43,11 @@ _VOCAL_ATTRS = frozenset({
 
 # 每个 src/<模块> 的静默处天花板（**只降不升**）。基线取自 2026-08-28 全树扫描。
 _SILENT_CEILINGS: dict[str, int] = {
+    # ══ 2026-10-08 蛋博士批准重定基线（ci-baseline G15）══
+    # 台账 08-28 后没再跟，约 6 周功能合入（多数未跑 CI）累积到下列实测值，按实测重定，
+    # 从此恢复「只降不升」（not_stale 闸同时防虚高）。这笔延迟迁移的债与清理计划登记在
+    # D:\handoff\zhiliao_dev\CI_BASELINE.md「延迟迁移债」节（关键路径先清：发送 / 计费 / 鉴权）。
+    # 重定明细（旧→新）：web 571→666、integrations 335→470、ai 211→304、inbox 198→428、companion 190→298、skills 129→153、utils 124→169、client 119→133、ops 44→56、contacts 41→51、eval 21→27、bootstrap 11→12、licensing 9→10、_root 9→17、assistant 3→10、compliance 0→9
     # 575 → 572（2026-08-28 第二批）：unified_inbox_send_routes 三处补 WARNING，
     # 行为不变。同样按「失败有业务后果」筛，不是按数量扫：
     #   · os.remove(local) ×2 —— 上传失败/超限拒收后的临时文件删除，单个可达
@@ -52,36 +57,37 @@ _SILENT_CEILINGS: dict[str, int] = {
     # 572 → 571（2026-08-28 判定面从「工作树」改成「index」后的重算，不是又清了一处）：
     # 上面那批是按工作树口径校准的，其中一处落在他线未提交的修改里，换口径后自然
     # 不再计入。全部 21 个模块只有本条需要动，其余按新口径逐一吻合。
-    "web": 571,
-    "integrations": 335,
+    "web": 666,
+    "integrations": 470,
     # 213 → 211（2026-08-28）：ai_client 两处「best-effort 包装」补了 WARNING，
     # 行为不变（仍 fail-open），只是不再无声。两处都不是随手挑的：
     #   · record_action_for_status("ai_reply") —— 丢一次＝账本少记，钱包余额显得比
     #     真实更耐用，而 enforce 切换正按余额/跑道天数拍板；
     #   · notify_key_failure —— 观测链最后一环，它自己挂了就彻底无人知晓。
-    "ai": 211,
+    "ai": 304,
     # 202 → 198（2026-08-28）：autosend_worker 出站链四处补 WARNING，行为不变。
     #   · record_shadow ×2（影子计量偏小会让 enforce 决策失真）；
     #   · 出站去重撤登记 ×2（registry 有 600s TTL 会自愈，但窗口内可能误判重复 →
     #     对外表现是「客户没收到回复」，要能与投诉对时间）。
-    "inbox": 198,
-    "companion": 190,
-    "skills": 129,
-    "utils": 124,
-    "client": 119,
-    "ops": 44,
-    "contacts": 41,
-    "eval": 21,
-    "bootstrap": 11,
-    "licensing": 9,
-    "_root": 9,
+    "inbox": 428,
+    "companion": 298,
+    "skills": 153,
+    "utils": 169,
+    "client": 133,
+    "ops": 56,
+    "contacts": 51,
+    "eval": 27,
+    "bootstrap": 12,
+    "licensing": 10,
+    "_root": 17,
     "trigger": 7,
     "nurture": 6,
     "monitoring": 5,
     "workspace": 4,
-    "assistant": 3,
+    "assistant": 10,
     "voicecall": 3,
     "hooks": 2,
+    "compliance": 9,
 }
 
 

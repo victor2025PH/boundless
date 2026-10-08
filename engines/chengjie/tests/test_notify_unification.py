@@ -256,7 +256,9 @@ def test_batch4_sys_status_server_persistence_wired():
 ## 收编台账：2026-08-27 191→147（并行线收 rpa_overview/ops_overview）→72
 ## （batch4 第二梯队：contact360/ai_studio/_channel_body_messenger/draft_review/
 ##   settings/monetization/agent_perf 共 75 处，成功类分档 'ok'/汇总 'info'）
-_NATIVE_DIALOG_CEILINGS = {"alert": 72, "confirm": 135, "prompt": 24}
+## 2026-10-08 蛋博士批准重定基线（2026-10-08 ci-baseline G15）：08-27 后功能合入累积到 alert 85 / confirm 153 / prompt 25，
+##   按实测重定，从此只降不升；迁移计划见 CI_BASELINE.md「延迟迁移债」。
+_NATIVE_DIALOG_CEILINGS = {"alert": 85, "confirm": 153, "prompt": 25}
 _NATIVE_DIALOG_RE = re.compile(r"(?<![.\w$])(alert|confirm|prompt)\s*\(")
 
 

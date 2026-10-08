@@ -113,7 +113,10 @@ _TAILWIND_CEILINGS = {
     # 若改用 toast 色板常量可回收本处 +1。
     # 2026-08-17 额度批回收 1：预算救济 toast 成功色从 var(--th-bg-blue6,#2563eb)
     # 改语义绿 #16a34a（toast 色板常量口径），16 → 15。
-    "src/web/templates/unified_inbox.html": 15,
+    # 2026-10-08 蛋博士批准重定基线（2026-10-08 ci-baseline G15）：15→23。新增 8 处多为 JS toast 信息色调色板 _toast(...,'#2563eb')
+    # 与头像/账号/发言人调色板臂（同 draft_review「JS toast 调色板默认蓝」判据），尚未逐点定性；
+    # 只降不升，逐点判列入 CI_BASELINE.md「延迟迁移债」。
+    "src/web/templates/unified_inbox.html": 23,
     # 10 转 3 留 7 → P2-3（2026-08-02）主 IIFE 外迁 static/messenger/messenger_rpa.js
     # 带走 JS 侧 3 处（在下方 JS 条目续记），模板余 4：KPI 卡色 2 + 选择条 on-indigo 1 +
     # dc-tab/dc-bar-cell 品牌蓝回落 1

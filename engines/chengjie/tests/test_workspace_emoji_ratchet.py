@@ -58,7 +58,9 @@ _CEILINGS = {
     # 2026-08-29 53→54 登记（impl85 线代记，diff 归因 2cc6388c 搭车内容）：
     #   +1 🤖 出站消息「主动管线来源」chip 标记（impl84 P0-5b，owner=impl84 线；
     #   语义标记非控件位，是否转 uiIcon 由该线定夺）。
-    "unified_inbox.html": 54,
+    # 2026-10-08 蛋博士批准重定基线（2026-10-08 ci-baseline G15）：54→58（新增 4 处未逐点定性），只降不升；
+    # 逐点判（控件图标→uiIcon / 内容语境→留）列入 CI_BASELINE.md「延迟迁移债」。
+    "unified_inbox.html": 58,
     "workspace_dashboard.html": 0,
     "workspace_channels.html": 1,
     "draft_review.html": 1,
