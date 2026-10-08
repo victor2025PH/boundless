@@ -273,7 +273,9 @@ def build_deterministic_evaluator(
         return None
 
     async def _translate(text: str, source_lang: str, target_lang: str) -> str:
-        res = await ts.translate(text, target_lang=target_lang, source_lang=source_lang)
+        # DeepL/Google 是付费引擎。评测是有意测量，必须显式 pro，否则免费档守卫会空返回。
+        res = await ts.translate(
+            text, target_lang=target_lang, source_lang=source_lang, tier="pro")
         return res.translated_text if getattr(res, "ok", False) else ""
 
     return _translate, ts.detect_language
@@ -434,7 +436,9 @@ def build_ai_evaluator(
             except Exception:
                 pass
             state["inited"] = True
-        res = await ts.translate(text, target_lang=target_lang, source_lang=source_lang)
+        # 主对话 LLM 是付费通道。横比参照显式 pro，免费档守卫不会把样本译成空串。
+        res = await ts.translate(
+            text, target_lang=target_lang, source_lang=source_lang, tier="pro")
         return res.translated_text if getattr(res, "ok", False) else ""
 
     return _translate, ts.detect_language

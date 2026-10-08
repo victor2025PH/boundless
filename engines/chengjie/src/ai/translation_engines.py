@@ -68,6 +68,8 @@ class EngineResult:
     engine: str
     ok: bool = True
     error: str = ""
+    # 免费档守卫拦住了付费引擎（本次没有发起付费调用）。
+    free_tier_blocked: bool = False
 
 
 # ── P1-XT（2026-08-16）语气控制 ─────────────────────────────────────────────
@@ -1157,6 +1159,144 @@ class OpenCCEngine:
         return EngineResult(out, self.name, True)
 
 
+# ── 免费档零成本守卫 ────────────────────────────────────────────────────────
+# 免费档 = 有效 tier 落在 FREE_TIERS（缺省 "" / std / free，含钱包耗尽从
+# pro/certified 降下来的 std）。付费档 = pro / certified，以及任何其它显式
+# 非空档名（fail-open：将来新增的付费档不会被误锁成零成本）。
+#
+# 分类以**类**为准，不看桩的 name：测试里名叫 "ai"/"deepl" 的假引擎不是生产类，
+# 不设防。生产类必须登记在下面两张表（棘轮测试钉死，新类不能静默漏网）。
+# 实例属性 paid=True / zero_cost=True 可覆盖类默认（paid 优先）。
+#
+# `ai` 即使 ai_client 指向局域网模型也算付费：generate_reply 会落到云端 key 池。
+# 免费档要本地 MT，走 ollama_mt（含 api: openai / vLLM），不要走 custom: 或 ai。
+# custom OpenAI 兼容线一律付费，哪怕 base_url 在局域网。
+#
+# 缺省策略是 legacy：免费档照旧打到付费引擎（合并/部署不改变现网），
+# 但每次打到都记 would_block。配好 ollama_mt / opencc 后把
+# translation.free_tier_zero_cost 设成 enforce，才会真的拦住。
+
+FREE_TIERS = frozenset({"", "std", "free"})
+_ENFORCE_GUARD_VALUES = frozenset({
+    "enforce", "on", "true", "1", "yes", "enable", "enabled",
+})
+
+ZERO_COST_ENGINE_CLASSES = (OllamaMTEngine, OpenCCEngine)
+PAID_ENGINE_CLASSES = (
+    AIEngine,
+    DeepLEngine,
+    GoogleEngine,
+    MicrosoftEngine,
+    YoudaoEngine,
+    BaiduEngine,
+    OpenAICompatEngine,
+)
+
+
+def is_free_tier(tier: Optional[str]) -> bool:
+    """``None`` 不是免费档（路由层 None = 不设防）。空串 / std / free 是。"""
+    if tier is None:
+        return False
+    return str(tier).strip().lower() in FREE_TIERS
+
+
+def free_tier_guard_enabled(value: Any) -> bool:
+    """``translation.free_tier_zero_cost``：缺省 / legacy = 不拦截；只有显式 enforce 才拦截。
+
+    布尔 True/False 直接采用（测试与构造参数）。legacy 仍会计 would_block，
+    不改变计费档，也不取消这次调用。
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in _ENFORCE_GUARD_VALUES
+
+
+def is_paid_engine(eng: Any) -> bool:
+    """生产付费引擎（云翻译 API、主对话 LLM、custom OpenAI 兼容线）。"""
+    if eng is None:
+        return False
+    if getattr(eng, "paid", False) is True:
+        return True
+    if getattr(eng, "zero_cost", False) is True:
+        return False
+    if isinstance(eng, ZERO_COST_ENGINE_CLASSES):
+        return False
+    if isinstance(eng, PAID_ENGINE_CLASSES):
+        return True
+    return False
+
+
+def is_zero_cost_engine(eng: Any) -> bool:
+    return eng is not None and not is_paid_engine(eng)
+
+
+def engine_blocked_for_tier(eng: Any, tier: Optional[str]) -> bool:
+    """``tier is None`` → 不设防（EngineRouter 直接调用的旧单测）。
+
+    免费档 + 付费引擎 → True。付费档放行。
+    """
+    if tier is None or not is_free_tier(tier):
+        return False
+    return is_paid_engine(eng)
+
+
+def _note_paid_engine(engine: str, *, target_lang: str, verb: str, record) -> None:
+    name = str(engine or "?")
+    tgt = str(target_lang or "").strip().lower()
+    if tgt:
+        logger.info("[xlate] free_tier %s paid engine=%s target=%s", verb, name, tgt)
+    else:
+        logger.info("[xlate] free_tier %s paid engine=%s", verb, name)
+    try:
+        record(name)
+    except Exception:
+        logger.debug("[xlate] paid_%s metric failed", verb, exc_info=True)
+
+
+def _paid_engine_recorder(method: str):
+    try:
+        from src.ai.translation_engine_stats import get_translation_engine_stats
+        return getattr(get_translation_engine_stats(), method)
+    except Exception:
+        return lambda _name: None
+
+
+def note_paid_engine_blocked(engine: str, *, target_lang: str = "") -> None:
+    """enforce：免费档拦住一次付费引擎。不记原文/译文，也不发起调用。"""
+    _note_paid_engine(
+        engine, target_lang=target_lang, verb="blocked",
+        record=_paid_engine_recorder("record_paid_blocked"),
+    )
+
+
+def note_paid_engine_would_block(engine: str, *, target_lang: str = "") -> None:
+    """legacy：免费档这次真的打到付费引擎。调用照旧发生，只记日志和计数。"""
+    _note_paid_engine(
+        engine, target_lang=target_lang, verb="would_block",
+        record=_paid_engine_recorder("record_paid_would_block"),
+    )
+
+
+def skip_paid_for_free_tier(
+    eng: Any, tier: Optional[str], *, enforce: bool, target_lang: str = "",
+) -> bool:
+    """免费档碰到付费引擎时记账。返回 True 表示调用方必须跳过这次调用。
+
+    ``tier is None``：路由被直接调用（旧单测），不观察也不拦截。
+    enforce=True：拦住并计 paid_blocked。enforce=False（legacy）：放行并计 would_block。
+    """
+    if not engine_blocked_for_tier(eng, tier):
+        return False
+    name = getattr(eng, "name", "?")
+    if enforce:
+        note_paid_engine_blocked(name, target_lang=target_lang)
+        return True
+    note_paid_engine_would_block(name, target_lang=target_lang)
+    return False
+
+
 class EngineRouter:
     """按顺序尝试引擎，首个「可用且非空」获胜；全失败返回 ok=False 带最后错误。
 
@@ -1282,16 +1422,27 @@ class EngineRouter:
     async def translate_with(
         self, name: str, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
+        tier: Optional[str] = None,
+        free_tier_enforce: bool = False,
     ) -> EngineResult:
         """强制走指定引擎（坐席多线路对照/手动选路），**不做故障转移**。
 
         引擎不存在/不可用 → ok=False，便于前端把该路显示为「不可用」。
+        ``tier`` 为免费档且 ``free_tier_enforce`` 时付费引擎直接拦住（不调用）。
+        同档但未 enforce（legacy）仍调用，并记 would_block。``tier is None`` = 不观察。
         """
         eng = self.engine_by_name(name)
         if eng is None:
             return EngineResult("", str(name or "?"), False, "unknown_engine")
         if not getattr(eng, "available", False):
             return EngineResult("", eng.name, False, "unavailable")
+        if skip_paid_for_free_tier(
+            eng, tier, enforce=free_tier_enforce, target_lang=target_lang,
+        ):
+            return EngineResult(
+                "", eng.name, False, "free_tier_paid_engine_blocked",
+                free_tier_blocked=True,
+            )
         try:
             return await eng.translate(
                 text, source_lang=source_lang, target_lang=target_lang,
@@ -1303,10 +1454,15 @@ class EngineRouter:
     async def compare(
         self, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
+        tier: Optional[str] = None,
+        free_tier_enforce: bool = False,
     ) -> List[EngineResult]:
         """并发对所有「可用且支持该目标语」的引擎各译一遍，供坐席多线路对照择优。
 
         不可用/不支持的引擎也返回一行（ok=False + 原因），前端可灰显。
+        免费档且 ``free_tier_enforce`` 时不调用付费引擎，该行记
+        ``free_tier_paid_engine_blocked``。未 enforce 则照常调用并记 would_block。
+        ``tier is None`` = 不观察。
         """
         import asyncio as _aio
 
@@ -1319,6 +1475,13 @@ class EngineRouter:
                     return EngineResult("", name, False, f"unsupported_target:{target_lang}")
             except Exception:
                 pass
+            if skip_paid_for_free_tier(
+                eng, tier, enforce=free_tier_enforce, target_lang=target_lang,
+            ):
+                return EngineResult(
+                    "", name, False, "free_tier_paid_engine_blocked",
+                    free_tier_blocked=True,
+                )
             try:
                 return await eng.translate(
                     text, source_lang=source_lang, target_lang=target_lang,
@@ -1334,6 +1497,8 @@ class EngineRouter:
     async def translate(
         self, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
+        tier: Optional[str] = None,
+        free_tier_enforce: bool = False,
     ) -> EngineResult:
         """选路翻译 + B56 译后对账（`_297` 宿务→马尼拉偷换实录）。
 
@@ -1343,7 +1508,8 @@ class EngineRouter:
         """
         res = await self._translate_pick(
             text, source_lang=source_lang, target_lang=target_lang,
-            style=style, glossary_hint=glossary_hint)
+            style=style, glossary_hint=glossary_hint, tier=tier,
+            free_tier_enforce=free_tier_enforce)
         try:
             if res.ok and res.text:
                 from src.ai.translation_fidelity import annotate_missing_anchors
@@ -1361,6 +1527,8 @@ class EngineRouter:
     async def _translate_pick(
         self, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
+        tier: Optional[str] = None,
+        free_tier_enforce: bool = False,
     ) -> EngineResult:
         import time as _t
 
@@ -1388,6 +1556,8 @@ class EngineRouter:
 
         last_err = "no_engine"
         attempted_fail = False  # 是否有「已尝试的可用引擎」失败（区别于「不可用被跳过」）
+        paid_blocked = False    # 免费档拦住过付费引擎（没有发起调用）
+        zero_cost_failed = False  # 允许的引擎实际试过且没赢
         best: Optional[EngineResult] = None       # 置信度切换：最高分候选（兜底）
         # 候选排序分两桶：过确定性闸门(1)恒优于没过(0)——语义低但「语言对/非空/长度正常」
         # 仍比硬错候选可用；桶内分别按 语义相似度 / 确定性分 排（确定性分差常是长度比噪声，
@@ -1412,6 +1582,11 @@ class EngineRouter:
                     continue
             except Exception:
                 pass
+            if skip_paid_for_free_tier(
+                eng, tier, enforce=free_tier_enforce, target_lang=target_lang,
+            ):
+                paid_blocked = True
+                continue
             t0 = _t.monotonic()
             try:
                 res = await eng.translate(
@@ -1423,6 +1598,7 @@ class EngineRouter:
                     stats.record(getattr(eng, "name", "?"), ok=False,
                                  latency_ms=int((_t.monotonic() - t0) * 1000))
                 attempted_fail = True
+                zero_cost_failed = True
                 last_err = f"{getattr(eng, 'name', '?')}:{type(exc).__name__}"
                 continue
             lat = int((_t.monotonic() - t0) * 1000)
@@ -1471,6 +1647,7 @@ class EngineRouter:
                     stats.record_fallback()
                 return res
             attempted_fail = True
+            zero_cost_failed = True
             last_err = f"{eng.name}:{res.error or 'empty'}"
         # 置信度模式：无人达标 → 回退到最高分候选（绝不因「都不够好」而吐空）
         if best is not None:
@@ -1483,7 +1660,13 @@ class EngineRouter:
             return best
         if stats and attempted_fail:
             stats.record_fallback()  # 有引擎尝试且全失败 → 记降级
-        return EngineResult("", "none", False, last_err)
+        # 免费档一个零成本引擎都没试成、付费引擎全被拦住 → 明确失败，不改打付费 API。
+        # 零成本试过且失败：保留那个错误（不要盖成守卫文案），标志位仍记下「付费被拦」。
+        if paid_blocked and not zero_cost_failed:
+            last_err = "free_tier_no_zero_cost_engine"
+        return EngineResult(
+            "", "none", False, last_err, free_tier_blocked=paid_blocked,
+        )
 
 
 def build_engines(translation_cfg: Optional[Dict[str, Any]], ai_client: Optional[Any]) -> List[Any]:
