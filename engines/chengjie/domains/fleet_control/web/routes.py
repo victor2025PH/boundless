@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import time
 from pathlib import Path
@@ -47,8 +46,12 @@ from src.fleet.login_qr import (
 )
 from src.fleet.net_health import sanitize_net_health_result
 from src.fleet.protocol import (
-    ACK_STATUSES, DEFAULT_TASK_TTL_SEC, MAX_LONGPOLL_WAIT_SEC, MAX_PULL_LIMIT, PROTO_VERSION, STATUS_PULLED,
-    STATUS_QUEUED, TASK_KINDS, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_NET_HEALTH,
+    ACK_STATUSES, DEFAULT_TASK_TTL_SEC, MAX_LONGPOLL_WAIT_SEC, MAX_PULL_LIMIT, PROTO_VERSION, STATUS_DONE,
+    STATUS_PULLED, STATUS_QUEUED, TASK_KINDS, TASK_LOGIN_QR, TASK_LOGIN_STATUS, TASK_NET_HEALTH, TASK_SITE_TODO,
+)
+from src.fleet.site_todo import (
+    console_site_todos, dispatch_site_todo, phone_signature, sanitize_site_todo_payload, sanitize_site_todo_result,
+    scrub_ack_detail, site_skip_reason,
 )
 from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
 from src.fleet.social_pace import read_optional_labels
@@ -215,6 +218,7 @@ def register_routes(app, ctx) -> None:
 
     # ── 节点长时间离线告警（P1-7）：fleet_control.offline_alert_min，缺省 10，0 = 不推送 ──
     _alerter = OfflineAlerter(resolve_alert_min(resolve_fleet_cfg(config_manager).get("offline_alert_min")))
+    _site_state: Dict[str, Dict[str, Any]] = {}
 
     def _watch_nodes():
         st = get_store(config_manager)
@@ -302,7 +306,12 @@ def register_routes(app, ctx) -> None:
     async def api_fleet_heartbeat(request: Request, node=Depends(node_auth)):
         body = await _json(request)
         st = _store_or_503(config_manager)
+        before = st.get_node(node["node_id"]) or {}
+        old_phones = phone_signature(before.get("phones"))
         out = st.heartbeat(node["node_id"], body)
+        after = st.get_node(node["node_id"]) or {}
+        if phone_signature(after.get("phones")) != old_phones:
+            dispatch_site_todo(st, node["node_id"], _site_state)
         out["has_tasks"] = st.has_queued(node["node_id"])
         out["heartbeat_sec"] = resolve_fleet_cfg(config_manager)["heartbeat_sec"]
         return out
@@ -344,6 +353,8 @@ def register_routes(app, ctx) -> None:
             if result is not None and not serial:
                 serial = str(result.get("serial") or "")
             detail = scrub_phone_error_text(detail, serial=serial, wallpaper=wallpaper)
+        if known is not None and known.get("kind") in (TASK_SITE_TODO, TASK_NET_HEALTH):
+            detail = scrub_ack_detail(detail, body.get("result"))
         if result is not None and known is not None:
             if known.get("kind") in (TASK_LOGIN_QR, TASK_LOGIN_STATUS):
                 # the console renders qr_data_url as <img src>: keep base64 raster data URLs only
@@ -352,7 +363,11 @@ def register_routes(app, ctx) -> None:
                 result = sanitize_phone_result(known["kind"], result, serial=serial, wallpaper=wallpaper)
             elif known.get("kind") == TASK_NET_HEALTH:
                 result = sanitize_net_health_result(result)
+            elif known.get("kind") == TASK_SITE_TODO:
+                result = sanitize_site_todo_result(result)
         rec = st.ack(tid, node_id=node["node_id"], status=status, result=result, detail=detail)
+        if rec is not None and known is not None and known.get("kind") == TASK_NET_HEALTH and status == STATUS_DONE:
+            dispatch_site_todo(st, node["node_id"], _site_state)
         # 未知 / 不属于本节点的 task_id 也 200（fail-soft，Agent 不必重试）
         return {"ok": True, "known": rec is not None, "status": rec["status"] if rec else None}
 
@@ -492,8 +507,16 @@ def register_routes(app, ctx) -> None:
             raise HTTPException(status_code=400, detail="phone_ops_use_phones_endpoint")
         if kind in PHONE_FLOW_KINDS or kind in PHONE_SESSION_KINDS:
             raise HTTPException(status_code=400, detail="phone_flows_use_social_endpoint")
-        rec = st.enqueue(node_id, kind,
-                         payload=body.get("payload") if isinstance(body.get("payload"), dict) else None,
+        payload = body.get("payload") if isinstance(body.get("payload"), dict) else None
+        if kind == TASK_SITE_TODO:
+            target_node = st.get_node(node_id)
+            if target_node is None:
+                raise HTTPException(status_code=409, detail="节点不存在 / 已吊销")
+            skip = site_skip_reason(target_node)
+            if skip:
+                raise HTTPException(status_code=409, detail=skip)
+            payload = sanitize_site_todo_payload(payload)
+        rec = st.enqueue(node_id, kind, payload=payload,
                          target=body.get("target") if isinstance(body.get("target"), dict) else None,
                          ttl_sec=body.get("ttl_sec") or DEFAULT_TASK_TTL_SEC, created_by=_actor(request))
         if rec is None:
@@ -642,11 +665,17 @@ def register_routes(app, ctx) -> None:
         mark_min = amin or DEFAULT_OFFLINE_ALERT_MIN
         out["offline_alert"] = {
             "after_min": mark_min, "push": amin > 0,
-            # 有 EVENT_INGEST_KEY 才真的推到运维告警通道（TG）；没有就只写日志 + 控制台标红
-            "channel": "ops_alert" if amin > 0 and os.environ.get("EVENT_INGEST_KEY") else "log",
+            # 现场离线只写主控日志和控制台，不推到外部。
+            "channel": "log",
             "nodes": long_offline(st.list_nodes(include_revoked=False), now=time.time(), after_min=mark_min),
         }
         return {"ok": True, **out}
+
+    @app.get("/api/fleet/site-todos")
+    async def api_fleet_site_todos(request: Request, _=Depends(_api_auth)):
+        """Read-only site todos. Offline nodes say the agent must be reinstalled."""
+        st = _store_or_503(config_manager)
+        return {"ok": True, "nodes": console_site_todos(st)}
 
     @app.get("/api/fleet/social-pace")
     async def api_fleet_social_pace(request: Request, node_id: str = "", _=Depends(_api_auth)):

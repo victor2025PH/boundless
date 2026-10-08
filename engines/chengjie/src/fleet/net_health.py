@@ -40,23 +40,24 @@ _CLIENTS3 = "http://clients3.google.com/generate_204"
 _FB = ("com.facebook.katana", "com.facebook.lite")
 _CURL = ("curl", "-sS", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", "--max-time", "8")
 _STATUS_ZH = frozenset({
-    "网络✓ wifi", "网络✗ 无流量", "移动数据弱信号", "网络✗ 飞行模式", "网络✓ 移动数据",
+    "网络✓ wifi", "网络✗ 无流量", "网络✗ 没信号", "移动数据弱信号", "网络✗ 飞行模式", "网络✓ 移动数据",
     "Facebook未安装", "Facebook未登录", "网络? wifi", "网络✓", "网络状态不可用",
 })
 _STATUS_EN = frozenset({
-    "net ok wifi", "net down no data", "mobile weak signal", "net off airplane", "net ok mobile",
+    "net ok wifi", "net down no data", "net no signal", "mobile weak signal", "net off airplane", "net ok mobile",
     "fb not installed", "fb logged out", "net unknown wifi", "net ok", "net unavailable",
 })
 _TRANSPORTS = frozenset({"wifi", "mobile", "none", UNAVAILABLE})
 _SIM = frozenset({"present", "absent", "unknown", UNAVAILABLE})
 _SIGNAL = frozenset({"none", "weak", "ok", "strong", UNAVAILABLE})
 _FB_SCREEN = frozenset({"login", "app", "other", UNAVAILABLE})
+_FB_CONFIRM = frozenset({"login", "app", "other", ""})
 _REACH_VIA = frozenset({"generate_204", "ping", "dns", "", UNAVAILABLE})
 _ROW_KEYS = (
     "wallpaper_no", "unnumbered", "key", "reachable", "latency_ms", "reach_via", "dns_ok",
     "transport", "mobile_data", "sim", "signal", "signal_level", "airplane",
     "mobile_rx_bytes", "mobile_tx_bytes", "mobile_bytes", "usage",
-    "fb_installed", "fb_screen", "screen", "status_zh", "status_en", "alert", "remaining_data",
+    "fb_installed", "fb_screen", "fb_confirm", "screen", "status_zh", "status_en", "alert", "remaining_data",
 )
 _SECRET_KEYS = frozenset({
     "serial", "adb_serial", "device", "ssid", "raw", "dumpsys", "stdout", "stderr", "ip", "path",
@@ -143,26 +144,50 @@ def _transport_in(chunk: str) -> str:
 
 
 def parse_sim(text: str) -> str:
-    states = [item.upper() for item in re.findall(r"\bmSimState\s*=\s*([A-Za-z0-9_]+)", text or "")]
-    if any(item in {"READY", "LOADED"} or item.startswith("READY") for item in states):
+    """``present`` / ``absent`` / ``unknown``.
+
+    Some room ROMs never print ``READY`` and only offer the telephony enum
+    (5 = READY, 10 = LOADED, 1 = ABSENT) or ``CARDSTATE_PRESENT``. The numeric
+    value is not copied out; it only chooses the enum.
+    """
+    blob = text or ""
+    states = [item.upper() for item in re.findall(r"\bmSimState\s*=\s*([A-Za-z0-9_]+)", blob)]
+    states.extend(item.upper() for item in re.findall(r"(?<![\w.])simState\s*=\s*([A-Za-z0-9_]+)", blob))
+    if any(item in {"READY", "LOADED", "5", "10"} or item.startswith("READY") for item in states):
         return "present"
-    if any("ABSENT" in item or item in {"CARD_ABSENT", "NOT_READY"} for item in states):
+    if re.search(r"SIM_STATE_READY|CARDSTATE_PRESENT", blob):
+        return "present"
+    if any("ABSENT" in item or item in {"CARD_ABSENT", "NOT_READY", "1"} for item in states):
         return "absent"
-    if re.search(r"SIM_STATE_READY", text or ""):
-        return "present"
-    if re.search(r"SIM_STATE_ABSENT|CARD_ABSENT", text or ""):
+    if re.search(r"SIM_STATE_ABSENT|CARD_ABSENT", blob):
         return "absent"
     return "unknown"
 
 
 def parse_sim_prop(text: str) -> str:
-    val = (text or "").strip().upper()
-    if not val or val in {"NULL", "UNKNOWN"}:
+    raw = (text or "").strip().upper()
+    if not raw or raw in {"NULL", "UNKNOWN"}:
         return "unknown"
-    if "READY" in val or "LOADED" in val:
+    parts = [part for part in re.split(r"[,/\s]+", raw) if part]
+    if any(part in {"READY", "LOADED", "5", "10"} or part.startswith("READY") for part in parts):
         return "present"
-    if "ABSENT" in val:
+    if parts and all("ABSENT" in part or part in {"ABSENT", "1", "CARD_ABSENT", "NOT_READY"} for part in parts):
         return "absent"
+    return "unknown"
+
+
+def parse_operator_present(text: str) -> str:
+    """A non-empty operator numeric (MCCMNC) or alpha means a SIM is in the slot.
+
+    The property text itself is not returned.
+    """
+    val = (text or "").strip()
+    if not val or val.lower() in {"null", "unknown", "none", "undefined"}:
+        return "unknown"
+    if re.fullmatch(r"\d{5,6}", val):
+        return "present"
+    if re.search(r"[A-Za-z]", val):
+        return "present"
     return "unknown"
 
 
@@ -282,22 +307,77 @@ def parse_dns_ok(text: str, ping_ok: bool) -> Optional[bool]:
     return False
 
 
+_FEED_CLASS = re.compile(r"fbmain|newsfeed|feedfragment|bookmark|watchtab|reels|stories|profiletab", re.I)
+_LOGIN_CLASS = re.compile(r"login|logout|loggedout", re.I)
+_RECORD_RE = re.compile(r"(?:ActivityRecord|Window)\{([^}]*)\}")
+_CMP_RE = re.compile(r"([A-Za-z_][\w.]*)/(\.?[A-Za-z_][\w.$]*)")
+
+
+def _activity_class(line: str) -> str:
+    """Class of the resumed record itself, not a later Intent that mentions LoginActivity."""
+    match = _RECORD_RE.search(line or "")
+    if not match:
+        return ""
+    blob = match.group(1)
+    if not any(pkg in blob for pkg in _FB):
+        return ""
+    comp = _CMP_RE.search(blob)
+    if not comp:
+        return ""
+    cls = comp.group(2)
+    if cls.startswith("."):
+        cls = cls[1:]
+    return cls.split(".")[-1]
+
+
+def _screen_of_class(cls: str) -> str:
+    if _FEED_CLASS.search(cls or ""):
+        return "app"
+    if _LOGIN_CLASS.search(cls or ""):
+        return "login"
+    return "app"
+
+
+def classify_foreground(text: str) -> Tuple[str, bool, str]:
+    """``(screen, facebook_in_front, confirm)``.
+
+    ``login`` needs two agreeing signals (resumed and focus, or two resumed
+    records). A feed record that merely carries a ``LoginActivity`` intent is
+    ``app``. One login record alone is not enough.
+    """
+    resumed: List[str] = []
+    focus: List[str] = []
+    for line in (text or "").splitlines():
+        if not any(pkg in line for pkg in _FB):
+            continue
+        cls = _activity_class(line)
+        if not cls:
+            continue
+        kind = _screen_of_class(cls)
+        if re.search(r"mResumedActivity|topResumedActivity|ResumedActivity:", line):
+            resumed.append(kind)
+        elif re.search(r"mCurrentFocus|mFocusedApp", line):
+            focus.append(kind)
+    if not resumed and not focus:
+        return "other", False, ""
+    if any(kind == "app" for kind in resumed):
+        return "app", True, "app"
+    login_hits = []
+    if any(kind == "login" for kind in resumed):
+        login_hits.append("resumed")
+    if resumed.count("login") >= 2:
+        login_hits.append("resumed_again")
+    if any(kind == "login" for kind in focus):
+        login_hits.append("focus")
+    if len(login_hits) >= 2:
+        return "login", True, "login"
+    return "app", True, ""
+
+
 def parse_foreground(text: str) -> Tuple[str, bool]:
     """``login`` / ``app`` / ``other`` and whether a Facebook package is resumed."""
-    lines = []
-    for line in (text or "").splitlines():
-        if re.search(r"mResumedActivity|topResumedActivity|ResumedActivity:|mCurrentFocus|mFocusedApp", line):
-            lines.append(line)
-    preferred = [line for line in lines if re.search(r"mResumedActivity|topResumedActivity|mCurrentFocus", line)]
-    chosen = (preferred or lines)
-    if not chosen:
-        return "other", False
-    line = chosen[-1]
-    if not any(pkg in line for pkg in _FB):
-        return "other", False
-    if re.search(r"login|logged.?out|logout", line, re.I):
-        return "login", True
-    return "app", True
+    screen, front, _confirm = classify_foreground(text)
+    return screen, front
 
 
 def parse_package_present(text: str, package: str) -> bool:
@@ -361,10 +441,16 @@ def compact_status(measured: Dict[str, Any]) -> Tuple[str, str, bool]:
     signal = measured.get("signal")
     installed = measured.get("fb_installed")
     screen = measured.get("fb_screen")
+    if screen == "login" and measured.get("fb_confirm") != "login":
+        screen = "app"
+    sim = measured.get("sim")
     if airplane:
         return "网络✗ 飞行模式", "net off airplane", True
     if reachable is False or (transport == "none" and reachable is not True):
         return "网络✗ 无流量", "net down no data", True
+    if (signal == "none" and transport != "wifi" and reachable is True
+            and sim not in ("absent", UNAVAILABLE, None)):
+        return "网络✗ 没信号", "net no signal", True
     if reachable is True and installed is False:
         return "Facebook未安装", "fb not installed", True
     if reachable is True and screen == "login":
@@ -451,10 +537,23 @@ def probe_phone(invoke: Invoke, *, ussd_code: str = "", ussd_enabled: bool = Fal
         if signal is None:
             signal = None
         air_dump = parse_airplane_dump(tele.text)
-    if sim == UNAVAILABLE:
+    if sim in (UNAVAILABLE, "unknown"):
         prop = _call(invoke, ("getprop", "gsm.sim.state"), timeout=8)
         if not _failed(prop):
-            sim = parse_sim_prop(prop.text)
+            parsed = parse_sim_prop(prop.text)
+            if parsed != "unknown":
+                sim = parsed
+            elif sim == UNAVAILABLE:
+                sim = "unknown"
+        if sim in (UNAVAILABLE, "unknown"):
+            for name in ("gsm.sim.operator.numeric", "gsm.operator.numeric",
+                         "gsm.sim.operator.alpha", "gsm.operator.alpha"):
+                op = _call(invoke, ("getprop", name), timeout=8)
+                if _failed(op):
+                    continue
+                if parse_operator_present(op.text) == "present":
+                    sim = "present"
+                    break
     mobile_out = _call(invoke, ("settings", "get", "global", "mobile_data"), timeout=8)
     mobile_data: Any = UNAVAILABLE if _failed(mobile_out) else parse_setting_bool(mobile_out.text)
     air_out = _call(invoke, ("settings", "get", "global", "airplane_mode_on"), timeout=8)
@@ -487,16 +586,17 @@ def probe_phone(invoke: Invoke, *, ussd_code: str = "", ussd_enabled: bool = Fal
         activity = _call(invoke, ("dumpsys", "activity", "top"), timeout=12)
     if _failed(activity):
         activity = _call(invoke, ("dumpsys", "window", "windows"), timeout=12)
+    fb_confirm = ""
     if _failed(activity):
         fb_screen: Any = UNAVAILABLE
     else:
-        fb_screen, _front = parse_foreground(activity.text)
+        fb_screen, _front, fb_confirm = classify_foreground(activity.text)
     if foreground and installed is True and found_pkg:
         launch = _call(invoke, _launch_args(found_pkg), timeout=12)
         if not launch.denied and not launch.missing:
             again = _call(invoke, ("dumpsys", "activity", "activities"), timeout=15)
             if not _failed(again):
-                fb_screen, _front = parse_foreground(again.text)
+                fb_screen, _front, fb_confirm = classify_foreground(again.text)
     size_out = _call(invoke, ("wm", "size"), timeout=8)
     if _failed(size_out):
         screen: Any = UNAVAILABLE
@@ -535,6 +635,7 @@ def probe_phone(invoke: Invoke, *, ussd_code: str = "", ussd_enabled: bool = Fal
         "usage": usage,
         "fb_installed": installed,
         "fb_screen": fb_screen if fb_screen in _FB_SCREEN else UNAVAILABLE,
+        "fb_confirm": fb_confirm if fb_confirm in _FB_CONFIRM else "",
         "screen": screen if isinstance(screen, str) or screen == UNAVAILABLE else None,
         "remaining_data": _remaining(dialed, ussd_denied, ussd_text),
     }
@@ -704,6 +805,7 @@ def public_row(row: Dict[str, Any], *, wallpaper_no: str = "", key: str = "",
         "usage": "ok" if row.get("usage") == "ok" else UNAVAILABLE,
         "fb_installed": fb_installed,
         "fb_screen": row.get("fb_screen") if row.get("fb_screen") in _FB_SCREEN else UNAVAILABLE,
+        "fb_confirm": row.get("fb_confirm") if row.get("fb_confirm") in _FB_CONFIRM else "",
         "screen": screen_out,
         "remaining_data": _clean_remaining(row.get("remaining_data")),
     }
