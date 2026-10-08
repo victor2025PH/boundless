@@ -516,9 +516,14 @@ FEATURES: Tuple[Feature, ...] = (
         key="speech_emotion.enabled", cls="C", slug="speech_emotion",
         reason="lan", show=False,
         note="SER 主路是 176 GPU、本地回落 funasr 依赖 torch——torch 被打包显式排除"),
+    # ai.fallback：1.0.88（946561d6）起桌面种子出厂开、端点改为官网网关 ChatX（零 RFC1918，
+    # chat_fallback=false 不顶聊天主链，只服务目录 / 无限制档）——「绑 LAN Ollama」的 C 类
+    # 前提已不成立，注册表一直没跟（种子门禁常红）。改 B（不进基线、不进总览）；存量升级
+    # 要不要补开属产品决策，挂 tests/test_seed_switch_upgrade_coverage.py::_PENDING。
     Feature(
-        key="ai.fallback.enabled", cls="C", slug="ai_fallback", reason="lan",
-        show=False, note="主链兜底端点是 LAN Ollama（176），客户机白付超时"),
+        key="ai.fallback.enabled", cls="B", slug="ai_fallback",
+        show=False, note="备用模型链：桌面种子指向官网网关 ChatX（chat_fallback=false，"
+                         "只服务目录/无限制档）；服务器部署按需自配，cloud_light 档强制关"),
     Feature(
         key="ops.gpu_watermark.enabled", cls="C", slug="gpu_watermark",
         reason="lan", show=False,

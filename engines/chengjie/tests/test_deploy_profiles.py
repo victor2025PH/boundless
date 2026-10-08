@@ -256,8 +256,9 @@ def test_seeding_bad_profile_is_soft_noop(tmp_path, monkeypatch):
 #: 交付档里合法关闭、但**不是**用户能力开关的键（基础设施/运维旋钮）。
 #: 加条目必须附理由——本表本身就是对账单的一部分。
 _RECON_ALLOWLIST: dict = {
-    "ai.fallback.enabled": "本地 LLM 容灾端点是 LAN Ollama（注册表 C 类同名在册，"
-                           "此处冗余登记防注册表改名后漏网）",
+    "ai.fallback.enabled": "服务器交付档的备用模型链默认关（cloud_light 强制关）；注册表 B 类"
+                           "同名在册（2026-10-08 由 C 改 B：桌面种子已改指官网网关），"
+                           "此处冗余登记防注册表改名后漏网",
     "platform_login.telegram.credpool.enabled":
         "集团 LAN 凭据池客户端（只绑 localhost，客户机够不着）；客户形态的"
         "同一能力由 hosted_gateway.ensure_hosted_telegram 设备令牌派发接管，"

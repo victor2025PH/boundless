@@ -93,12 +93,20 @@ _PACKAGED_CAPABILITY_LEDGER: Dict[str, Tuple[str, str, str]] = {
         HIDDEN, "", "实时语音绑本机集群，无 UI 入口"),
     "speech_emotion.enabled": (
         HIDDEN, "", "声学情绪绑本机 GPU，纯后台增强、本就无 UI 入口"),
-    "ai.fallback.enabled": (
-        HIDDEN, "", "本地 LLM 兜底绑本机集群，纯后台容灾、无 UI 入口"),
     "ops.gpu_watermark.enabled": (
         HIDDEN, "", "LAN GPU 水位是自建集群运维项，客户无此拓扑、ops 卡整卡隐藏"),
     "ops.cloud_credentials.enabled": (
         HIDDEN, "", "云端凭证体检针对自备 Key 的自建部署，托管客户无此面"),
+    # ── 老板决策出厂关的 B 类（会改变发送行为，红线②不得进基线）──────────────
+    "inbox.reply_style.bubbles.enabled": (
+        VISIBLE_LOCK, "", "拆条零依赖，总览里可直接开；D-L3 出厂关（拆条节奏会被识破是 AI）"),
+    "inbox.work_schedule.enabled": (
+        HIDDEN, "", "不进功能总览；回复设置里的班表卡自助开，开启时时区必填（D-Q1 出厂关）"),
+    "companion_send_gate.enabled": (
+        HIDDEN, "", "不进功能总览；发送护栏设置自助开，只拦自动链、人工永不限（D-Q2 出厂关）"),
+    "inbox.takeover_rearm.enabled": (
+        HIDDEN, "", "不进功能总览；按会话接回由坐席切手动时自选，全局接回 D-M9 出厂关"),
+    # ai.fallback.enabled：1.0.88 起种子出厂开（官网网关 ChatX）——客户视图为 on，无需处置行。
     # inbox.l2_autosend.deliver：2026-08-22 拍板 C→B 且种子出厂即开（全自动
     # 开箱）——客户视图里已是 on，无需处置行（stale 门禁会点名多余登记）。
 }
