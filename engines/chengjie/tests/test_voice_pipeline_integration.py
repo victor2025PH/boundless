@@ -25,6 +25,21 @@ def _cp(args=None, returncode=0, stdout="", stderr=""):
     return CompletedProcess(args=args or [], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_voice_burst_guard(monkeypatch):
+    """每条用例一个干净的语音连发熔断单例（进程级 _SINGLETON）。
+
+    本文件多条用例都对同一 chat=7 真发语音（note_voice_send 记账）：两条发送成功后，
+    后跑的 TestVoiceReplyLangRoute 在 60s 窗口内命中 A3 熔断（>=3 条）→ 早退降级文字，
+    TTSPipeline 根本没被构造 → 断言 None。单跑/换序就绿，-n 并行按分片顺序时红时绿。
+    隔离状态而非放宽断言：熔断语义本身由 test_voice_burst_circuit_150 守住。
+    """
+    import src.client.voice_burst_guard as vbg
+
+    monkeypatch.setattr(vbg, "_SINGLETON", None)
+    yield
+
+
 # ─────────────────────────────────────────────────────────────────
 # V4: Telegram voice prefix strip
 # ─────────────────────────────────────────────────────────────────
