@@ -75,7 +75,7 @@ class _Sender(TelegramSenderMixin):
     def _postsend_record_count(self):
         return None
 
-    def _postsend_mirror_and_record(self, chat_id, text, msg_id=""):
+    def _postsend_mirror_and_record(self, chat_id, text, msg_id="", **kw):
         return None
 
     def _log_safe_text(self, text):
