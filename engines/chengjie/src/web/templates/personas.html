@@ -1453,6 +1453,12 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
               <option value="off">{{ (i18n or {}).get('psn_rf_off','关') }}</option>
             </select>
           </div>
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_vp_dialect','方言口音') }}</label>
+            <select id="pe-vp-dialect" onchange="_vxOnChange()" title="{{ (i18n or {}).get('psn_vp_dialect_yue_hint','面向粤语客户的人设才选粤语。没有独立语言模型的方言不会出现在此列表。') }}">
+              <option value="">{{ (i18n or {}).get('psn_vp_dialect_none','无（标准普通话）') }}</option>
+              <option value="cantonese">{{ (i18n or {}).get('psn_vp_dialect_yue','粤语（人设全程粤语）') }}</option>
+            </select>
+          </div>
           <div class="field-row"><label>{{ (i18n or {}).get('psn_rf_vfail','语音失败时') }}</label>
             <select id="pe-rf-vfail" onchange="_vxOnChange()" title="{{ (i18n or {}).get('psn_rf_vfail_tip','语音合成失败时怎么办：改发文字＝客户照样收到整段回复；转待发＝不发，回复进工作台等人放行') }}">
               <option value="">{{ (i18n or {}).get('psn_rf_inherit','跟随全局') }}</option>
@@ -5768,6 +5774,8 @@ function _vxLoad(vp) {
   if (sp) sp.value = vp.text_voice_split === true ? 'on' : (vp.text_voice_split === false ? 'off' : '');
   var vf = document.getElementById('pe-rf-vfail');
   if (vf) vf.value = ['text', 'queue'].indexOf(String(vp.on_voice_fail || '').toLowerCase()) >= 0 ? String(vp.on_voice_fail).toLowerCase() : '';
+  var df = document.getElementById('pe-vp-dialect');
+  if (df) df.value = String(vp.dialect_flavor || '').toLowerCase() === 'cantonese' ? 'cantonese' : '';
   _vxRenderDesc();
 }
 function _vxRenderDesc() {
@@ -5797,6 +5805,8 @@ function _vxCollectPatch(into) {
   var sp = String((document.getElementById('pe-rf-split') || {}).value || '');
   into.text_voice_split = sp === 'on' ? true : (sp === 'off' ? false : null);
   into.on_voice_fail = String((document.getElementById('pe-rf-vfail') || {}).value || '');
+  var df = String((document.getElementById('pe-vp-dialect') || {}).value || '');
+  into.dialect_flavor = df === 'cantonese' ? 'cantonese' : '';
   return into;
 }
 var _vxAudio = null;
