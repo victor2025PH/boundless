@@ -47,6 +47,7 @@ _BASELINE = """
 /api/admin/ai-safety-overview	GET
 /api/admin/alert-link-status	GET
 /api/admin/official-webhook-status	GET
+/api/admin/whatsapp-cloud/health	GET
 /api/admin/buried-conversations	GET
 /api/admin/bug-intake	GET
 /api/admin/bug-intake/notify-pending	POST

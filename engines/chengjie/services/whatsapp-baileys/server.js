@@ -15,7 +15,11 @@
  * 每个登录用独立的 multi-file auth state（sessions/<login_id>/），互不干扰。
  *
  * 运行：
- *   cd services/whatsapp-baileys && npm install && PORT=8790 node server.js
+ *   cd services/whatsapp-baileys && npm install && PORT=8790 SIDECAR_TOKEN=<随机≥24字符> node server.js
+ *
+ * 入站鉴权：除 GET /health 外，所有请求必须带 `Authorization: Bearer <SIDECAR_TOKEN>`
+ * 或 `X-Sidecar-Token: <SIDECAR_TOKEN>`，否则 401（见 sidecar-auth.js）。未配令牌时只许
+ * 绑回环；start.ps1 会从实例 config 目录的 wa_sidecar_token.key 读取/生成独立令牌。
  *
  * 注意：Baileys 为社区逆向库，存在 WhatsApp 封号 / ToS 风险，请配套一号一代理 + 养号。
  */
@@ -48,16 +52,27 @@ import {
 import { looksLikeOggOpus } from "./ptt-format.js";
 import { KNOWN_MEDIA_TYPES, sniffMediaKind } from "./media-sniff.js";
 import { withTimeout, UpstreamTimeoutError, AVATAR_QUERY_TIMEOUT_MS } from "./upstream-timeout.js";
+import { resolveSidecarToken, checkBindPolicy, makeSidecarAuth } from "./sidecar-auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = process.env.WA_SESSIONS_DIR || path.join(__dirname, "sessions");
 const PORT = Number(process.env.PORT || 8790);
-// 只绑回环：本服务的入站路由（/accounts/:id/send、logout、二维码等）没有任何鉴权中间件，
-// 绑 0.0.0.0 等于把账号操作面开给整个局域网。真实调用方只有本机 Python 引擎
-// （实例配置 baileys_url=http://127.0.0.1:8790），全仓无远程引用。
-// 确需跨机时用 BIND_HOST 覆盖，但**必须先给入站加鉴权**再放开。
+// 默认只绑回环：真实调用方只有本机 Python 引擎（实例配置 baileys_url=http://127.0.0.1:8790）。
+// 入站鉴权（P0-1，见 sidecar-auth.js）：配了 SIDECAR_TOKEN 则除 /health 外所有路由都要
+// Bearer / X-Sidecar-Token；没配令牌时只许回环监听，BIND_HOST 指向非回环地址会**拒绝启动**。
 const HOST = String(process.env.BIND_HOST || '127.0.0.1');
+const SIDECAR_TOKEN = resolveSidecarToken(process.env);
 const logger = pino({ level: process.env.LOG_LEVEL || "info" });
+const BIND_POLICY = checkBindPolicy(HOST, SIDECAR_TOKEN);
+if (!BIND_POLICY.ok) {
+  logger.fatal({ host: HOST, reason: BIND_POLICY.reason }, "sidecar auth policy: refusing to start");
+  process.exit(78);
+}
+if (BIND_POLICY.mode === "loopback-open") {
+  logger.warn({ host: HOST }, BIND_POLICY.reason);
+} else {
+  logger.info({ host: HOST }, "sidecar inbound auth enabled (Bearer / X-Sidecar-Token; /health open)");
+}
 
 // close-policy 为保持零依赖内联了两个 DisconnectReason 码；这里与权威枚举比对一次，
 // 上游 Baileys 罕见改值时大声告警而非静默走错分支。
@@ -1567,6 +1582,11 @@ async function restoreAll() {
 }
 
 const app = express();
+// 鉴权必须挂在 body 解析之前：未授权请求连 JSON 都不解析（省掉大包 DoS 面）。
+app.use(makeSidecarAuth({
+  token: SIDECAR_TOKEN,
+  onReject: (info) => logger.warn(info, "sidecar auth: rejected request without valid token"),
+}));
 app.use(express.json());
 
 // `svc` 是**身份**字段，不是装饰：桌面壳拉起边车前先探这个端口，只看 ok:true 的话，

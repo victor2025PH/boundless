@@ -705,21 +705,34 @@ def test_r88_default_unlocked_high_hit_records_and_replies(svc, store, caplog):
 
 
 def test_r88_hard_reasons_renamed_when_unlocked_and_kept_when_locked(svc):
-    """quick_analyze 硬停主因：未锁定 → ``<reason>_recorded``（hard_stop_reason 看不到）；锁定 → 原名保留。"""
-    out, renamed = rg.rename_unlocked_hard_reasons(["stop_contact", "self_harm", "credential_or_payment_request", "keyword"], {})
+    """quick_analyze 硬停主因：未锁定 → ``<reason>_recorded``（hard_stop_reason 看不到）；锁定 → 原名保留。
+
+    智安 P0-2（2026-10-08）：stop_contact 由 STOP 硬闸**默认隐含锁定**（locked_by=stop_gate），缺省不改名、
+    照旧硬停；只有显式 ``compliance.stop_gate.enabled: false``（应急开关）才回到 R88「只记录」。"""
+    _off = {"compliance": {"stop_gate": {"enabled": False}}}
+    out, renamed = rg.rename_unlocked_hard_reasons(["stop_contact", "self_harm", "credential_or_payment_request", "keyword"], _off)
     assert out == ["stop_contact_recorded", "self_harm_recorded", "credential_or_payment_request_recorded", "keyword"]
     assert renamed == ["stop_contact", "self_harm", "credential_or_payment_request"]
     assert pol.hard_stop_reason(out) == ""
-    out2, renamed2 = rg.rename_unlocked_hard_reasons(["stop_contact", "self_harm"], _lock_cfg("self_harm"))
+    # 缺省（STOP 硬闸开）：stop_contact 不改名，其余照 R88
+    out0, renamed0 = rg.rename_unlocked_hard_reasons(["stop_contact", "self_harm", "keyword"], {})
+    assert out0 == ["stop_contact", "self_harm_recorded", "keyword"] and renamed0 == ["self_harm"]
+    assert pol.hard_stop_reason(out0) == "stop_contact"
+    out2, renamed2 = rg.rename_unlocked_hard_reasons(["stop_contact", "self_harm"], dict(_lock_cfg("self_harm"), **_off))
     assert out2 == ["stop_contact_recorded", "self_harm"] and renamed2 == ["stop_contact"]
     assert pol.hard_stop_reason(out2) == "self_harm"
-    # regrade：未锁定的停联 → medium（不硬停）；只锁 stop_contact → high 原样
+    # regrade：应急开关关闭且未锁定的停联 → medium（不硬停）；只锁 stop_contact → high 原样
     conv = _conv("r88_sc")
+    svc._cfg = _off
     risk, reasons, info = rg.regrade_inbound(svc, conv, "please stop messaging me", "en", "high", ["stop_contact"], [])
     assert risk == "medium" and "stop_contact_recorded" in reasons and info["locked"] is False, (risk, reasons, info)
     svc._cfg = _lock_cfg("stop_contact")
     risk, reasons, info = rg.regrade_inbound(svc, conv, "please stop messaging me", "en", "high", ["stop_contact"], [])
     assert risk == "high" and "stop_contact" in reasons and info["locked"] is True and info["outcome"] == "freeze"
+    # 缺省：隐含锁定 → high 原样，locked_by=stop_gate
+    svc._cfg = {}
+    risk, reasons, info = rg.regrade_inbound(svc, conv, "please stop messaging me", "en", "high", ["stop_contact"], [])
+    assert risk == "high" and "stop_contact" in reasons and info["locked"] is True and info["locked_by"] == "stop_gate"
 
 
 def test_r88_lock_one_category_only_that_one_stops(svc, store):
@@ -740,7 +753,9 @@ def test_r88_public_table_and_outcomes():
     rows = {r["id"]: r for r in rg.public_table(None, {})}
     assert all(not r["locked"] for r in rows.values())
     assert {k for k, r in rows.items() if r["lockable"]} == set(rg.LOCKABLE)
-    assert rows["money_request"]["outcome"] == "record" and rows["stop_contact"]["outcome"] == "record"
+    assert rows["money_request"]["outcome"] == "record"
+    # 智安 P0-2：停联由 STOP 硬闸隐含锁定——开关（运营勾的那份）仍是关，但结果是「冻结」
+    assert rows["stop_contact"]["locked_by"] == "stop_gate" and rows["stop_contact"]["outcome"] == "freeze"
     assert rows["adult"]["outcome"] == "adult" and rows["request_contact"]["outcome"] == "persona"
     assert rows["offer_media"]["outcome"] == "accept" and rows["payment_keyword"]["outcome"] == "review"
     assert rows["privacy"]["outcome"] == "record"

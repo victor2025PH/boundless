@@ -100,6 +100,57 @@ def _build_decision(result: Dict[str, Any]) -> Dict[str, Any]:
     return decision
 
 
+def _stop_gate_decision(*, platform: str, account_id: str, external_id: str, text: str,
+                        phone: str = "", config: Any = None, store: Any = None) -> Any:
+    """STOP 硬闸（智安 P0-2）：返回 silent 决策或 None（放行进生成）。绝不抛。
+
+    - 对端已停联（会话冻结 / 名单 / 跨账号同 external_id / 同手机号）→
+      ``{"action": "silent", "reason": "stop"}``，零生成、零出站，审计 ``blocked``。
+    - 本条入站命中多语 STOP 词表 → 登记停联（会话在本机则冻结 + 名单，否则只进名单）→
+      ``{"action": "silent", "reason": "stop", "confirm_text": …, "confirm_once": true}``：
+      ``confirm_text`` 是**唯一允许**的那条模板确认（``stop_contact.farewell_text``，不走 LLM），
+      只在首次登记时给；执行层可选择发或不发，之后同一对端永远 silent。审计 ``detected``。
+    - 开关 ``compliance.stop_gate.enabled: false`` → 只查会话冻结（O-1 A 既有），不做词表登记。
+
+    隐私：不记入站原文，审计 / 日志只有平台、对端 id 与命中词（≤40 字）。
+    """
+    try:
+        from src.compliance import stop_gate as sg
+        if store is None:
+            try:
+                from src.integrations.protocol_bridge import get_inbox_store
+                store = get_inbox_store()
+            except Exception:
+                store = None
+        acct = account_id or "_replybus"
+        src = sg.outbound_check(store, path="replybus_decide", platform=platform, account_id=acct,
+                                peer=external_id, phone=phone, config=config)
+        if src:
+            return {"action": _ACTION_SILENT, "reason": sg.STOP_REASON}
+        if not sg.enforced(config):
+            return None
+        hit = sg.detect(text)
+        if not hit:
+            return None
+        rec = sg.record_stop(store, platform=platform, account_id=acct, peer=external_id,
+                             hit=hit, source="replybus")
+        sg.audit(store, path="replybus_decide", action="detected", platform=platform,
+                 account_id=acct, peer=external_id,
+                 conversation_id=str(rec.get("conversation_id") or ""), hit=hit)
+        out: Dict[str, Any] = {"action": _ACTION_SILENT, "reason": sg.STOP_REASON}
+        if not rec.get("already"):
+            out["confirm_text"] = sg.confirm_text(sg.guess_lang(text))
+            out["confirm_once"] = True
+            sg.audit(store, path="replybus_decide", action="confirm", platform=platform,
+                     account_id=acct, peer=external_id,
+                     conversation_id=str(rec.get("conversation_id") or ""), hit="template")
+        return out
+    except Exception:
+        logger.warning("[replybus] STOP 硬闸异常（兜底 silent）", exc_info=True)
+        # 判定本身出错时不知道是不是 STOP：红线闸宁严勿松，本条 silent（执行层会走自己的兜底）
+        return {"action": _ACTION_SILENT, "reason": "stop_gate_error"}
+
+
 def register_replybus_routes(app, *, api_auth, config_manager=None) -> None:
     """挂载 platform/replybus 决策回执端点：``POST decide`` + ``GET status``。
 
@@ -156,6 +207,17 @@ def register_replybus_routes(app, *, api_auth, config_manager=None) -> None:
 
         context_hint = message.get("context_hint")
         context_hint = context_hint if isinstance(context_hint, dict) else {}
+
+        # 智安 P0-2（2026-10-08）STOP 硬闸：先于一切生成。命中 → silent + reason=stop，不走 LLM。
+        stop = _stop_gate_decision(
+            platform=platform, account_id=str(message.get("account") or "").strip(),
+            external_id=external_id, text=last_inbound,
+            phone=str(context_hint.get("peer_phone") or message.get("phone") or "").strip(),
+            config=getattr(config_manager, "config", None) if config_manager is not None else None,
+        )
+        if stop is not None:
+            return stop
+
         persona_id = str(context_hint.get("persona") or "").strip()
         # session_id → conversation_id：契约定义 session_id 就是"串联同一对话多轮
         # 决策上下文"的线索 id；generate_persona_reply 恰好有同语义的 conversation_id

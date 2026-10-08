@@ -207,6 +207,97 @@ def can_manage_target(actor_role: str, target_role: str) -> bool:
     return False
 
 
+# ── 坐席最小权限（智安 P1-6，2026-10-08）──────────────────────────────────
+#: admin 上限缺省值（``web_admin.max_admins`` 覆写；0=不限）。只拦「新增 / 提升为 admin」，
+#: 存量超额账号不自动降级——降级清单由 :func:`least_privilege_report` 出，人工执行。
+DEFAULT_MAX_ADMINS = 2
+
+
+def max_admins_from_config(cfg: Any) -> int:
+    try:
+        v = ((cfg or {}).get("web_admin") or {}).get("max_admins", DEFAULT_MAX_ADMINS)
+        return max(0, int(DEFAULT_MAX_ADMINS if v is None else v))
+    except Exception:
+        return DEFAULT_MAX_ADMINS
+
+
+def admin_cap_reached(store: Any, cap: int, *, exclude_user_id: Optional[int] = None) -> bool:
+    """再多一个 admin 是否超上限（cap<=0 → 不限）。绝不抛（异常 → 不拦）。"""
+    try:
+        if int(cap) <= 0:
+            return False
+        return store.count_admins(exclude_user_id=exclude_user_id) >= int(cap)
+    except Exception:
+        return False
+
+
+def least_privilege_report(store: Any, *, max_admins: int = DEFAULT_MAX_ADMINS,
+                           stale_days: int = 30, now: Optional[float] = None) -> Dict[str, Any]:
+    """最小权限审计清单（只读，不改任何账号；不含密码 / 哈希 / 会话令牌）。
+
+    规则：
+    - admin 超上限：按最近登录倒序保留前 ``max_admins`` 个，其余建议降为 supervisor
+      （带团队看板）或 agent（只聊天）；
+    - 启用中但 ``stale_days`` 天未登录（含从未登录）的非 master 账号 → 建议禁用；
+    - 按人覆写 allow 了角色默认之外的能力 → 列出复核；
+    - 活跃会话过多（>5）→ 建议「注销全部会话」（过期清扫会自动收掉超龄会话）。
+    """
+    ts = time.time() if now is None else float(now)
+    cutoff = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts - stale_days * 86400))
+    users = store.list_users()
+    try:
+        _fn = getattr(store, "last_active_map", None) or store.last_session_login_map
+        sess_login = _fn()
+    except Exception:
+        sess_login = {}
+    try:
+        sess_n = store.session_counts()
+    except Exception:
+        sess_n = {}
+    findings: List[Dict[str, Any]] = []
+
+    def _last(u: Dict[str, Any]) -> str:
+        return max(str(u.get("last_login") or ""), str(sess_login.get(u.get("username"), "") or ""))
+
+    admins = [u for u in users if u.get("role") == ROLE_ADMIN and u.get("enabled")]
+    admins.sort(key=_last, reverse=True)
+    if max_admins > 0 and len(admins) > max_admins:
+        for u in admins[max_admins:]:
+            findings.append({"username": u.get("username"), "role": ROLE_ADMIN,
+                             "issue": "admin_over_cap", "last_login": _last(u) or None,
+                             "suggestion": "降为 supervisor（需团队看板）或 agent（只聊天）"})
+    for u in users:
+        if u.get("role") == ROLE_MASTER or not u.get("enabled"):
+            continue
+        last = _last(u)
+        if not last or last < cutoff:
+            findings.append({"username": u.get("username"), "role": u.get("role"),
+                             "issue": "stale_account", "last_login": last or None,
+                             "suggestion": f"{stale_days} 天未登录，建议禁用"})
+        try:
+            allow = parse_perms(u.get("perms_json")).get("allow") or set()
+        except Exception:
+            allow = set()
+        extra = sorted(p for p in allow if not default_perm_allowed(str(u.get("role") or ""), p))
+        if extra:
+            findings.append({"username": u.get("username"), "role": u.get("role"),
+                             "issue": "perm_override_allow", "perms": extra,
+                             "suggestion": "按人放开了角色默认之外的能力，复核是否仍需要"})
+    for name, n in sorted(sess_n.items()):
+        if n > 5:
+            role = next((u.get("role") for u in users if u.get("username") == name), "")
+            findings.append({"username": name, "role": role, "issue": "too_many_sessions",
+                             "sessions": n, "suggestion": "注销全部会话（超龄会话会被过期清扫自动收掉）"})
+    return {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
+        "max_admins": int(max_admins),
+        "admins": len(admins),
+        "users": len(users),
+        "roles": {r: sum(1 for u in users if u.get("role") == r) for r in ROLE_LABELS},
+        "findings": findings,
+    }
+
+
 def _hash_pw(password: str, salt: bytes = None) -> tuple:
     if salt is None:
         salt = os.urandom(16)
@@ -297,6 +388,12 @@ class WebUserStore:
     #      revoked；超过 SESSION_PRUNE_DAYS 的行在登录时物理清理。
     SESSION_IDLE_DAYS = 7
     SESSION_PRUNE_DAYS = 30
+    # 智安 P1-6（2026-10-08）：会话**绝对寿命**——此前只有空闲过期，桌面壳天天 touch 的
+    # 会话永不过期（173 上 554 条 master 会话）。created_at 超过本值 → touch 拒绝 + 懒标
+    # revoked（用户重新登录即可）；周期清扫 SESSION_SWEEP_SEC 节流，挂在 touch 路径上
+    # （每个鉴权请求都会经过，无需单独后台任务）。清扫结果经 audit_fn 写审计日志。
+    SESSION_MAX_AGE_DAYS = 30
+    SESSION_SWEEP_SEC = 600
 
     @staticmethod
     def _cutoff(days: float) -> str:
@@ -310,6 +407,46 @@ class WebUserStore:
             (self._cutoff(self.SESSION_IDLE_DAYS),),
         )
         return int(cur.rowcount or 0)
+
+    def expire_sessions(self, *, actor: str = "system") -> Dict[str, int]:
+        """会话过期清扫：空闲超 SESSION_IDLE_DAYS / 创建超 SESSION_MAX_AGE_DAYS → revoked；
+        最后活跃超 SESSION_PRUNE_DAYS 的行物理删除。返回各类条数；有动作则写审计日志。"""
+        out = {"idle": 0, "max_age": 0, "pruned": 0}
+        with self._lock:
+            try:
+                out["idle"] = self._expire_idle_locked()
+                cur = self._conn.execute(
+                    "UPDATE web_sessions SET revoked=1 WHERE revoked=0 AND created_at < ?",
+                    (self._cutoff(self.SESSION_MAX_AGE_DAYS),),
+                )
+                out["max_age"] = int(cur.rowcount or 0)
+                cur = self._conn.execute(
+                    "DELETE FROM web_sessions WHERE last_seen < ?",
+                    (self._cutoff(self.SESSION_PRUNE_DAYS),),
+                )
+                out["pruned"] = int(cur.rowcount or 0)
+                self._conn.commit()
+            except (sqlite3.OperationalError, sqlite3.InterfaceError):
+                return out
+            self._last_sweep = time.time()
+        if any(out.values()):
+            detail = f"idle={out['idle']} max_age={out['max_age']} pruned={out['pruned']}"
+            try:
+                import logging
+                logging.getLogger(__name__).info("[session-sweep] %s", detail)
+            except Exception:
+                pass
+            fn = getattr(self, "audit_fn", None)
+            if callable(fn):
+                try:
+                    fn(actor, "session_expire_sweep", detail)
+                except Exception:
+                    pass
+        return out
+
+    def _maybe_sweep(self) -> None:
+        if time.time() - float(getattr(self, "_last_sweep", 0.0) or 0.0) >= self.SESSION_SWEEP_SEC:
+            self.expire_sessions()
 
     def create_session(self, username: str, role: str, ip: str = "",
                        user_agent: str = "", *, replace_same_device: bool = False) -> str:
@@ -365,14 +502,20 @@ class WebUserStore:
 
     def touch_session(self, jti: str) -> bool:
         """更新 session 最后活跃时间，返回该 session 是否有效（空闲超 SESSION_IDLE_DAYS 视为失效）"""
+        try:
+            self._maybe_sweep()
+        except Exception:
+            pass
         with self._lock:
             try:
                 row = self._conn.execute(
-                    "SELECT revoked, last_seen FROM web_sessions WHERE jti=?", (jti,)
+                    "SELECT revoked, last_seen, created_at FROM web_sessions WHERE jti=?", (jti,)
                 ).fetchone()
                 if not row or row["revoked"]:
                     return False
-                if str(row["last_seen"] or "") and str(row["last_seen"]) < self._cutoff(self.SESSION_IDLE_DAYS):
+                _expired_age = bool(str(row["created_at"] or "")) and (
+                    str(row["created_at"]) < self._cutoff(self.SESSION_MAX_AGE_DAYS))
+                if _expired_age or (str(row["last_seen"] or "") and str(row["last_seen"]) < self._cutoff(self.SESSION_IDLE_DAYS)):
                     self._conn.execute(
                         "UPDATE web_sessions SET revoked=1 WHERE jti=?", (jti,))
                     self._conn.commit()
@@ -444,14 +587,45 @@ class WebUserStore:
             ).fetchall()
         return {str(r["username"]): str(r["ts"] or "") for r in rows if r["ts"]}
 
+    def last_active_map(self) -> Dict[str, str]:
+        """{username: 最近一次会话活跃 last_seen}（含已作废行；最小权限清单判「久未使用」）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT username, MAX(last_seen) AS ts FROM web_sessions GROUP BY username"
+            ).fetchall()
+        return {str(r["username"]): str(r["ts"] or "") for r in rows if r["ts"]}
+
     def cleanup_old_sessions(self, days: int = 30):
-        """清理超过 N 天未活跃的 session"""
+        """清理超过 N 天未活跃的 session（last_seen 存的是本地时间串——此前用 SQLite
+        的 UTC 当前时间比较，在 UTC+8 机器上差 8 小时；现与 _cutoff 同口径）。"""
         with self._lock:
             self._conn.execute(
-                "DELETE FROM web_sessions WHERE last_seen < datetime('now', ?)",
-                (f"-{days} days",),
+                "DELETE FROM web_sessions WHERE last_seen < ?",
+                (self._cutoff(days),),
             )
             self._conn.commit()
+
+    def count_admins(self, *, exclude_user_id: Optional[int] = None) -> int:
+        """启用中的 admin 数（master 不计）。"""
+        with self._lock:
+            if exclude_user_id is None:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM web_users WHERE role=? AND enabled=1", (ROLE_ADMIN,)
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM web_users WHERE role=? AND enabled=1 AND id<>?",
+                    (ROLE_ADMIN, int(exclude_user_id)),
+                ).fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def session_counts(self) -> Dict[str, int]:
+        """{username: 活跃会话数}（只读，不触发清扫）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT username, COUNT(*) AS n FROM web_sessions WHERE revoked=0 GROUP BY username"
+            ).fetchall()
+        return {str(r["username"]): int(r["n"] or 0) for r in rows}
 
     def _ensure_master(self, username: str, password: str):
         """确保至少存在一个主帐号；若已存在则跳过"""
