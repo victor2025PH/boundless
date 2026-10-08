@@ -13,7 +13,7 @@ unified_inbox 的「视角」由 platFilter / accountFilter 等全局变量构�
      （或顶层 `let` 声明行）；其余任何位置的裸赋值 = 红。
   2. 会收窄视角的法定写入者必须调用联动器 `_syncThreadToScope(`——
      「写视角」与「联动中栏」是同一条不变量的两半。
-     （`buildAccountChips` 例外：其写入是「账号不在册回落 all」的放宽自愈，放宽
+     （`buildAccountChips` / `buildAcctDock` 例外：其写入是「账号不在册回落 all」的放宽自愈，放宽
      永不制造错位，且作为渲染函数它在 setAccountFilter 的联动之前执行。）
 
 新增视角写入点时：优先复用 setPlatFilter / setAccountFilter；确需新写入者，把函数名
@@ -36,6 +36,7 @@ _ALLOWED_WRITERS = {
     "_applyView": True,        # 保存视图=多维一次性写入，自成法定入口
     "resetAllFilters": True,   # 放宽视角（统一律：仍要求调用，实为 no-op）
     "buildAccountChips": False,  # 「账号不在册回落 all」放宽自愈；渲染函数不强求联动
+    "buildAcctDock": False,      # 顶栏账号坞（rail 同语义的 dock 版）：选中号已不在册 → 回落 all，同属放宽自愈
 }
 
 _ASSIGN_RE = re.compile(r"(?<![.\w$])(platFilter|accountFilter)\s*=(?![=])")
