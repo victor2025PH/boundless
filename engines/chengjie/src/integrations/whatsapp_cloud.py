@@ -879,7 +879,8 @@ async def _handle_one_message(
     if _sg_cfg.get("extra_keywords"):
         from src.integrations.shared.official_stop_gate import DEFAULT_STOP_KEYWORDS
         _kw = list(DEFAULT_STOP_KEYWORDS) + [str(k) for k in _sg_cfg.get("extra_keywords") or []]
-    gate = inbound_gate("whatsapp", phone_number_id, chat_key, text, name=sender, keywords=_kw)
+    gate = inbound_gate("whatsapp", phone_number_id, chat_key, text, name=sender, keywords=_kw,
+                        allow_resubscribe=bool(_sg_cfg.get("allow_resubscribe", True)))
     if gate.get("action") != "pass":
         logger.info("[wa_cloud] STOP 闸 action=%s，本条不自答", gate.get("action"))
         return

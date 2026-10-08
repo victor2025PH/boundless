@@ -251,7 +251,8 @@ DEFAULT_PLATFORM_MODES: Dict[str, Dict[str, Any]] = {
     # （ExportLoginToken，二维码在本窗口显示），对用户与「网页扫码」是同一体验；
     # 挂一张永不可用的重复卡只会引人点进死胡同。桌面种子早已同款摘除（见
     # config.desktop.min.yaml 注释与 test_seed_modes_are_implemented 门禁）。
-    "telegram": {"modes": ["protocol", "device"], "default": "protocol"},
+    # official = Telegram Bot API（@BotFather 的 bot，合规第二路；凭证经接入向导「Telegram 机器人」卡）
+    "telegram": {"modes": ["protocol", "device", "official"], "default": "protocol"},
     "whatsapp": {"modes": ["protocol", "web", "device", "official"], "default": "protocol"},
     "line": {"modes": ["protocol", "device", "official"], "default": "protocol"},
     "messenger": {"modes": ["web", "device", "official"], "default": "web"},
@@ -282,6 +283,7 @@ PLATFORM_INSTRUCTIONS: Dict[str, str] = {
     "telegram": (
         "在 Telegram 手机端：设置 → 设备 → 关联桌面设备，扫描二维码；"
         "或由管理员在设备端完成新账号登录。账号连上后本窗口会自动确认。"
+        "官方机器人：在「接入向导 → Telegram 机器人」里填好 Bot Token 即自动上线。"
     ),
     "line": (
         "在已连接的设备 / 投屏端打开 LINE 登录页并用手机扫码；"

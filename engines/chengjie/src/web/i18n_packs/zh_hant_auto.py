@@ -27466,6 +27466,22 @@ ZH_HANT = {
     'sw_tf_miss': '缺 {n} 項',
     # ── sw_tf_ready ──
     'sw_tf_ready': '已就緒 {r} / {t}',
+    # ── sw_tg_hook_bad_url ──
+    'sw_tg_hook_bad_url': '請填寫以 https:// 開頭的地址',
+    # ── sw_tg_hook_btn ──
+    'sw_tg_hook_btn': '設定 Webhook',
+    # ── sw_tg_hook_fail ──
+    'sw_tg_hook_fail': '設定失敗（{kind}）',
+    # ── sw_tg_hook_hint ──
+    'sw_tg_hook_hint': '填本服務對外的 https 地址（不含路徑）。只有點下面的按鈕才會修改 Telegram 側的回撥；請先儲存憑證並重啟服務。',
+    # ── sw_tg_hook_ok ──
+    'sw_tg_hook_ok': '已設定：{host}{path}',
+    # ── sw_tg_hook_ph ──
+    'sw_tg_hook_ph': 'https://bot.example.com',
+    # ── sw_tg_hook_running ──
+    'sw_tg_hook_running': '正在設定…',
+    # ── sw_tg_hook_title ──
+    'sw_tg_hook_title': '設定 Webhook（手動）',
     # ── switch_mode ──
     'switch_mode': '切換模式',
     # ── switch_theme ──

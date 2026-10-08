@@ -305,6 +305,7 @@ whatsapp_cloud:
   stop_gate:
     allow_farewell: false          # true = 放行主线「唯一一条告别」稿（默认连告别也不发）
     extra_keywords: []             # 追加整句退订词
+    allow_resubscribe: true        # 已停联客户本人整句发 START / UNSTOP / 重新订阅 → 记为本人重新同意并解冻（审计 resubscribed）
   # 自答路径进待人工的触发项（AI 异常 / 发送失败 恒进）
   handoff:
     on_human_request: true         # 客户点名要真人
@@ -321,6 +322,9 @@ whatsapp_cloud:
 # Telegram Bot API（官方 bot 轨；与 Telegram 个人号协议轨并列，platform=telegram mode=official，
 # account_id = bot 数字 id）。默认关。上线步骤：@BotFather 建 bot → 填 bot_token → 自拟 webhook_secret →
 # 调 setWebhook(url=<公网>/tg/bot/webhook, secret_token=<同值>)。健康：/api/admin/telegram-bot/health
+# 接入向导「Telegram 机器人」卡可直接填 bot_token / webhook_secret；setWebhook **只手动触发**：
+# 向导卡内「设置 Webhook」按钮（POST /api/admin/telegram-bot/set-webhook）或
+# python tools/tg_bot_set_webhook.py --url https://<你的域名> --apply（不带 --apply 只预览）。
 telegram_bot:
   enabled: false
   bot_token: ""                    # @BotFather 发的 token
@@ -332,6 +336,7 @@ telegram_bot:
   stop_gate:
     allow_farewell: false
     extra_keywords: []
+    allow_resubscribe: true        # 已停联客户本人发 /start → 记为本人重新同意并解冻（Telegram 解除拉黑后点「开始」即发 /start）
   handoff:
     on_human_request: true
     on_media: true

@@ -24,7 +24,9 @@
 登记走 ``record_stop()``、出站拦截经 ``outbound_check()`` 记审计；不存在时用本模块回落实现。
 合并后两边看到同一份名单，不会出现两套停联真相。
 
-解冻只走人工（``stop_contact.unfreeze_conversation`` / 名单 ``mark_unfrozen``）；本模块不自动解冻。
+解冻只有两条口（都在 ``src.compliance.resubscribe``，复用 ``unfreeze_conversation`` + 统一闸审计）：
+坐席手动解冻（带操作人与理由）；客户**本人**在已停联会话里整句发 ``START`` / ``/start`` 等
+→ 视为本人重新同意（``inbound_gate`` 返回 ``action=resubscribed``，本条同样不自答）。
 全部函数绝不抛（闸本身失败时：入站按 pass、出站按「查不到冻结」放行——与主线
 ``rpa_send_blocked`` 同策略；但命中 STOP 的那条入站一定写进进程内兜底集合，确保本进程内不再发）。
 """
@@ -84,6 +86,19 @@ def reset_for_tests() -> None:
     with _lock:
         _mem_stopped.clear()
         _stats.clear()
+
+
+def memory_stopped(platform: str, account_id: str, chat_key: str) -> bool:
+    """进程内兜底集合里有没有这位（只读）。"""
+    with _lock:
+        return (str(platform or "").lower(), str(account_id or "default"), str(chat_key or "")) in _mem_stopped
+
+
+def forget_memory_stop(platform: str, account_id: str, chat_key: str) -> bool:
+    """解冻时同步清掉进程内兜底集合（只由 ``compliance.resubscribe`` 调）。返回是否有记录被删。"""
+    with _lock:
+        return _mem_stopped.pop(
+            (str(platform or "").lower(), str(account_id or "default"), str(chat_key or "")), None) is not None
 
 
 def normalize_keyword(text: Any) -> str:
@@ -247,9 +262,27 @@ def apply_stop(platform: str, account_id: str, chat_key: str, *, hits: Iterable[
 
 def inbound_gate(platform: str, account_id: str, chat_key: str, text: Any, *,
                  name: str = "", keywords: Optional[Iterable[str]] = None,
-                 store: Any = None) -> Dict[str, Any]:
-    """入站闸：返回 ``{action: pass|stopped|frozen, hits, reason}``。非 pass → 调用方不得自答/进管道。"""
+                 store: Any = None, allow_resubscribe: bool = True) -> Dict[str, Any]:
+    """入站闸：返回 ``{action: pass|stopped|frozen|resubscribed, hits, reason}``。非 pass → 调用方不得自答/进管道。
+
+    ``resubscribed``：客户本人在已停联会话里整句发 START 类词 → 解冻（审计 ``resubscribed``），
+    本条只镜像不自答；之后的消息照常走。``allow_resubscribe=False`` 时 START 不解冻（仍是 frozen）。
+    """
     try:
+        if allow_resubscribe:
+            try:
+                from src.compliance.resubscribe import resubscribe, resubscribe_hit
+                if resubscribe_hit(text) and is_stopped(platform, account_id, chat_key, store=store):
+                    st = store if store is not None else _store()
+                    r = resubscribe(st, platform=platform, account_id=account_id, peer=chat_key,
+                                    text=text, source=f"official:{str(platform or '').lower()}",
+                                    phone=_digits(chat_key))
+                    if r.get("action") == "resubscribed":
+                        return {"action": "resubscribed", "hits": [r.get("hit") or ""],
+                                "reason": "customer_start", "still_stopped": r.get("still_stopped") or "",
+                                "detail": r.get("detail") or {}}
+            except Exception:
+                logger.debug("[stop-gate] 重新订阅处理异常（按原冻结处理）", exc_info=True)
         hits = detect_stop(text, keywords=keywords)
         if hits:
             res = apply_stop(platform, account_id, chat_key, hits=hits, name=name, store=store)
@@ -301,5 +334,5 @@ def outbound_gate(platform: str, account_id: str, chat_key: str, *, text: Any = 
 __all__ = [
     "DEFAULT_STOP_KEYWORDS", "normalize_keyword", "keyword_hit", "detect_stop",
     "is_stopped", "apply_stop", "inbound_gate", "outbound_gate", "stats_snapshot",
-    "reset_for_tests",
+    "reset_for_tests", "memory_stopped", "forget_memory_stop",
 ]
