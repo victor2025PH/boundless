@@ -3,8 +3,11 @@
 坐标在 ``phone_ui_map.json``（或 agent.json ``phone_ui_map`` 指向的文件）里，按应用分开，
 单位是屏幕千分比。agent.json 里的路径优先；路径为空时用本模块旁边的那份，那份不在时再用
 fleet 状态目录里的 ``phone_ui_map.json``。每次动作先截一张图量屏幕，再把千分比换成像素。
-Facebook 点赞按包名 ``am start`` 打开，前台已经是 Facebook 时不回桌面。其它应用仍是 HOME
-再点 ``app_icon``。带图是点相册里已经在手机上的那一格。
+Facebook 点赞按包名 ``am start`` 打开。启动前先唤醒并划开锁屏。``am start`` 之后轮询前台约 9 秒；
+前台已经是 Facebook 时不回桌面。轮询结束前台仍是别的应用时，再按 Home 点 ``app_icon``（0.3.25
+在这些 MIUI 上能进信息流的办法），两种都进不去才回执失败。解析不到包名回执
+``fb_not_installed_or_store_redirect``，不再把 ``am start`` 的失败报成 ``adb_exit_1``。
+其它应用仍是 HOME 再点 ``app_icon``。带图是点相册里已经在手机上的那一格。
 停留（dwell）只在本机睡一会儿，不发 adb。
 
 ``phone_flows_enabled`` 缺省关。关着时不声明 phone_flows_v1 / phone_flows_v2，执行直接拒绝，不碰 adb。
@@ -93,6 +96,10 @@ _FB_FEED_OPEN_BUDGET_SEC = 9.0
 _FB_FEED_OPEN_QUIET_SEC = 3.0
 _FB_FEED_TOP_SWIPES = 2
 _FB_FEED_TOP_SETTLE_SEC = 3.0
+# am start on these MIUI phones returns success while the old app is still in
+# front. One read at 0.5s is not a decision. Poll, then fall back to Home+icon.
+_FB_FOREGROUND_POLL_SEC = 9.0
+_FB_FOREGROUND_POLL_STEP = 0.5
 
 Step = Tuple[str, Dict[str, Any]]
 
@@ -688,11 +695,52 @@ def _foreground_package(ops: Any, serial: str) -> str:
     return str(found.get("package") or "")
 
 
-def _open_facebook(ops: Any, serial: str) -> str:
-    """Launch Facebook by package unless it is already in front.
+def _sleep_forward(ops: Any, seconds: float) -> bool:
+    """Sleep once. False when the clock did not move, so a poll cannot spin."""
+    before = float(ops._clock())
+    sleeper = getattr(ops, "_sleep", None)
+    if callable(sleeper):
+        sleeper(seconds)
+    return float(ops._clock()) > before
 
-    Returns a failure code, or "" when the foreground is Facebook or unknown.
-    Does not press Home and does not tap the wallpaper icon.
+
+def _poll_facebook_foreground(ops: Any, serial: str) -> str:
+    """Foreground package after up to 9 seconds. Returns early when Facebook is up."""
+    deadline = float(ops._clock()) + _FB_FOREGROUND_POLL_SEC
+    last = ""
+    while True:
+        last = _foreground_package(ops, serial)
+        if last in _FB_PACKAGES:
+            return last
+        if float(ops._clock()) >= deadline:
+            return last
+        if not _sleep_forward(ops, _FB_FOREGROUND_POLL_STEP):
+            return _foreground_package(ops, serial)
+
+
+def _needs_icon_fallback(package: str) -> bool:
+    """A concrete other app. An empty dumpsys is unknown, not a failed launch."""
+    pkg = str(package or "").strip()
+    return bool(pkg) and pkg not in _FB_PACKAGES
+
+
+def _tap_home_icon(run: Any, anchors: Dict[str, Any], overrides: Dict[str, Any],
+                   width: int, height: int) -> None:
+    """0.3.25 open: Home, then the Facebook icon on the launcher."""
+    run(TASK_PHONE_KEY, {"key": "home"})
+    x, y = _point("app_icon", anchors, overrides, width, height)
+    run(TASK_PHONE_TAP, {"x": x, "y": y})
+
+
+def _open_facebook(ops: Any, serial: str, run: Any, anchors: Dict[str, Any],
+                   overrides: Dict[str, Any], width: int, height: int) -> str:
+    """Bring Facebook forward. "" when it is in front or the foreground is unknown.
+
+    Wake and unlock first. ``am start`` is polled for about 9 seconds. If the
+    foreground is still another app, press Home and tap the icon, then poll
+    again. Both misses return ``classify_facebook_open``. A missing package
+    is ``fb_not_installed_or_store_redirect`` and does not run ``am start``.
+    Already-in-front does not press Home.
     """
     package = _foreground_package(ops, serial)
     if package in _FB_PACKAGES:
@@ -700,18 +748,25 @@ def _open_facebook(ops: Any, serial: str) -> str:
     launcher = getattr(ops, "launch_facebook", None)
     if not callable(launcher):
         return "app_not_ready"
-    target = ""
     finder = getattr(ops, "facebook_package", None)
-    if callable(finder):
-        try:
-            target = str(finder(serial) or "")
-        except Exception:
-            logger.debug("facebook package probe failed", exc_info=True)
-            target = ""
+    if not callable(finder):
+        return "app_not_ready"
+    target = str(finder(serial) or "")
     if target not in _FB_PACKAGES:
-        target = _FB_PACKAGES[0]
+        return "fb_not_installed_or_store_redirect"
+    preparer = getattr(ops, "prepare_foreground", None)
+    if callable(preparer):
+        preparer(serial, width, height)
     launcher(serial, target)
-    return classify_facebook_open(_foreground_package(ops, serial))
+    seen = _poll_facebook_foreground(ops, serial)
+    if seen in _FB_PACKAGES:
+        return ""
+    if _needs_icon_fallback(seen):
+        _tap_home_icon(run, anchors, overrides, width, height)
+        seen = _poll_facebook_foreground(ops, serial)
+        if seen in _FB_PACKAGES:
+            return ""
+    return classify_facebook_open(seen)
 
 
 def _coerce_portrait(ops: Any, run: Any, serial: str, width: int, height: int) -> Tuple[int, int, str]:
@@ -948,11 +1003,14 @@ class PhoneFlows:
 
     def _execute_facebook_like(self, serial: str, p: Dict[str, Any], ui: Dict[str, Any],
                                ops: Any) -> Tuple[str, Dict[str, Any], str]:
-        """Launch Facebook by package, scroll the feed, tap Like only when sure.
+        """Launch Facebook, scroll the feed, tap Like only when sure.
 
         If Facebook is already in front, this does not press Home. Otherwise
-        it ``am start``s katana or lite. Landing on Telegram, the launcher, or
-        the Play Store is an explicit code, not ``not_logged_in``. A landscape
+        it wakes the screen, ``am start``s katana or lite, and polls the
+        foreground for about 9 seconds. A foreground that is still another
+        app falls back to Home plus the icon. A missing package is
+        ``fb_not_installed_or_store_redirect``. Landing on Telegram or the
+        Play Store is an explicit code, not ``not_logged_in``. A landscape
         frame is locked back to portrait first. After a successful open, poll
         the feed for about 9 seconds. ``like_probe`` returns the row and does
         not tap it.
@@ -989,7 +1047,7 @@ class PhoneFlows:
                     return STATUS_FAILED, _result(
                         serial, "facebook", "like", completed=1, width=width, height=height,
                     ), orient
-                opened = _open_facebook(ops, serial)
+                opened = _open_facebook(ops, serial, run, anchors, overrides, width, height)
                 if opened:
                     err = PhoneOpError(opened, failed=True)
                     err.stderr = "foreground"  # type: ignore[attr-defined]

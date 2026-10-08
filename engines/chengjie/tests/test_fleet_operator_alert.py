@@ -332,7 +332,7 @@ def test_agent_heartbeat_observes_without_putting_serial_on_the_alert(tmp_path, 
     assert seen[0]["phones"][0]["wallpaper_no"] == "12"
     assert seen[0]["phones"][0]["reason"] == "offline"
     assert SERIAL not in _blob(seen[0])
-    assert agent_mod.AGENT_VERSION == "0.3.26"
+    assert agent_mod.AGENT_VERSION == "0.3.27"
 
 
 def test_agent_execute_counts_phone_failures_and_ignores_rejects(tmp_path, monkeypatch):
@@ -554,7 +554,7 @@ def test_session0_uses_the_console_user_and_does_not_count_a_task_kick(monkeypat
 
     iss = Path(__file__).resolve().parents[1] / "fleet_agent" / "setup" / "ChatXAgent.iss"
     text = iss.read_text(encoding="utf-8")
-    assert 'AppVersion "0.3.26"' in text
+    assert 'AppVersion "0.3.27"' in text
     assert "install-panel" in text
     assert "ChatX Fleet Panel" in text
     assert "ChatXFleetPanel" in text
@@ -601,7 +601,7 @@ def test_session0_uses_the_console_user_and_does_not_count_a_task_kick(monkeypat
     create = build_panel_logon_create(tmp_path)
     assert create[1] == "/Create" and "/XML" in create and "SYSTEM" not in create
     run_key = build_panel_run_key(tmp_path)
-    assert run_key[0] == "reg" and "ChatXFleetPanel" in run_key
+    assert run_key[0] == "reg" and "ChatXFleetPanel" in run_key and "/reg:64" in run_key
     assert "operator_alert.json" in run_key[run_key.index("/d") + 1]
     assert "zh" in oa.PANEL_SCRIPT and "en" in oa.PANEL_SCRIPT
     (tmp_path / "panel_task.xml").write_text(xml, encoding="utf-8")
@@ -616,3 +616,55 @@ def test_session0_uses_the_console_user_and_does_not_count_a_task_kick(monkeypat
     assert diag["run_key_present"] is True
     assert diag["panel_session_id"] == 2
     assert "serial" not in json.dumps(diag)
+    from src.fleet.operator_alert import run_key_probe_commands, session0_panel_stop_command
+    from src.fleet.service import build_panel_run_key_delete
+
+    probes = run_key_probe_commands()
+    assert probes[0][-1] == "/reg:64"
+    assert any("WOW6432Node" in part for part in probes[1])
+    assert "/reg:32" in probes[1]
+    assert build_panel_run_key_delete()[-1] == "/reg:64"
+    stop = session0_panel_stop_command()
+    assert "SessionId -eq 0" in stop[-1]
+    assert "Stop-Process" in stop[-1]
+    assert "CHATX_PANEL_LOCK" in stop[-1]
+
+
+def test_session0_lock_holder_is_replaced_and_a_desktop_holder_is_not(monkeypatch, tmp_path):
+    monkeypatch.setattr(oa.os, "name", "nt")
+    monkeypatch.setattr(oa, "_ensure_script", lambda _path: None)
+    killed = []
+    spawned = []
+
+    def end_old(root):
+        killed.append(str(root))
+        return True
+
+    monkeypatch.setattr(oa, "_end_session0_panel", end_old)
+    monkeypatch.setattr(oa, "_spawn_interactive", lambda *a, **k: spawned.append(a) or True)
+    held = {"left": True}
+
+    def lock_held(_path):
+        if held["left"]:
+            held["left"] = False
+            return True
+        return False
+
+    monkeypatch.setattr(oa, "_lock_held", lock_held)
+    monkeypatch.setattr(oa, "_holder_session_while_locked", lambda _root: -1)
+    taken = oa.launch_panel(tmp_path)
+    assert taken == {"ok": True, "mode": "gui", "shown": True}
+    assert killed and spawned
+
+    killed.clear()
+    spawned.clear()
+    monkeypatch.setattr(oa, "_lock_held", lambda _path: True)
+    monkeypatch.setattr(oa, "_holder_session_while_locked", lambda _root: 2)
+    left = oa.launch_panel(tmp_path)
+    assert left == {"ok": True, "mode": "already_running", "shown": True}
+    assert killed == [] and spawned == []
+
+    monkeypatch.setattr(oa, "_holder_session_while_locked", lambda _root: 0)
+    monkeypatch.setattr(oa, "_end_session0_panel", lambda _root: False)
+    stuck = oa.launch_panel(tmp_path)
+    assert stuck["mode"] == "headless" and stuck["shown"] is False

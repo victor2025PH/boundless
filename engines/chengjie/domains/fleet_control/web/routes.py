@@ -57,8 +57,8 @@ from src.fleet.phone_flow_rules import kind_for_flow, validate_flow_payload
 from src.fleet.social_pace import read_optional_labels
 from src.fleet.dispatch_guard import auto_dispatch_block
 from src.fleet.phone_rules import (
-    PhoneOpError, app_restart_host_block, check_target, kind_for_op, sanitize_phone_result,
-    scrub_phone_error_text, strip_png, validate_payload,
+    PhoneOpError, app_restart_host_block, app_restart_prior_block, check_target, kind_for_op,
+    latest_like_detail, sanitize_phone_result, scrub_phone_error_text, strip_png, validate_payload,
 )
 from src.fleet.protocol import (
     PHONE_APP_KINDS, PHONE_FLOW_KINDS, PHONE_FLOW_TTL_SEC, PHONE_SESSION_KINDS, PHONE_TASK_KINDS,
@@ -568,6 +568,18 @@ def register_routes(app, ctx) -> None:
         if reason:
             raise HTTPException(status_code=409, detail=reason)
         _refuse_auto_dispatch(node, target_serial, st, app_restart=(kind == TASK_PHONE_APP_RESTART))
+        if kind == TASK_PHONE_APP_RESTART:
+            prior = payload.get("prior_detail") if isinstance(payload.get("prior_detail"), str) else ""
+            if not str(prior or "").strip():
+                prior = latest_like_detail(
+                    st.list_tasks(node_id=node_id, kind="phone_like", limit=20), target_serial,
+                )
+            blocked = app_restart_prior_block(prior)
+            if blocked:
+                raise HTTPException(status_code=409, detail=blocked)
+            if str(prior or "").strip():
+                payload = dict(payload)
+                payload["prior_detail"] = str(prior).strip()
         rec = st.enqueue(node_id, kind, payload=payload, target={"serial": target_serial},
                          ttl_sec=PHONE_TASK_TTL_SEC, created_by=_actor(request))
         if kind == TASK_PHONE_APP_RESTART and rec is not None:

@@ -696,7 +696,9 @@ def test_wrong_app_and_store_are_not_reported_as_logged_out():
                 return SimpleNamespace(returncode=0, stdout=text, stderr=b"")
             if len(args) >= 5 and args[2:5] == ("shell", "pm", "path"):
                 self.calls.append(args)
-                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+                name = args[5] if len(args) > 5 else ""
+                body = f"package:{name}\n".encode() if name in ("com.facebook.katana", "com.facebook.lite") else b""
+                return SimpleNamespace(returncode=0, stdout=body, stderr=b"")
             return FakeAdb.__call__(self, cmd, **kw)
 
     for package, code in (
@@ -713,7 +715,154 @@ def test_wrong_app_and_store_are_not_reported_as_logged_out():
         assert detail != "not_logged_in"
         assert result["foreground"]["package"] == package
         assert "S1" not in json.dumps(result["foreground"])
-        assert not any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+        # am start left the old app in front, so the 0.3.25 Home+icon path runs too.
+        assert any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+        assert sum(_slept) >= 8.0
+
+
+def test_missing_facebook_package_is_not_adb_exit():
+    from types import SimpleNamespace
+
+    class _Missing(FakeAdb):
+        def __init__(self):
+            super().__init__(frame=_frame())
+            self.started = False
+
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if len(args) >= 5 and args[2:5] == ("shell", "pm", "path"):
+                self.calls.append(args)
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            if len(args) >= 5 and args[3:5] == ("am", "start"):
+                self.started = True
+                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"Error: Activity not started")
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    adb = _Missing()
+    ops, fake, _slept = _ops(adb=adb)
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "fb_not_installed_or_store_redirect")
+    assert adb.started is False
+    assert not any(len(a) > 4 and a[3] == "am" and a[4] == "start" for a in fake.actions())
+    assert not any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+
+
+def test_facebook_that_appears_during_the_poll_does_not_go_home():
+    from types import SimpleNamespace
+
+    class _Slow(FakeAdb):
+        def __init__(self):
+            super().__init__(frame=_frame())
+            self.started = False
+
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if len(args) >= 6 and args[2:6] == ("shell", "dumpsys", "activity", "activities"):
+                self.calls.append(args)
+                pkg = "com.facebook.katana" if self.started else "org.telegram.messenger"
+                text = f"mResumedActivity: ActivityRecord{{abc u0 {pkg}/.Main t1}}\n".encode()
+                return SimpleNamespace(returncode=0, stdout=text, stderr=b"")
+            if len(args) >= 5 and args[3:5] == ("am", "start"):
+                self.started = True
+                self.calls.append(args)
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    ops, fake, _slept = _ops(adb=_Slow())
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, _result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "app_not_ready")
+    assert any(len(a) > 4 and a[3] == "am" and a[4] == "start" for a in fake.actions())
+    assert not any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+
+
+def test_dark_lock_screen_is_woken_before_launch():
+    from types import SimpleNamespace
+
+    from src.fleet.phone_ops import parse_screen_lock
+
+    assert parse_screen_lock("mAwake=false\nmShowingLockscreen=true\n") == {"awake": False, "locked": True}
+    assert parse_screen_lock("mScreenOnFully=true\nisStatusBarKeyguard=false\n") == {"awake": True, "locked": False}
+    assert parse_screen_lock("") == {"awake": None, "locked": None}
+
+    class _Dark(FakeAdb):
+        def __init__(self):
+            super().__init__(frame=_frame())
+            self.woken = False
+            self.started = False
+
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if len(args) >= 5 and args[2:5] == ("shell", "dumpsys", "window"):
+                self.calls.append(args)
+                if self.woken:
+                    text = b"mAwake=true\nmShowingLockscreen=true\n"
+                else:
+                    text = b"mAwake=false\nmShowingLockscreen=true\n"
+                return SimpleNamespace(returncode=0, stdout=text, stderr=b"")
+            if args[2:6] == ("shell", "input", "keyevent", "224"):
+                self.woken = True
+                self.calls.append(args)
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            if len(args) >= 6 and args[2:6] == ("shell", "dumpsys", "activity", "activities"):
+                self.calls.append(args)
+                pkg = "com.facebook.katana" if self.started else "com.miui.home"
+                text = f"mResumedActivity: ActivityRecord{{abc u0 {pkg}/.Main t1}}\n".encode()
+                return SimpleNamespace(returncode=0, stdout=text, stderr=b"")
+            if len(args) >= 5 and args[3:5] == ("am", "start"):
+                self.started = True
+                self.calls.append(args)
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    ops, fake, _slept = _ops(adb=_Dark())
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, _result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "app_not_ready")
+    actions = fake.actions()
+    wake = next(i for i, a in enumerate(actions) if a[2:6] == ("shell", "input", "keyevent", "224"))
+    start = next(i for i, a in enumerate(actions) if len(a) > 4 and a[3] == "am" and a[4] == "start")
+    swipes = [i for i, a in enumerate(actions) if len(a) > 4 and a[4] == "swipe"]
+    assert swipes and swipes[0] < start and wake < start
+    assert not any(a[2:6] == ("shell", "input", "keyevent", "26") for a in actions)
+    assert not any(a[2:6] == ("shell", "input", "keyevent", "3") for a in actions)
+
+
+def test_home_icon_fallback_reaches_facebook():
+    from types import SimpleNamespace
+
+    class _Icon(FakeAdb):
+        def __init__(self):
+            super().__init__(frame=_frame())
+            self.homed = False
+
+        def __call__(self, cmd, **kw):
+            args = tuple(cmd[1:])
+            if args[2:6] == ("shell", "input", "keyevent", "3"):
+                self.homed = True
+                self.calls.append(args)
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            if len(args) >= 6 and args[2:6] == ("shell", "dumpsys", "activity", "activities"):
+                self.calls.append(args)
+                pkg = "com.facebook.katana" if self.homed else "org.telegram.messenger"
+                text = f"mResumedActivity: ActivityRecord{{abc u0 {pkg}/.Main t1}}\n".encode()
+                return SimpleNamespace(returncode=0, stdout=text, stderr=b"")
+            return FakeAdb.__call__(self, cmd, **kw)
+
+    ops, fake, slept = _ops(adb=_Icon())
+    flows = PhoneFlows(enabled=True, ocr=lambda _raw: [])
+    status, _result, detail = flows.execute(
+        TASK_PHONE_LIKE, _body("facebook", "like", like_swipes=0), {"serial": "S1"}, ops=ops)
+    assert (status, detail) == (STATUS_FAILED, "app_not_ready")
+    assert any(a[2:6] == ("shell", "input", "keyevent", "3") for a in fake.actions())
+    icon = bundled_ui_map()["apps"]["facebook"]["anchors"]["app_icon"]
+    tap = (str(icon[0] * W // 1000), str(icon[1] * H // 1000))
+    assert any(a[-2:] == tap for a in fake.actions() if len(a) > 4 and a[4] == "tap")
+    assert sum(slept) >= 8.0
 
 
 def test_landscape_locks_portrait_or_reports_the_orientation():
