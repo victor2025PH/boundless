@@ -621,7 +621,7 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
        Q-18 最近 5 条（会话 / 时间 / 原因 / 命中词）。数据源 src/inbox/abort_ledger（app_settings KV 滚动 200，来自既有
        Q-18 [autosend] abort + [needs_human] 打标 两处日志点）。旧后端 404 → 整卡隐藏（rpsAlLoad）。 -->
   <div class="rps-card" id="rps-al-card" style="display:none">
-    <h3 id="rps-al-title">{{ (i18n or {}).get('rps_al_title', "🚧 今日拦截 · AI 为什么没回") }} <span class="rps-chip" id="rps-al-total" style="background:rgba(37,99,235,.12);color:var(--tk-brand,#2563eb)"></span></h3>
+    <h3 id="rps-al-title">{{ (i18n or {}).get('rps_al_title', "🚧 今日拦截 · AI 为什么没回") }} <span class="rps-chip" id="rps-al-total" style="background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 12%, transparent);color:var(--tk-brand,#1e8cf2)"></span></h3>
     <p class="rps-hint" id="rps-al-hint">{{ (i18n or {}).get('rps_al_hint', "最近 24 小时自动回复被拦下的次数，按原因码计：成人内容 / 风险保持 / 需人工 / 坐席刚发过（让位） / 坐席在打字（让位） / 档位切换 / 班表休息。让位两项从 v1.0.82 起只是延后不是丢稿，窗过自动发。") }}</p>
     <div class="rps-row" id="rps-al-counts" style="flex-wrap:wrap;gap:.4rem;border-top:none"></div>
     <table class="rps-po-table" id="rps-al-table"><thead><tr id="rps-al-thead">
@@ -1919,8 +1919,8 @@ function rpsFieldHost(def){
    数据 = /api/reply-settings 的 platform_caps（capability_matrix 现算，与编排器
    运行时 hasattr 判据同源）。字段缺席（旧进程未装载新路由）→ 整块隐藏——
    宁可少说，绝不再手写平台名（旧 hint「当前 Telegram 协议号支持」已实证烂掉）。 */
-var RPS_PLAT_NAMES = {telegram: "Telegram", whatsapp: "WhatsApp", line: "LINE", messenger: "Messenger"};
-var RPS_PLAT_ORDER = ["telegram", "whatsapp", "line", "messenger"];
+var RPS_PLAT_NAMES = {telegram: "Telegram", whatsapp: "WhatsApp", line: "LINE", messenger: "Messenger", zalo: "Zalo", instagram: "Instagram", qq: "QQ", douyin: "抖音", tiktok: "TikTok"};
+var RPS_PLAT_ORDER = ["telegram", "whatsapp", "line", "messenger", "zalo", "instagram", "qq", "douyin", "tiktok"];
 /* 只有语音触发列可编辑的桌面桥平台（微信电脑副驾）：后端 meta[voice.platform_triggers].keys 含该平台才渲染
    （老后端白名单不认 wechat → 不出这一行，避免提交被拒）。其余列按「跟随全局」禁用。 */
 var RPS_PLAT_VOICE_ONLY = ["wechat"];
