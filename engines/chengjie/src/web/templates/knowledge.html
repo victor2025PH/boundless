@@ -256,6 +256,8 @@
     <!-- 健康分：原本藏在维护面板深处，提到页头常驻可见（点击直达诊断）。刻意不加
          pro-only——简洁模式的运营正是最需要"知识库健不健康"信号的人群。 -->
     <div class="kb-stat" id="kb-health-chip" style="display:none;cursor:pointer" onclick="openMaintPanel();runHealthCheck()" title="{{ (i18n or {}).get('kb2_health_tip', '知识库健康分（点击查看诊断建议与修复入口）') }}">🏥 <strong id="s-health">—</strong> <span id="s-health-grade" style="font-size:.72rem;color:var(--t3)"></span></div>
+    <!-- 向量覆盖率（启用条目）：<100% 亮黄，点击直达健康诊断里的「重试」（2026-10-08 智语） -->
+    <div class="kb-stat" id="kb-embed-chip" style="display:none;cursor:pointer" onclick="openMaintPanel();runHealthCheck()" title="{{ (i18n or {}).get('kb_emb_title', '向量覆盖率（启用条目）') }}">🧬 <strong id="s-embed-pct">—</strong></div>
   </div>
 </div>
 
@@ -2786,7 +2788,9 @@ async function runHealthCheck(){
       </div>
       <span style="font-weight:700;color:${col};white-space:nowrap">${score}${window.T('kb_js_166')} ${grade}</span>
     </div>
-    <div style="font-size:.72rem;color:var(--t3)">H:${d.counts?.high||0} ${window.T('kb_js_167')} M:${d.counts?.medium||0} ${window.T('kb_js_168')} L:${d.counts?.low||0} ${window.T('msg_s112')}</div>`;
+    <div style="font-size:.72rem;color:var(--t3)">H:${d.counts?.high||0} ${window.T('kb_js_167')} M:${d.counts?.medium||0} ${window.T('kb_js_168')} L:${d.counts?.low||0} ${window.T('msg_s112')}</div>`
+    + _embedHealthHtml(d.embedding);
+  _applyEmbedChip(d.embedding);
   const advice=d.advice||[];
   if(!advice.length){listEl.innerHTML='<div style="color:var(--green);padding:.4rem 0">✅ '+window.T('kb_js_106')+'</div>';return;}
   const PRI={high:'var(--danger,#dc3545)',medium:'var(--amber)',low:'var(--t3)'};
@@ -2801,6 +2805,46 @@ async function runHealthCheck(){
       </div>
       <button class="btn btn-s btn-xs" onclick="editEntry('${a.entry_id}');closeMaintPanel()" title="${a.action}">${ACT[a.action]||window.T('msg_js_2042')}</button>
     </div>`).join('');
+}
+
+/* ── 向量覆盖率（启用条目）：导入 / 启用后后台自动向量化，失败自动退避重试；
+   这里把覆盖率、黄/绿灯和最近一次任务状态摆到健康诊断里，并给「重试」（2026-10-08 智语） ── */
+function _embedHealthHtml(e){
+  if(!e||typeof e.pct==='undefined')return '';
+  const yellow=e.light==='yellow';
+  const col=yellow?'var(--amber)':'var(--green)';
+  const st=(e.job&&e.job.status)||'';
+  let msg;
+  if(!yellow) msg=window.T('kb_emb_ok');
+  else if(e.reason==='embedding_unconfigured') msg=window.T('kb_emb_unconfigured');
+  else if(e.reason==='embedding_running'||(e.job&&e.job.running)) msg=window.T('kb_emb_running');
+  else if(e.reason==='embedding_retrying') msg=window.T('kb_emb_retrying');
+  else if(e.reason==='embedding_failed') msg=window.T('kb_emb_failed');
+  else msg=(e.pending||0)+' '+window.T('kb_emb_pending');
+  const lastFail=(e.job&&e.job.last_failed)?` · ${window.T('kb_emb_last_fail')}: ${Number(e.job.last_failed)||0}`:'';
+  const canRetry=yellow&&e.reason!=='embedding_unconfigured'&&!(e.job&&e.job.running);
+  return `
+    <div id="embed-health-row" data-light="${yellow?'yellow':'green'}" style="display:flex;align-items:center;gap:.4rem;margin-top:.4rem;font-size:.75rem">
+      <span>${yellow?'🟡':'🟢'}</span>
+      <span style="font-weight:600;color:${col}">${window.T('kb_emb_title')} ${Number(e.pct)||0}% (${Number(e.enabled_with_vector)||0}/${Number(e.enabled_total)||0})</span>
+      <span style="flex:1;color:var(--t3)">${msg}${lastFail}</span>
+      ${canRetry?`<button class="btn btn-s btn-xs" onclick="embedRetry()">↻ ${window.T('kb_emb_retry')}</button>`:''}
+    </div>`;
+}
+function _applyEmbedChip(e){
+  const chip=document.getElementById('kb-embed-chip');
+  if(!chip||!e||typeof e.pct==='undefined'||!e.enabled_total)return;
+  const el=document.getElementById('s-embed-pct');
+  el.textContent=(Number(e.pct)||0)+'%';
+  el.style.color=e.light==='yellow'?'var(--amber)':'var(--green)';
+  chip.style.display='';
+}
+async function embedRetry(){
+  try{
+    const r=await api('POST','/api/kb/embed-retry',{});
+    if(typeof showToast==='function')showToast(window.T(r&&r.ok?'kb_emb_queued':'kb_emb_unconfigured'),r&&r.ok?'success':'warning');
+  }catch(_){}
+  setTimeout(runHealthCheck,1500);
 }
 
 /* ── 向量化面板 ─────────────────────────────────────────── */
@@ -2942,6 +2986,7 @@ async function loadHealthChip(){
     sc.style.color=d.score>=80?'var(--green)':(d.score>=60?'var(--amber)':'var(--red)');
     document.getElementById('s-health-grade').textContent=d.grade||'';
     document.getElementById('kb-health-chip').style.display='';
+    _applyEmbedChip(d.embedding);
   }catch(_){}
 }
 
