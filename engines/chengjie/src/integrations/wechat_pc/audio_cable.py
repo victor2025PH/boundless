@@ -27,7 +27,12 @@ import json
 import logging
 import os
 import time
-from ctypes import HRESULT, POINTER, c_int, c_void_p, c_wchar_p, wintypes
+from ctypes import POINTER, c_int, c_void_p, c_wchar_p, wintypes
+
+try:
+    from ctypes import HRESULT
+except ImportError:  # Linux ctypes 没有 HRESULT；COM 类只在 _COM_OK 时定义
+    HRESULT = None  # type: ignore[misc, assignment]
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
