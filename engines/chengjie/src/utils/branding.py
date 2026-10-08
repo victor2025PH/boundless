@@ -17,8 +17,10 @@ from typing import Any, Dict, Optional
 # ── 无界科技 · 智聊 ChatX（本 repo 默认品牌族）────────────────────────────
 DEFAULT_COMPANY_NAME = "无界科技"
 DEFAULT_COMPANY_NAME_EN = "BOUNDLESS"
+DEFAULT_COMPANY_NAME_HANT = "無界科技"
 DEFAULT_PRODUCT_NAME = "智聊"
 DEFAULT_PRODUCT_NAME_EN = "ChatX"
+DEFAULT_PRODUCT_NAME_HANT = "智聊"
 DEFAULT_SITE_NAME = "无界科技 · 智聊"
 DEFAULT_SITE_NAME_SHORT = "无界科技"
 DEFAULT_SIDEBAR_NAME = "无界 · 智聊"
@@ -118,8 +120,12 @@ def _white_label_allowed(license_status: Any) -> bool:
 def brand_catalog() -> Dict[str, Any]:
     """品牌族结构化清单（供静态 JSON / 文档 / 前端只读引用）。"""
     return {
-        "company": {"zh": DEFAULT_COMPANY_NAME, "en": DEFAULT_COMPANY_NAME_EN},
-        "product": {"zh": DEFAULT_PRODUCT_NAME, "en": DEFAULT_PRODUCT_NAME_EN},
+        # zh_hant 列：09-02 brand.json 已补繁体（3cabfd4b），单一事实源这里同步，否则
+        # sync_brand_json 重写会把繁体列冲掉
+        "company": {"zh": DEFAULT_COMPANY_NAME, "zh_hant": DEFAULT_COMPANY_NAME_HANT,
+                    "en": DEFAULT_COMPANY_NAME_EN},
+        "product": {"zh": DEFAULT_PRODUCT_NAME, "zh_hant": DEFAULT_PRODUCT_NAME_HANT,
+                    "en": DEFAULT_PRODUCT_NAME_EN},
         "site_name": DEFAULT_SITE_NAME,
         "tagline": {"zh": "让沟通，无界", "en": "Communication, Boundless."},
         "assets": {

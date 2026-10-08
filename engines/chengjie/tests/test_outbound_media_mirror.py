@@ -258,7 +258,10 @@ def test_single_voice_mirror_uses_clean_transcript_and_sender():
     （带标记）；发布失败也如实标 media_type=voice；send_text_summary 分支的语音行
     本体单独镜像（不再隐形）。"""
     src = _sender_src()
-    assert '_vclean = " ".join(str(reply_text or "").split())' in src
+    # 文字/语音分说（text_voice_split）后，镜像念稿取「真正念出来的那段」_voice_mirror_text
+    # （默认＝reply_text，分说时＝前段 synth_source），仍是去空白的干净念稿
+    assert '_voice_mirror_text = reply_text' in src
+    assert '_vclean = " ".join(str(_voice_mirror_text or "").split())' in src
     i = src.index('_vclean = " ".join')
     seg = src[i:i + 2600]
     assert seg.count("_mirror_out_row(") >= 2           # summary 分支 + 仅语音分支

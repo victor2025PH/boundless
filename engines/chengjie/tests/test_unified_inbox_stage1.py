@@ -1232,8 +1232,11 @@ def test_unified_inbox_routes_slice38b_register_order_unchanged():
     from src.web.routes import unified_inbox_routes as mod
     src = inspect.getsource(mod.register_unified_inbox_routes)
     names = re.findall(r"^\s+register_(\w+)_routes\(", src, re.MULTILINE)
-    assert len(names) == 34, f"orchestrator 应挂载 34 个子域，实际 {len(names)}"
-    assert names == [
+    # 2026-10-08 ci-baseline：38b 之后新增 4 个子域（msgops / asr_correction / vision / tg_join），
+    # 均为插入；原 34 个的相对顺序不变（下方子序列断言守住拆分时序）
+    assert len(names) == 38, f"orchestrator 应挂载 38 个子域，实际 {len(names)}"
+    _added_after_38b = {"msgops", "asr_correction", "vision", "tg_join"}
+    assert [n for n in names if n not in _added_after_38b] == [
         "workspace_pages",
         "realtime", "read",
         "platform_login", "setup", "proxy_fingerprint", "account",
@@ -2334,7 +2337,9 @@ def test_unified_inbox_template_contains_oneclick_outbound_translation():
     assert "agent_xlate" in html
     # P1-2：'auto' 交服务端统一解析（预览与一击同源），前端读 resolved_target 回落
     assert "resolved_target" in html
-    assert "lang==='auto'" in html
+    # 2026-08-09 起会话标识恒传（不再只在 lang==='auto' 时带），'auto' 解析失败的回落改看
+    # 服务端 resolved_target 为空串
+    assert "d.resolved_target===''" in html
 
 
 def test_unified_inbox_translation_tokens_no_theme_drift():
@@ -2516,7 +2521,10 @@ def test_unified_inbox_template_contains_assign_suggestion():
     html = path.read_text(encoding="utf-8")
     assert "_convSuggestMine" in html          # 判定函数
     assert "conv-suggest-chip" in html          # 徽章样式类
-    assert "建议你接管" in html                 # 徽章文案
+    # 徽章文案已迁 i18n（inbox.conv.suggest），模板只留键
+    assert "window.T('inbox.conv.suggest')" in html
+    from src.web.i18n_packs import inbox_workspace as _iw
+    assert "建议你接管" in _iw.ZH["inbox.conv.suggest"]
     assert "suggested_agent" in html            # 读取后端字段
 
 

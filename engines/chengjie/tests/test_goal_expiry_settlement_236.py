@@ -344,11 +344,17 @@ def test_card_frontend_states_and_watchdog_names_goal():
     from src.web.i18n_packs import goals as gp
     for k in ("inbox.goal.auto.active", "inbox.goal.auto.stalled", "inbox.goal.auto.cap_reached"):
         assert k in gp.ZH and k in gp.EN
+    _stamps = set()
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html",
                  "src/web/templates/unified_inbox.html"):
         # 三宿主戳一致（随批次前移：M-7 e → N-5 发版 20260908b → O-3 D c → O-3 E d → Q-1 E 20260910a
         # → Q-5 C b；unified_inbox.html 在 Q-5 时别线整文件在途，b 戳随宿主线前移，两戳皆认）
-        assert re.search(r"cp-goal\.js\?v=20260910[ab]", (REPO / host).read_text(encoding="utf-8")), host
+        # 2026-10-08 ci-baseline：→ 20260912a。改为「三宿主同一个戳、且不早于 20260910a」，
+        # 不再逐批钉字母（宿主漏 bump 时三者不一致照样红）
+        _m = re.search(r"cp-goal\.js\?v=(\d{8}[a-z])", (REPO / host).read_text(encoding="utf-8"))
+        assert _m and _m.group(1) >= "20260910a", host
+        _stamps.add(_m.group(1))
+    assert len(_stamps) == 1, f"三宿主 cp-goal.js 缓存戳不一致：{sorted(_stamps)}"
     # 「查看消息」对齐：组件回落宿主 __wsFocusConv；iframe 宿主 app.html 桥 postMessage（双树一致）
     assert "root.__wsFocusConv" in js
     for host in ("shared/copilot/app.html", "desktop/renderer/shared/copilot/app.html"):

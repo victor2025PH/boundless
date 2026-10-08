@@ -126,8 +126,12 @@ def test_desktop_shell_honors_manual_and_auto_login_flag():
     assert "backend.auto_login !== false" in renderer
     assert 'searchParams.get("manual") === "1"' in main
     assert "auto_login === false" in main
-    # 两条代登 fetch 都自报 X-ChatX-Auto-Login: 1（服务端据此精确拒绝退出后的静默代登）
-    assert renderer.count("'X-ChatX-Auto-Login':'1'") == 1
-    assert main.count("'X-ChatX-Auto-Login':'1'") == 1
+    # 代登 fetch 都自报 X-ChatX-Auto-Login: 1（服务端据此精确拒绝退出后的静默代登）。
+    # 壳与 main 各有两条 POST /login：首登 backendLoginJS + 会话过期静默重登（凭据链）——
+    # 每一条都必须带头，不许有漏报的代登
+    for _js in (renderer, main):
+        _n_login = _js.count("fetch('/login'")
+        assert _n_login >= 1
+        assert _js.count("'X-ChatX-Auto-Login':'1'") == _n_login
     routes = (_ROOT / "src" / "web" / "routes" / "auth_user_routes.py").read_text(encoding="utf-8")
     assert 'request.headers.get("x-chatx-auto-login") == "1"' in routes

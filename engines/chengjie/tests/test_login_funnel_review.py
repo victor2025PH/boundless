@@ -137,8 +137,10 @@ def test_messenger_desc_does_not_claim_page_inbox():
     from src.web.web_i18n import get_translations
     zh = get_translations("zh")["inbox.plat.messenger_desc"]
     en = get_translations("en")["inbox.plat.messenger_desc"]
-    assert "非主页私信" in zh
-    assert "page inbox" in en.lower()
+    # P2 去黑话（B64 二期）后文案改为「个人 Messenger 账号接入」——仍须说明是个人号，
+    # 且不得宣称接主页（Page）收件箱
+    assert "个人" in zh and "主页收件箱" not in zh and "公共主页" not in zh
+    assert "personal" in en.lower() and "page inbox" not in en.lower()
 
 
 def test_ops_template_wires_alert_outlet_hint():

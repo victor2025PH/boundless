@@ -56,7 +56,8 @@ def test_61_status_enum_merges_runtime_registry_and_never_renders_placeholder():
     # #78-②：messenger_rpa 未启用且未配 accounts 时不凭空回退 default 占位
     assert re.search(r'if _mrpa_cfg\.get\("enabled"\) or _mrpa_cfg\.get\("accounts"\):', seg)
     # 绑定计数循环四路都算（LINE 行不能是「看得见指不了」）
-    assert "for acc in tg_accounts + mrpa_accounts + wa_accounts + line_accounts:" in seg
+    # 之后又并入 other_accounts（更多平台），四路仍须在循环里
+    assert re.search(r"for acc in \(?tg_accounts \+ mrpa_accounts \+ wa_accounts \+ line_accounts\b", seg)
 
 
 def test_61_placeholder_judgement_keeps_real_accounts():
@@ -183,11 +184,14 @@ def test_67_upload_route_validates_content_before_write_and_uses_data_root():
                    'url = f"/static/persona_albums/')
     # ② magic bytes 不过 = 当场 400，绝不静默存坏；校验必须在落盘之前
     assert re.search(
-        r"_bad = _sniff_media\(data, ext\)\s*\n\s*if _bad:\s*\n\s*raise HTTPException\(400", seg)
+        r"_bad = _sniff_media\(data, ext\)\s*\n\s*if _bad:\s*\n\s*raise (?:HTTPException\(400|_reject\(request, 400)", seg)
+    # （拒收统一经 _reject：仍是 400，额外带机器可读 reason + 审计）
     assert '"err.pmedia.bad_content"' in seg
-    assert seg.index("_sniff_media(data, ext)") < seg.index("fpath.write_bytes(data)")
-    # ② 落盘后回读验证（写成功 ≠ 内容对）
-    assert "_head != bytes(data[:16])" in seg
+    # 落盘改走 run_in_threadpool(fpath.write_bytes, data)（不阻塞事件循环）；大文件另有流式路径
+    # （先 _sniff_media(head, ext) 再落盘），两条都必须「先验后写」
+    assert seg.index("_sniff_media(data, ext)") < seg.index("fpath.write_bytes, data")
+    # ② 落盘后回读验证（写成功 ≠ 内容对）：内存路径对 data 头、流式路径对 head 头
+    assert "verify_head = bytes(data[:16])" in seg and "_head != verify_head" in seg
     # 落盘目录来自 _album_root()（不再 Path(__file__) 推安装目录）
     assert "d = _album_root() / safe" in seg
 

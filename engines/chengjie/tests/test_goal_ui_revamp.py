@@ -79,7 +79,10 @@ def test_inbox_host_discoverability(inbox_html: str):
     assert "cp-goal-drive-draft" in inbox_html
     # 改 cp-goal.js 必须 bump 缓存戳（本断言随批次前移；Q-1 E a → Q-5 C b）。unified_inbox.html 在 Q-5 时
     # 是别线整文件在途（CRLF 翻转，无法单 hunk 暂存），b 戳随宿主线提交前移——两戳皆认，HEAD / 工作树都绿。
-    assert re.search(r"cp-goal\.js\?v=20260910[ab]", inbox_html), "cp-goal.js 缓存戳丢失 / 未随批次前移"
+    # 2026-10-08 ci-baseline：戳已前移到 20260912a（三宿主一致，见 test_goal_expiry_settlement_236），
+    # 这里只守「戳在、且不早于 Q-1 E 的 20260910a」，不再逐批钉死具体字母
+    _m = re.search(r"cp-goal\.js\?v=(\d{8}[a-z])", inbox_html)
+    assert _m and _m.group(1) >= "20260910a", "cp-goal.js 缓存戳丢失 / 未随批次前移"
     # M-7 A（#236）：目标卡「查看消息」经 iframe 桥 cp-goal-jump-message → 宿主 __wsFocusConv（与通知中心点击同源）
     assert "m.type==='cp-goal-jump-message'" in inbox_html
 

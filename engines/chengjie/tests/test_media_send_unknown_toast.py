@@ -48,7 +48,10 @@ def test_media_item_html_picks_wording_by_truth():
     src = _TPL.read_text(encoding="utf-8")
     i = src.find("function _mediaItemHtml")
     assert i > 0
-    window = src[i: i + 1500]
+    # 函数体随 Q-40 C（上限提示/压缩按钮）、M-3 D 四分类增长，固定 1500 字窗口已截不到失败分支；
+    # 改为取到下一个顶层 function 为止
+    _j = src.find("\nfunction ", i + 1)
+    window = src[i: _j if _j > 0 else i + 6000]
     assert ("it.unknownRestart?'inbox.media.retry_hint_unknown'"
             ":'inbox.media.send_result_unknown'") in window, (
         "附件条必须按 unknownRestart 二选一：重启中 / 没拿到发送结果")

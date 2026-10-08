@@ -109,6 +109,8 @@ def test_wiring_send_route_checks_prior_id():
     assert "resend_verdict(" in src, "裁决必须走单一事实源纯函数"
     assert "guard=resend_dup" in src, "压制要留可 grep 的日志标签"
     # 裁决必须发生在真发送之前——落在 reserve 之前即可保证（reserve 之后才是发送链）
+    # 只看 /send 路由本身：文件前部的 _send_media_streamed 也有自己的 reserve（媒体去重域），不是本链
+    src = src[src.index('@app.post("/api/unified-inbox/send")'):]
     i_verdict = src.index("resend_verdict(")
     i_reserve = src.index("_dedup.reserve(_dedup_scope, _client_msg_id)")
     assert i_verdict < i_reserve, "裁决要在占位/发送之前，别发完了才判"

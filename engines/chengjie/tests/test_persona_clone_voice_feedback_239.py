@@ -89,6 +89,10 @@ def test_drawer_dirty_ignores_enroll_widget_events():
 def test_preset_preview_no_cjk_fallback_left():
     html = _html()
     pp = _seg(html, "async function _presetPreview(", "function _vmRefName(")
-    assert "window.Tf('psn_voice_preview_text', {name: nm})" in pp
+    # 09-24 起试听稿按音色语种取样（_vmPreviewText），无语种样本时才回落 Tf 模板——仍无中文 fallback
+    assert ("window.Tf('psn_voice_preview_text', {name: nm})" in pp
+            or "_vmPreviewText(meta, 'psn_voice_preview_text', nm)" in pp)
+    helper = _seg(html, "function _vmPreviewText(", "async function _presetPreview(")
+    assert "window.Tf(key, {name: nm})" in helper
     assert "window.Tf('psn_voice_preview_fail'" in pp
     assert not re.search(r"window\.T\('psn_voice_preview_(text|fail)',\s*'", pp), "中文 fallback 又回来了"
