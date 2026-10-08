@@ -39,11 +39,16 @@ companion:
 inbox:
   enabled: true
 
-# ── 脚本测试号（2026-10-08 Morgan 确认 6834…252 是脚本 / 值守工具的测试流量）──
-# 限速闸（send_rate_gate 的 script_daily_cap）与 messages.sent_by=script 归因共用这一份名单
-# （读取口 src/compliance/send_rate_gate.script_accounts）；环境变量 CHENGJIE_SCRIPT_SENDER_ACCOUNTS
-# 只作临时覆盖。⚠ 并入现网 overlay 前先与智安确认 script_daily_cap：缺省 20 条/号/24h，
-# 该号近 7 天约 45 条/天出站，并入后经编排器的发送会被这道日上限拦。
+# ── 脚本测试号 / 限速闸每号覆盖（2026-10-08 蛋博士拍板）──────────────────────
+# 限速闸 script_daily_cap 与 messages.sent_by=script 归因共用 script_accounts 这一份名单
+# （读取口 src/compliance/send_rate_gate.script_accounts；环境变量 CHENGJIE_SCRIPT_SENDER_ACCOUNTS
+# 只作临时覆盖）。脚本日上限缺省仍 20 条/号/24h；Morgan 的脚本测试号单独覆盖为 60。
+# ⚠ 封号风险：放宽到 60 条/天意味着这个号每天可被脚本发 60 条，远超平台对单号的稳妥量，
+#   一旦被风控判为机器流量可能限流或封号；只给确认的测试号放宽，别的号不要照抄。
+# ⚠ 仓库里只留占位 <SCRIPT_TEST_ACCOUNT_ID>：真实账号 id 只写进实例目录里那份 overlay（不入库），
+#   并入现网时把占位换成真实 id；占位本身不匹配任何账号，原样部署＝不生效。
 compliance:
   send_rate_gate:
-    script_accounts: ["telegram:6834964252"]
+    script_accounts: ["telegram:<SCRIPT_TEST_ACCOUNT_ID>"]
+    script_daily_cap_overrides:
+      "telegram:<SCRIPT_TEST_ACCOUNT_ID>": 60

@@ -19,6 +19,8 @@
      ``mark_script_from_request`` 置位上下文；
    - ``compliance.send_rate_gate.script_peers``：对端 chat_key 命中（子串，号码有无国家码均可）；
    - ``compliance.send_rate_gate.script_accounts``：``platform:account_id`` 或 ``account_id``。
+   每号覆盖：``script_daily_cap_overrides: {"platform:account_id" | "account_id": N}``（蛋博士
+   10-08：缺省仍 20，个别脚本测试号单独放宽；放宽即放大封号风险，只在实例 overlay 里配真实号）。
 3. 手机端 / 外部发送（``phone``）不经本系统出站，不拦，只经 :func:`record_external` 单独计数。
 
 来源口径与 ``messages.sent_by`` 对齐：``ai`` / ``agent`` / ``script`` / ``phone``
@@ -56,6 +58,7 @@ DEFAULTS: Dict[str, Any] = {
     "enabled": True,
     "warmup_block": True,
     "script_daily_cap": 20,
+    "script_daily_cap_overrides": {},
     "script_peers": [],
     "script_accounts": [],
     "db_path": "config/send_rate_gate.db",
@@ -116,6 +119,27 @@ def is_script_account(platform: Any, account_id: Any, config: Any = None) -> boo
         return _match_list(script_accounts(config), f"{platform or ''}:{acct}", acct)
     except Exception:
         return False
+
+
+def script_daily_cap_for(platform: str, account_id: str, config: Any = None) -> int:
+    """该号的脚本日上限：``script_daily_cap_overrides`` 命中（先 ``platform:account_id`` 再裸
+    ``account_id``）用覆盖值，否则 ``script_daily_cap``（缺省 20）。值非法 → 回落缺省；<0 不限。"""
+    g = gate_cfg(config)
+    try:
+        base = int(g.get("script_daily_cap", DEFAULTS["script_daily_cap"]))
+    except Exception:
+        base = int(DEFAULTS["script_daily_cap"])
+    ov = g.get("script_daily_cap_overrides") or {}
+    if isinstance(ov, dict) and ov:
+        p, a = str(platform or "").strip(), str(account_id or "").strip()
+        for key in (f"{p}:{a}", a):
+            if key in ov:
+                try:
+                    return int(ov[key])
+                except Exception:
+                    logger.warning("[send-rate-gate] script_daily_cap_overrides[%s] 非整数，用缺省", key)
+                    return base
+    return base
 
 
 def _truthy(v: Any, default: bool = True) -> bool:
@@ -460,10 +484,7 @@ def check(
         since = ts - _DAY
         # ② 脚本流量日上限（任何天龄）
         if org == ORIGIN_SCRIPT:
-            try:
-                scap = int(g.get("script_daily_cap", DEFAULTS["script_daily_cap"]))
-            except Exception:
-                scap = int(DEFAULTS["script_daily_cap"])
+            scap = script_daily_cap_for(p, a, config)
             if scap >= 0:
                 used_s = st.count(p, a, since=since, origins=(ORIGIN_SCRIPT,))
                 if used_s >= scap:
@@ -569,7 +590,8 @@ def snapshot(platform: str, account_id: str, *, config: Any = None, registry: An
             out["cap"] = warmup_cap(age, wp["target_cap"], start_cap=wp["start_cap"],
                                     ramp_days=wp["ramp_days"])
             out["in_warmup"] = True
-        out["script_daily_cap"] = int(gate_cfg(config).get("script_daily_cap") or 0)
+        out["script_daily_cap"] = script_daily_cap_for(str(platform or ""), str(account_id or "default"),
+                                                       config)
     except Exception:
         logger.debug("[send-rate-gate] snapshot 失败", exc_info=True)
     return out
@@ -577,7 +599,7 @@ def snapshot(platform: str, account_id: str, *, config: Any = None, registry: An
 
 __all__ = [
     "ORIGIN_AI", "ORIGIN_AGENT", "ORIGIN_SCRIPT", "ORIGIN_PHONE", "REASON_WARMUP", "REASON_SCRIPT",
-    "gate_cfg", "enabled", "classify_origin", "origin_to_sent_by", "in_script_scope",
+    "gate_cfg", "enabled", "classify_origin", "script_daily_cap_for", "origin_to_sent_by", "in_script_scope",
     "set_script_scope", "reset_script_scope", "mark_script_from_request", "SendRateStore",
     "get_store", "reset_for_tests", "check", "record_external", "snapshot",
 ]

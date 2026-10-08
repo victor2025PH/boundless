@@ -384,15 +384,15 @@ def test_aline_mirror_rows_tagged_ai():
 
 
 def test_script_sender_account_outbound_is_script(tmp_path, monkeypatch):
-    """Morgan 2026-10-08：报障群支持号 6834964252 的出站是脚本测试 → sent_by=script（名单走配置）。"""
+    """Morgan 2026-10-08：报障群支持号（6834…252，测试里用假 id）的出站是脚本测试 → sent_by=script（名单走配置）。"""
     from src.compliance import runtime as _rt
     from src.inbox.store import script_sender_accounts
     monkeypatch.delenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", raising=False)
-    cfg = {"compliance": {"send_rate_gate": {"script_accounts": ["telegram:6834964252"]}}}
+    cfg = {"compliance": {"send_rate_gate": {"script_accounts": ["telegram:7000000001"]}}}
     monkeypatch.setattr(_rt, "_PROVIDER", lambda: cfg)
-    assert "telegram:6834964252" in script_sender_accounts()
+    assert "telegram:7000000001" in script_sender_accounts()
     store = InboxStore(tmp_path / "inbox.db")
-    cid = "telegram:6834964252:-1001234567890"
+    cid = "telegram:7000000001:-1001234567890"
     t = 1_757_000_000.0
     store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="d1", direction="out",
                                       text="值守播报", ts=t))
@@ -402,7 +402,7 @@ def test_script_sender_account_outbound_is_script(tmp_path, monkeypatch):
                                       text="坐席亲手", ts=t + 2, sent_by="agent"))
     store.ingest_message(InboxMessage(conversation_id=cid, platform_msg_id="c1", direction="in",
                                       text="收到", ts=t + 3))
-    conv = InboxConversation(conversation_id=cid, platform="telegram", account_id="6834964252",
+    conv = InboxConversation(conversation_id=cid, platform="telegram", account_id="7000000001",
                              chat_key="-1001234567890")
     store.ingest_batch(conv, [InboxMessage(conversation_id=cid, platform_msg_id="d4", direction="out",
                                            text="批量播报", ts=t + 4)])
@@ -431,34 +431,73 @@ def test_script_accounts_single_source_config_first_env_overrides(monkeypatch):
     # 无 provider、无配置：名单为空（缺省不臆造脚本号），两边都不判 script
     monkeypatch.setattr(_rt, "_PROVIDER", None)
     assert g.script_accounts() == [] and g.DEFAULTS["script_accounts"] == []
-    assert st._is_script_sender_conv("telegram:6834964252:1") is False
-    assert g.classify_origin("auto", platform="telegram", account_id="6834964252") == "ai"
+    assert st._is_script_sender_conv("telegram:7000000001:1") is False
+    assert g.classify_origin("auto", platform="telegram", account_id="7000000001") == "ai"
     # 实时配置（overlay 热重载走 provider）：两边同时生效
-    cfg = {"compliance": {"send_rate_gate": {"script_accounts": ["telegram:6834964252"]}}}
+    cfg = {"compliance": {"send_rate_gate": {"script_accounts": ["telegram:7000000001"]}}}
     monkeypatch.setattr(_rt, "_PROVIDER", lambda: cfg)
-    assert g.script_accounts() == ["telegram:6834964252"]
-    assert st._is_script_sender_conv("telegram:6834964252:1") is True
+    assert g.script_accounts() == ["telegram:7000000001"]
+    assert st._is_script_sender_conv("telegram:7000000001:1") is True
     assert st._is_script_sender_conv("telegram:111:1") is False
-    assert g.classify_origin("auto", platform="telegram", account_id="6834964252") == "script"
+    assert g.classify_origin("auto", platform="telegram", account_id="7000000001") == "script"
     # 显式传入的 config 优先于 provider（限速闸调用方传 config 的路径不变）
     assert g.script_accounts({"compliance": {"send_rate_gate": {"script_accounts": "a1, b2"}}}) == ["a1", "b2"]
     # 环境变量覆盖：设了就整体替换（两边一起），空串＝清空
     monkeypatch.setenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", "999")
     assert g.script_accounts(cfg) == ["999"]
-    assert st._is_script_sender_conv("telegram:6834964252:1") is False
+    assert st._is_script_sender_conv("telegram:7000000001:1") is False
     assert st._is_script_sender_conv("whatsapp:999:x") is True
-    assert g.classify_origin("auto", platform="telegram", account_id="6834964252", config=cfg) == "ai"
+    assert g.classify_origin("auto", platform="telegram", account_id="7000000001", config=cfg) == "ai"
     monkeypatch.setenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", "")
     assert g.script_accounts(cfg) == [] and st.script_sender_accounts() == frozenset()
 
 
 def test_zhiliao_overlay_template_declares_script_accounts():
+    """模板只留占位，不入库真实号；cap 覆盖 60、缺省 20 不动。"""
     import yaml
     p = _ENGINE.parents[1] / "deploy" / "instances" / "zhiliao" / "config.local.yaml"
-    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
-    assert doc["compliance"]["send_rate_gate"]["script_accounts"] == ["telegram:6834964252"]
-    # 模板只加名单，不碰限速闸其他开关（cap/enabled 以智安缺省 + 现网 overlay 为准）
-    assert set(doc["compliance"]["send_rate_gate"]) == {"script_accounts"}
+    text = p.read_text(encoding="utf-8")
+    doc = yaml.safe_load(text)
+    node = doc["compliance"]["send_rate_gate"]
+    assert node["script_accounts"] == ["telegram:<SCRIPT_TEST_ACCOUNT_ID>"]
+    assert node["script_daily_cap_overrides"] == {"telegram:<SCRIPT_TEST_ACCOUNT_ID>": 60}
+    assert "script_daily_cap" not in node and "enabled" not in node
+    assert "封号风险" in text
+    import re as _re
+    assert not _re.search(r"\d{8,}", text), "模板里不得出现真实账号 id / 号码"
+
+
+def test_script_daily_cap_per_account_override(tmp_path, monkeypatch):
+    """蛋博士 10-08：script_daily_cap 缺省 20；测试号每号覆盖 60（platform:id 与裸 id 都认）。"""
+    from src.compliance import send_rate_gate as g
+    monkeypatch.setenv("ZHILIAO_SEND_RATE_GATE", "on")
+    monkeypatch.delenv("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", raising=False)
+    cfg = {"compliance": {"send_rate_gate": {
+        "enabled": True, "warmup_block": False,
+        "script_accounts": ["telegram:7000000001", "other1"],
+        "script_daily_cap_overrides": {"telegram:7000000001": 60, "other1": "bad"},
+    }}}
+    assert g.DEFAULTS["script_daily_cap"] == 20
+    assert g.script_daily_cap_for("telegram", "7000000001", cfg) == 60
+    assert g.script_daily_cap_for("telegram", "123", cfg) == 20
+    assert g.script_daily_cap_for("whatsapp", "other1", cfg) == 20      # 非法值回落缺省
+    assert g.script_daily_cap_for("telegram", "7000000001", {}) == 20
+    st = g.SendRateStore(tmp_path / "rate.db")
+    import time as _time
+    t0 = _time.time() - 3600   # store 按真实时钟清 24h 前的事件
+    def send(acct, i):
+        return g.check("telegram", acct, origin="auto", chat_key="c", config=cfg, now=t0 + i,
+                       store=st, age_days=999)
+    assert all(send("7000000001", i)["allowed"] for i in range(60))
+    r = send("7000000001", 60)
+    assert r["allowed"] is False and r["reason"] == g.REASON_SCRIPT and r["cap"] == 60
+    cfg2 = {"compliance": {"send_rate_gate": dict(cfg["compliance"]["send_rate_gate"],
+                                                  script_accounts=["telegram:7000000001", "telegram:7000000002"])}}
+    for i in range(20):
+        assert g.check("telegram", "7000000002", config=cfg2, now=t0 + i, store=st, age_days=999)["allowed"]
+    r2 = g.check("telegram", "7000000002", config=cfg2, now=t0 + 21, store=st, age_days=999)
+    assert r2["allowed"] is False and r2["cap"] == 20
+    assert g.snapshot("telegram", "7000000001", config=cfg)["script_daily_cap"] == 60
 
 
 def test_orchestrator_mirror_follows_send_rate_gate_script_scope():
