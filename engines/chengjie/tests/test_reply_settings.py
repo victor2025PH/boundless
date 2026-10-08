@@ -1322,10 +1322,15 @@ class TestPlatformExpert:
     """平台专家覆写：白名单/校验/合并/能力护栏/溯源/键域一致性。"""
 
     def test_platforms_match_worker_registry(self):
-        # PLATFORMS 刻意本地定义（纯函数模块零依赖）——与能力矩阵 WORKERS
-        # 注册表的平台集合必须一致，漂移即红（新平台上线两处都要登记）。
+        # PLATFORMS 刻意本地定义（纯函数模块零依赖）。键域 = 能力矩阵 WORKERS
+        # 与登录支持集的交集：已支持的新平台漏登记即红。抖音/TikTok 有 worker
+        # 但注册表 implemented=False，不在 SUPPORTED，翻实现前不进节奏表。
         from src.integrations.platform_capabilities import WORKERS
-        assert set(rps.PLATFORMS) == {p for p, _m, _mod, _c in WORKERS}
+        from src.integrations.platform_login import SUPPORTED_PLATFORMS
+        workers = {p for p, _m, _mod, _c in WORKERS}
+        supported = set(SUPPORTED_PLATFORMS)
+        assert set(rps.PLATFORMS) == workers & supported
+        assert {"douyin", "tiktok"} <= workers - supported
 
     def test_sanitize_platform_modes(self):
         clean, errors = rps.sanitize_patch({_PM: {"Messenger": "Review"}})
@@ -1346,7 +1351,7 @@ class TestPlatformExpert:
         assert errors == []
         assert clean[_PLAT_OV]["messenger"] == {
             "min_sec": 10, "max_sec": 30, "adaptive": True}
-        _, errors = rps.sanitize_patch({_PLAT_OV: {"weibo": {"min_sec": 1}}})
+        _, errors = rps.sanitize_patch({_PLAT_OV: {"tiktok": {"min_sec": 1}}})
         assert errors[0]["code"] == "bad_platform"
         _, errors = rps.sanitize_patch(
             {_PLAT_OV: {"line": {"per_char_sec": 0.1}}})
