@@ -264,6 +264,25 @@
     --tk-radius-sm:7px;
     --tk-radius-lg:14px;   /* 大卡/向导卡（此前仅靠回落字面量，token 契约补齐） */
     --tk-gap:12px;
+    /* 旧名别名（2026-10-09）：引用在、主题块里没有，暗色恒走亮色回落。
+       接到已有日夜双档令牌上，不另起一套色值。 */
+    --tk-ink:var(--tk-text);
+    --tk-ink-2:var(--tk-text-muted);
+    --tk-ink-3:var(--tk-text-muted);
+    --tk-line:var(--tk-border);
+    --tk-fg-muted:var(--tk-text-muted);
+    --tk-warn:var(--tk-warn-ink);
+    --panel:var(--tk-surface);
+    --panel-2:var(--tk-surface-2);
+    --text:var(--tk-text);
+    --text-muted:var(--tk-text-muted);
+    --warn-fg:var(--tk-warn-ink);
+    --cg-accent:var(--tk-brand);
+    --wx-kf:var(--tk-brand);
+    --wx-badge:#4b5563;
+    --wx-on-badge:#fff;
+    --wx-muted:var(--tk-text-muted);
+    --wx-warn:var(--tk-amber);
   }
   [data-cp-theme="dark"]{
     /* color-scheme：UA 原生件（滚动条/日期控件/未显式着色表单件）跟随深色，消掉
@@ -293,6 +312,7 @@
     --tk-shadow:0 2px 12px rgba(0,0,0,.5);
     --tk-shadow-md:0 10px 32px rgba(0,0,0,.6);
     --tk-ring:color-mix(in srgb, var(--bl-growth,#1e8cf2) 45%, transparent);  /* 品牌智连蓝 focus ring（color-mix 引令牌，换肤自动跟随） */
+    --wx-badge:#6b7280;
   }
   *{box-sizing:border-box;}
   .ws-top a:focus-visible,.ws-top button:focus-visible,button:focus-visible,[role="button"]:focus-visible,a.ws-nav-item:focus-visible{outline:2px solid var(--tk-brand);outline-offset:2px;border-radius:6px;}

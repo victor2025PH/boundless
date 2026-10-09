@@ -159,7 +159,7 @@
     "cp.alert.buried_conv": "有會話被歸檔埋掉了（客戶在等，但列表裡看不見）",
     "cp.alert.cases": "有會話需要人工跟進（危機 / 要人工 / 穿幫質疑）",
     "cp.alert.colloquial_llm": "口語化模型連續失敗",
-    "cp.alert.compute_lane": "三路算力欠費或故障（173 / DeepSeek / 矽基互相頂班）",
+    "cp.alert.compute_lane": "有一路回覆服務欠費或故障，備用線路會頂上",
     "cp.alert.csat_alert": "客戶滿意度跌破警戒線",
     "cp.alert.csrf_reject": "安全攔截激增（CSRF）",
     "cp.alert.cta_click": "客戶點了引導連結（最熱跟進時機）",

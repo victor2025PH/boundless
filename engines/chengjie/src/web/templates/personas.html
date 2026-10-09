@@ -1256,7 +1256,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <div class="field-row" id="ad-row">
       <label>{{ (i18n or {}).get('psn_pf_adult','成人话题') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_pf_adult_hint','开黄腔一句不转人工；露骨/施压才拦。拦下后怎么办由这里决定') }}</span>
         <!-- 2026-09-19：机器级 adult_grader.default_policy 已配置时亮出来——否则运营以为「跟随域默认」还有人工闸 -->
-        <span id="ad-machine-badge" style="display:none;margin-left:.4rem;font-size:.68rem;padding:.05rem .4rem;border-radius:.6rem;background:rgba(255,120,60,.14);color:#e0783c;vertical-align:middle"></span>
+        <span id="ad-machine-badge" style="display:none;margin-left:.4rem;font-size:.68rem;padding:.05rem .4rem;border-radius:.6rem;background:var(--th-bg-orange14,rgba(255,120,60,.14));color:var(--th-ink-orange,#e0783c);vertical-align:middle"></span>
       </label>
       <div class="opt-cards" id="ad-cards">
         <div class="opt-card" data-val="" onclick="_selAdultPolicy(this)"><span class="oc-ico">🧭</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_default','跟随域默认') }}</span></div>
@@ -4037,7 +4037,7 @@ function _pmaCard(raw) {
     + '</select>';
   const checked = _alSel[String(raw.id)] ? ' checked' : '';
   return '<div class="pma-card' + (it.enabled ? '' : ' pma-off') + (dirty ? ' pma-dirty' : '') + (needTrg ? ' pma-need-trg' : '') + '" data-mid="' + mid + '" oninput="_pmaOnEdit(this)" onchange="_pmaOnEdit(this)">'
-    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:rgba(255,255,255,.85);border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><div class="pma-th-link" role="button" tabindex="0" data-url="' + url + '" onclick="_pmaLightbox(' + midArg + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_pmaLightbox(' + midArg + ');}">' + thumb + '</div>' + badge
+    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:var(--th-bg-glass85,rgba(255,255,255,.85));border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><div class="pma-th-link" role="button" tabindex="0" data-url="' + url + '" onclick="_pmaLightbox(' + midArg + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_pmaLightbox(' + midArg + ');}">' + thumb + '</div>' + badge
     + (sts.length ? '<div class="pma-st">' + sts.join('') + '</div>' : '') + '</div>'
     + '<input type="text" class="pma-in pma-trg" value="' + _pmaEsc(trg) + '" placeholder="' + window.T(needTrg ? 'pma_need_trg_ph' : 'pma_triggers_ph') + '" title="' + window.T('pma_triggers_label') + '">'
     + chips

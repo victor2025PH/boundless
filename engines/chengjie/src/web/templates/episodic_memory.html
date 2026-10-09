@@ -139,7 +139,7 @@ a.em-open{text-decoration:none;line-height:1;font-weight:700}
   {# O-2 D（#201 WYNN22）：「自安装以来新增 N 条 · 今日 +T · 已转正 P」——回答「抽取链有没有在产出」；
      入站 ≥50 而记忆 0 条 → 红字「记忆没有在增长」+ 链到日志页（看 [episodic] 行）。旧后端无 growth 字段 → 两行都隐藏 #}
   <div id="cs-growth" hidden style="font-size:.8rem;color:var(--t2);margin:-.1rem 0 .55rem" title="{{ (i18n or {}).get('em_growth_tip', '从记忆库建立（安装）起累计写入的条数，含后来被删除 / 过时的；今日按本机日期 0 点起算') }}"></div>
-  <div id="cs-stall" hidden role="alert" style="font-size:.8rem;font-weight:600;color:var(--tk-danger-ink,#dc2626);background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.35);border-radius:8px;padding:.45rem .7rem;margin:0 0 .6rem;line-height:1.5"></div>
+  <div id="cs-stall" hidden role="alert" style="font-size:.8rem;font-weight:600;color:var(--tk-danger-ink,#dc2626);background:var(--th-bg-rose08,rgba(220,38,38,.08));border:1px solid var(--th-bd-rose35,rgba(220,38,38,.35));border-radius:8px;padding:.45rem .7rem;margin:0 0 .6rem;line-height:1.5"></div>
   {# J-10 B5：「AI 记忆健康」KPI——今日需处理 / AI 已记住 / 未记录（护栏丢弃）/ 被用轮数 / 抽检准确率；
      数据全部来自 A 组新增字段（/summary 的 review / grounding_drops / recall + /correction-stats） #}
   <div class="cs-grid" id="cs-grid">

@@ -568,7 +568,7 @@ details.rps-adv[open] .rps-adv-caret{transform:rotate(90deg)}
        AI 是否停下交给人。人设列只调「记录级别」（标签颜色 / 记录），不影响拦不拦。 -->
   <div class="rps-card" id="rps-sec-risk" style="display:none">
     <h3>{{ (i18n or {}).get('rps_rk_title', "🧯 敏感话题 · AI 遇到这些话会怎么做") }}
-      <span class="rps-chip" id="rps-rk-dirty" style="display:none;background:rgba(245,158,11,.14);color:var(--amber)">{{ (i18n or {}).get('rps_rk_dirty', "有未保存的改动") }}</span></h3>
+      <span class="rps-chip" id="rps-rk-dirty" style="display:none;background:var(--th-bg-amber14,rgba(245,158,11,.14));color:var(--amber)">{{ (i18n or {}).get('rps_rk_dirty', "有未保存的改动") }}</span></h3>
     <p class="rps-hint" id="rps-rk-hint">{{ (i18n or {}).get('rps_rk_hint', "客户说到下面这些话，AI 默认都会继续回复，只在会话上记一笔。想让某类话 AI 停下来交给人，打开那一行的「锁定」。全球客户同一套规则，不分昼夜。摘掉「需人工」后同类 {n} 分钟内不再重打。") }}</p>
     <div class="rps-row" style="flex-wrap:wrap;gap:.4rem .6rem" id="rps-rk-legend"></div>
     <div class="rps-row">
@@ -4668,7 +4668,7 @@ async function rpsAlLoad(){
     var cbox = document.getElementById('rps-al-counts');
     if (cbox) cbox.innerHTML = order.map(function(k){
       var n = Number(counts[k] || 0);
-      return '<span class="rps-chip" style="' + (n ? 'background:rgba(220,38,38,.10);color:var(--t)' : 'opacity:.55') + '">' + rpsEsc(rpsAlReason(k)) + ' · ' + n + '</span>';
+      return '<span class="rps-chip" style="' + (n ? 'background:var(--th-bg-rose10,rgba(220,38,38,.10));color:var(--t)' : 'opacity:.55') + '">' + rpsEsc(rpsAlReason(k)) + ' · ' + n + '</span>';
     }).join('');
     var rows = d.recent || [], tb = document.getElementById('rps-al-tbody'), tbl = document.getElementById('rps-al-table'), empty = document.getElementById('rps-al-empty');
     if (tb) tb.innerHTML = rows.map(function(x){

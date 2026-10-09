@@ -420,11 +420,10 @@ _COPILOT_DIR = _REPO / "shared" / "copilot"
 _TINY_FONT_CEILINGS = {
     "app.html": 8,
     "components/cp-accounts.js": 6,
-    "components/cp-chain-exec.js": 6,
+    # cp-chain-exec.js / cp-goal.js / cp-nurture.js：2026-10-09 把 <12px 硬编码
+    # 字号改成 var(--cp-fs-tiny,12px)，实测归零，从台账除名（未登记＝天花板 0）。
     "components/cp-collab.js": 2,
-    "components/cp-goal.js": 24,
     "components/cp-kb.js": 5,
-    "components/cp-nurture.js": 7,
     "components/cp-origin.js": 1,
     "components/cp-persona.js": 9,
     "components/cp-tg-members.js": 2,

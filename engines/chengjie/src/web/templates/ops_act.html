@@ -57,7 +57,7 @@
           {% elif muted %}<span class="pill quiet">{{ ((i18n or {}).get('oa.state_muted', 'Muted until {until}')).replace('{until}', muted_until) }}</span>
           {% elif acked %}<span class="pill quiet">{{ (i18n or {}).get('oa.state_acked', 'Acknowledged') }}</span>
           {% else %}<span class="pill open">{{ (i18n or {}).get('oa.state_open', 'Still reminding') }}</span>{% endif %}
-          {% if by %}<span style="font-size:12px;color:#6b7280"> · {{ by }}</span>{% endif %}
+          {% if by %}<span style="font-size:12px;color:var(--th-ink-gray5,#6b7280)"> · {{ by }}</span>{% endif %}
         </dd>
         {% if hours_txt %}<dt>{{ (i18n or {}).get('oa.since', 'Open for') }}</dt><dd>{{ hours_txt }}</dd>{% endif %}
       </dl>
