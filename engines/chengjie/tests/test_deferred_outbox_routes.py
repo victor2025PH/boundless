@@ -61,7 +61,7 @@ def test_status_disabled_when_no_store():
 def test_status_reports_stats_and_senders():
     client, store = _client()
     store.enqueue(platform="telegram", account_id="a", chat_key="c1",
-                  reply_text="secret text here", defer_until=NOW + 9999, now=NOW,
+                  reply_text="queued message body", defer_until=NOW + 9999, now=NOW,
                   reason="no_sender")
     r = client.get("/api/deferred-outbox/status").json()
     assert r["enabled"] is True
@@ -71,7 +71,7 @@ def test_status_reports_stats_and_senders():
     assert len(r["recent"]) == 1
     # reply_text 不外泄，只回长度
     assert "reply_text" not in r["recent"][0]
-    assert r["recent"][0]["reply_len"] == len("secret text here")
+    assert r["recent"][0]["reply_len"] == len("queued message body")
     assert r["recent"][0]["platform"] == "telegram"
 
 

@@ -125,6 +125,10 @@ engines/chengjie/desktop/test/backend-launcher.test.js:generic-api-key:130
 engines\chengjie\desktop\test\backend-launcher.test.js:generic-api-key:130
 engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:2496
 engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:2496
+# 2026-10-09 主题别名在 :root 加了约 20 行，同一条 localStorage 键名常量
+# （坐席接待状态，非凭据）从 2496 移到 2516。旧行号留着，避免回退时翻红。
+engines/chengjie/src/web/templates/workspace_base.html:generic-api-key:2516
+engines\chengjie\src\web\templates\workspace_base.html:generic-api-key:2516
 engines/chengjie/tests/test_model_routes_api.py:generic-api-key:52
 engines\chengjie\tests\test_model_routes_api.py:generic-api-key:52
 engines/chengjie/tests/test_qq_official.py:generic-api-key:42
