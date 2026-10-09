@@ -94,7 +94,16 @@ _PACKAGED_CAPABILITY_LEDGER: Dict[str, Tuple[str, str, str]] = {
     "speech_emotion.enabled": (
         HIDDEN, "", "声学情绪绑本机 GPU，纯后台增强、本就无 UI 入口"),
     "ai.fallback.enabled": (
-        HIDDEN, "", "本地 LLM 兜底绑本机集群，纯后台容灾、无 UI 入口"),
+        HIDDEN, "", "本地 LLM 兜底绑本机集群，纯后台容灾、无 UI 入口；"
+        "客户种子保持关（C 类），官网网关地址留在种子里供以后改分级再用"),
+    "inbox.work_schedule.enabled": (
+        HIDDEN, "", "班表出厂关（D-Q1），show=False，功能总览无卡片"),
+    "companion_send_gate.enabled": (
+        HIDDEN, "", "日发额度闸出厂关（D-Q2），show=False，只拦自动链"),
+    "inbox.takeover_rearm.enabled": (
+        HIDDEN, "", "接管后自动接回出厂关（D-M9），show=False"),
+    "inbox.reply_style.bubbles.enabled": (
+        VISIBLE_LOCK, "", "拆条出厂关（D-L3），总览可见，回复设置里可自助开"),
     "ops.gpu_watermark.enabled": (
         HIDDEN, "", "LAN GPU 水位是自建集群运维项，客户无此拓扑、ops 卡整卡隐藏"),
     "ops.cloud_credentials.enabled": (
