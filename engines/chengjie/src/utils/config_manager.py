@@ -392,7 +392,9 @@ class ConfigManager:
             rows = con.execute(
                 "SELECT id, file_path FROM persona_media").fetchall()
             for mid, fp in rows:
-                p = str(fp or "")
+                # 种子在 Windows 上写成反斜杠。Linux 上 Path 不会把 \ 当分隔符，
+                # 拼出来的路径永远 is_file()==False。
+                p = str(fp or "").replace("\\", "/")
                 if not p or Path(p).is_absolute():
                     continue
                 con.execute(

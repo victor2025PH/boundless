@@ -160,6 +160,7 @@
     "cp.alert.cases": "有會話需要人工跟進（危機 / 要人工 / 穿幫質疑）",
     "cp.alert.colloquial_llm": "口語化模型連續失敗",
     "cp.alert.compute_lane": "有一路回覆服務欠費或故障，備用線路會頂上",
+    "cp.alert.frontend_error": "頁面按鈕點了沒反應（腳本錯誤已上報）",
     "cp.alert.csat_alert": "客戶滿意度跌破警戒線",
     "cp.alert.csrf_reject": "安全攔截激增（CSRF）",
     "cp.alert.cta_click": "客戶點了引導連結（最熱跟進時機）",
