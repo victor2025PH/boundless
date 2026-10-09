@@ -316,7 +316,11 @@ def test_repo_config_ships_sync_block_default_off():
 
     import yaml
     root = Path(__file__).resolve().parent.parent
-    with open(root / "config" / "config.yaml", "r", encoding="utf-8") as f:
+    # config.yaml 不入库。基线默认关写在提交的 config.example.yaml。
+    baseline = root / "config" / "config.yaml"
+    if not baseline.is_file():
+        baseline = root / "config" / "config.example.yaml"
+    with open(baseline, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     sync = directory_sync_cfg(cfg)
     assert sync.get("enabled") is False
