@@ -481,6 +481,25 @@ def _reset_process_singletons_now():
         _ks._singleton = None
     except Exception:
         pass
+    _reset_src_logger_now()
+
+
+def _reset_src_logger_now():
+    """``src`` 日志器是进程全局的。装配测试会把它设成 INFO 且 propagate=False，
+    模拟生产落盘；还原若没发生（同 worker 上一个用例中途断掉），后面的用例就
+    串味：INFO 在观察窗之外也被 caplog 收下，DEBUG 又被父级级别挡掉。
+    每个用例前后收回级别、传播和全局 disable，不拆别的 logger 上的 handler。
+    """
+    import logging
+    src = logging.getLogger("src")
+    src.setLevel(logging.NOTSET)
+    src.propagate = True
+    mgr = logging.Logger.manager
+    for name, obj in list(mgr.loggerDict.items()):
+        if isinstance(obj, logging.Logger) and name.startswith("src."):
+            obj.setLevel(logging.NOTSET)
+    logging.getLogger().setLevel(logging.WARNING)
+    logging.disable(logging.NOTSET)
 
 
 @pytest.fixture(autouse=True)
