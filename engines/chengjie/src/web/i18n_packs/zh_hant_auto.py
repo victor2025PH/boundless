@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-10-02 23:40:43 · OpenCC s2twp + 術語釘 · 18187 鍵（源 zh 全量 18805）
+生成: 2026-10-09 01:35:58 · OpenCC s2twp + 術語釘 · 18287 鍵（源 zh 全量 18970）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -1251,6 +1251,8 @@ ZH_HANT = {
     'aud_act_account_persona_set': '設定賬號人設',
     # ── aud_act_ack_incident ──
     'aud_act_ack_incident': '確認事件',
+    # ── aud_act_admin_cap_blocked ──
+    'aud_act_admin_cap_blocked': '攔截超額管理員',
     # ── aud_act_admin_link_channel ──
     'aud_act_admin_link_channel': '手工關聯渠道到聯絡人',
     # ── aud_act_ai_quality_thresholds ──
@@ -1277,6 +1279,8 @@ ZH_HANT = {
     'aud_act_chat_test_correct': '對話測試糾錯',
     # ── aud_act_config_advisory ──
     'aud_act_config_advisory': '配置體檢提醒',
+    # ── aud_act_cost_import_bill ──
+    'aud_act_cost_import_bill': '匯入費用賬單',
     # ── aud_act_create_master_user ──
     'aud_act_create_master_user': '建立主賬號',
     # ── aud_act_create_user ──
@@ -1285,6 +1289,10 @@ ZH_HANT = {
     'aud_act_data_purge': '清理歷史資料',
     # ── aud_act_delete_user ──
     'aud_act_delete_user': '刪除使用者',
+    # ── aud_act_douyin_credentials_save ──
+    'aud_act_douyin_credentials_save': '儲存抖音登入憑據',
+    # ── aud_act_douyin_oauth_connected ──
+    'aud_act_douyin_oauth_connected': '抖音授權已連線',
     # ── aud_act_draft_eval_run ──
     'aud_act_draft_eval_run': '評估喚回草稿效果',
     # ── aud_act_draft_unmark_sent ──
@@ -1303,8 +1311,22 @@ ZH_HANT = {
     'aud_act_episodic_confirm_inferred': '確認 AI 推斷記憶',
     # ── aud_act_episodic_delete ──
     'aud_act_episodic_delete': '刪除情景記憶',
+    # ── aud_act_episodic_edit ──
+    'aud_act_episodic_edit': '編輯情景記憶',
+    # ── aud_act_episodic_export ──
+    'aud_act_episodic_export': '匯出情景記憶',
+    # ── aud_act_episodic_ignore ──
+    'aud_act_episodic_ignore': '忽略情景記憶',
     # ── aud_act_episodic_key_migrate ──
     'aud_act_episodic_key_migrate': '遷移記憶歸屬鍵',
+    # ── aud_act_episodic_promise_done ──
+    'aud_act_episodic_promise_done': '標記承諾已完成',
+    # ── aud_act_episodic_resolve_conflict ──
+    'aud_act_episodic_resolve_conflict': '處理記憶衝突',
+    # ── aud_act_episodic_restore ──
+    'aud_act_episodic_restore': '恢復情景記憶',
+    # ── aud_act_episodic_self_log_delete ──
+    'aud_act_episodic_self_log_delete': '刪除自己寫的記憶',
     # ── aud_act_global_rules_restore ──
     'aud_act_global_rules_restore': '恢復全域性規則',
     # ── aud_act_global_rules_save ──
@@ -1345,14 +1367,26 @@ ZH_HANT = {
     'aud_act_kb_delete_entry': '刪除知識條目',
     # ── aud_act_kb_delete_image ──
     'aud_act_kb_delete_image': '刪除條目圖片',
+    # ── aud_act_kb_embed_retry ──
+    'aud_act_kb_embed_retry': '重試知識條目索引',
     # ── aud_act_kb_import ──
     'aud_act_kb_import': '匯入知識庫',
     # ── aud_act_kb_import_csv ──
     'aud_act_kb_import_csv': '匯入知識庫 (CSV)',
+    # ── aud_act_kb_import_undo ──
+    'aud_act_kb_import_undo': '撤銷知識庫匯入',
     # ── aud_act_kb_improve_convert ──
     'aud_act_kb_improve_convert': '改進建議轉條目',
     # ── aud_act_kb_miss_to_entry ──
     'aud_act_kb_miss_to_entry': '未命中轉條目',
+    # ── aud_act_kb_purge_legacy_seeds ──
+    'aud_act_kb_purge_legacy_seeds': '清除舊版預置條目',
+    # ── aud_act_kb_purge_payment_seeds ──
+    'aud_act_kb_purge_payment_seeds': '清除付款類預置條目',
+    # ── aud_act_kb_purge_preset ──
+    'aud_act_kb_purge_preset': '清除預置知識條目',
+    # ── aud_act_kb_purge_source ──
+    'aud_act_kb_purge_source': '清除知識來源',
     # ── aud_act_kb_restore ──
     'aud_act_kb_restore': '恢復知識庫備份',
     # ── aud_act_kb_restore_version ──
@@ -1413,6 +1447,8 @@ ZH_HANT = {
     'aud_act_mrpa_assign_profile': 'Messenger 指派人設',
     # ── aud_act_notify_test_push ──
     'aud_act_notify_test_push': '傳送通知測試推送',
+    # ── aud_act_onboarding_step_mark ──
+    'aud_act_onboarding_step_mark': '標記上手步驟',
     # ── aud_act_persona_bind ──
     'aud_act_persona_bind': '繫結人設到會話',
     # ── aud_act_persona_bulk_bind ──
@@ -1433,12 +1469,22 @@ ZH_HANT = {
     'aud_act_platform_session_e2ee_pin': '設定平台會話端到端 PIN',
     # ── aud_act_platform_session_relogin ──
     'aud_act_platform_session_relogin': '平台會話重登入',
+    # ── aud_act_pmedia_adopt_suggest ──
+    'aud_act_pmedia_adopt_suggest': '採納人設媒體建議',
+    # ── aud_act_pmedia_batch_triggers ──
+    'aud_act_pmedia_batch_triggers': '批次設定人設媒體觸發詞',
     # ── aud_act_pmedia_delete ──
     'aud_act_pmedia_delete': '刪除人設媒體條目',
     # ── aud_act_pmedia_face_ref_del ──
     'aud_act_pmedia_face_ref_del': '刪除人設臉部參考圖',
     # ── aud_act_pmedia_face_ref_set ──
     'aud_act_pmedia_face_ref_set': '設定人設臉部參考圖',
+    # ── aud_act_pmedia_retag ──
+    'aud_act_pmedia_retag': '重新標註人設媒體',
+    # ── aud_act_pmedia_retag_all ──
+    'aud_act_pmedia_retag_all': '全部重新標註人設媒體',
+    # ── aud_act_pmedia_selfie_gate ──
+    'aud_act_pmedia_selfie_gate': '開關全域性發圖',
     # ── aud_act_pmedia_speech_print_save ──
     'aud_act_pmedia_speech_print_save': '儲存人設說話指紋',
     # ── aud_act_pmedia_update ──
@@ -1479,8 +1525,12 @@ ZH_HANT = {
     'aud_act_profiles_import': '匯入人設檔案',
     # ── aud_act_realtime_voice_alert_thresholds ──
     'aud_act_realtime_voice_alert_thresholds': '調整語音告警閾值',
+    # ── aud_act_registry_assign_profile ──
+    'aud_act_registry_assign_profile': '把人設分配到賬號',
     # ── aud_act_relations_digest_push ──
     'aud_act_relations_digest_push': '推送關係摘要報告',
+    # ── aud_act_reply_settings_save ──
+    'aud_act_reply_settings_save': '儲存回覆設定',
     # ── aud_act_reset_circuit ──
     'aud_act_reset_circuit': '重置熔斷器',
     # ── aud_act_reunion_draft_generated ──
@@ -1507,6 +1557,8 @@ ZH_HANT = {
     'aud_act_save_reply_logic': '儲存回覆邏輯',
     # ── aud_act_save_settings ──
     'aud_act_save_settings': '儲存系統設定',
+    # ── aud_act_session_expire_sweep ──
+    'aud_act_session_expire_sweep': '會話過期清掃',
     # ── aud_act_set_notify_binding ──
     'aud_act_set_notify_binding': '設定坐席通知號繫結',
     # ── aud_act_set_perms ──
@@ -1529,6 +1581,14 @@ ZH_HANT = {
     'aud_act_stk_send': '傳送貼紙',
     # ── aud_act_stk_upload ──
     'aud_act_stk_upload': '上傳貼紙',
+    # ── aud_act_templates_i18n_confirm ──
+    'aud_act_templates_i18n_confirm': '確認話術譯文',
+    # ── aud_act_templates_i18n_delete ──
+    'aud_act_templates_i18n_delete': '刪除話術譯文',
+    # ── aud_act_templates_i18n_draft ──
+    'aud_act_templates_i18n_draft': '儲存話術譯文草稿',
+    # ── aud_act_templates_i18n_save ──
+    'aud_act_templates_i18n_save': '儲存話術譯文',
     # ── aud_act_tg_assign_profile ──
     'aud_act_tg_assign_profile': 'Telegram 指派人設',
     # ── aud_act_tg_members_extract_start ──
@@ -1569,6 +1629,18 @@ ZH_HANT = {
     'aud_act_tg_members_outreach_stalled': '同群開口：對方回了但我方沒接上話',
     # ── aud_act_tg_members_outreach_stop ──
     'aud_act_tg_members_outreach_stop': '停止開口',
+    # ── aud_act_tiktok_account_register ──
+    'aud_act_tiktok_account_register': '登記 TikTok 賬號',
+    # ── aud_act_tiktok_credentials_save ──
+    'aud_act_tiktok_credentials_save': '儲存 TikTok 登入憑據',
+    # ── aud_act_tiktok_huoke_bridge_enable ──
+    'aud_act_tiktok_huoke_bridge_enable': '開啟 TikTok 獲客橋接',
+    # ── aud_act_tiktok_huoke_device_bind ──
+    'aud_act_tiktok_huoke_device_bind': '繫結 TikTok 獲客裝置',
+    # ── aud_act_tiktok_oauth_connected ──
+    'aud_act_tiktok_oauth_connected': 'TikTok 授權已連線',
+    # ── aud_act_tiktok_webhook_register ──
+    'aud_act_tiktok_webhook_register': '登記 TikTok 回撥',
     # ── aud_act_update_ab_test ──
     'aud_act_update_ab_test': '更新 A/B 測試',
     # ── aud_act_update_autopilot ──
@@ -1585,6 +1657,14 @@ ZH_HANT = {
     'aud_act_update_user': '更新使用者',
     # ── aud_act_update_webhook_settings ──
     'aud_act_update_webhook_settings': '更新告警渠道',
+    # ── aud_act_vmem_confirm ──
+    'aud_act_vmem_confirm': '確認視覺記憶',
+    # ── aud_act_vmem_delete ──
+    'aud_act_vmem_delete': '刪除視覺記憶',
+    # ── aud_act_vmem_deny ──
+    'aud_act_vmem_deny': '拒絕視覺記憶',
+    # ── aud_act_vmem_retire ──
+    'aud_act_vmem_retire': '停用視覺記憶',
     # ── aud_act_voice_enroll ──
     'aud_act_voice_enroll': '登記克隆音色',
     # ── aud_act_voice_purge ──
@@ -1619,6 +1699,8 @@ ZH_HANT = {
     'aud_tgt_action': '動作',
     # ── aud_tgt_actors ──
     'aud_tgt_actors': '出演',
+    # ── aud_tgt_add ──
+    'aud_tgt_add': '新增',
     # ── aud_tgt_added ──
     'aud_tgt_added': '新增',
     # ── aud_tgt_affected ──
@@ -1635,8 +1717,12 @@ ZH_HANT = {
     'aud_tgt_archived': '歸檔',
     # ── aud_tgt_as ──
     'aud_tgt_as': '形態',
+    # ── aud_tgt_assets ──
+    'aud_tgt_assets': '素材',
     # ── aud_tgt_auto_eligible ──
     'aud_tgt_auto_eligible': '可自動',
+    # ── aud_tgt_batch ──
+    'aud_tgt_batch': '批次',
     # ── aud_tgt_before ──
     'aud_tgt_before': '之前',
     # ── aud_tgt_bio_chars ──
@@ -1645,6 +1731,8 @@ ZH_HANT = {
     'aud_tgt_bytes': '位元組',
     # ── aud_tgt_cancelled ──
     'aud_tgt_cancelled': '取消',
+    # ── aud_tgt_cap ──
+    'aud_tgt_cap': '日私信上限',
     # ── aud_tgt_cats ──
     'aud_tgt_cats': '分類',
     # ── aud_tgt_chars ──
@@ -1667,16 +1755,24 @@ ZH_HANT = {
     'aud_tgt_conv': '會話',
     # ── aud_tgt_convs ──
     'aud_tgt_convs': '會話數',
+    # ── aud_tgt_days ──
+    'aud_tgt_days': '天數',
     # ── aud_tgt_deduped ──
     'aud_tgt_deduped': '去重',
     # ── aud_tgt_deleted ──
     'aud_tgt_deleted': '刪除',
     # ── aud_tgt_deny ──
     'aud_tgt_deny': '拒絕',
+    # ── aud_tgt_device ──
+    'aud_tgt_device': '裝置',
     # ── aud_tgt_did ──
     'aud_tgt_did': '裝置',
+    # ── aud_tgt_dm_api ──
+    'aud_tgt_dm_api': '私信介面',
     # ── aud_tgt_domain ──
     'aud_tgt_domain': '領域',
+    # ── aud_tgt_eid ──
+    'aud_tgt_eid': '條目',
     # ── aud_tgt_enable ──
     'aud_tgt_enable': '啟用',
     # ── aud_tgt_endpoint ──
@@ -1703,6 +1799,8 @@ ZH_HANT = {
     'aud_tgt_generator': '生成器',
     # ── aud_tgt_grade ──
     'aud_tgt_grade': '等級',
+    # ── aud_tgt_hot ──
+    'aud_tgt_hot': '常用',
     # ── aud_tgt_id ──
     'aud_tgt_id': '編號',
     # ── aud_tgt_ids ──
@@ -1719,10 +1817,14 @@ ZH_HANT = {
     'aud_tgt_items': '貼紙',
     # ── aud_tgt_jid ──
     'aud_tgt_jid': '會話標識',
+    # ── aud_tgt_kept ──
+    'aud_tgt_kept': '保留',
     # ── aud_tgt_key ──
     'aud_tgt_key': '鍵',
     # ── aud_tgt_keys ──
     'aud_tgt_keys': '鍵數',
+    # ── aud_tgt_kind ──
+    'aud_tgt_kind': '種類',
     # ── aud_tgt_kws ──
     'aud_tgt_kws': '關鍵詞',
     # ── aud_tgt_lang ──
@@ -1749,10 +1851,16 @@ ZH_HANT = {
     'aud_tgt_name': '名稱',
     # ── aud_tgt_note ──
     'aud_tgt_note': '備註',
+    # ── aud_tgt_observations ──
+    'aud_tgt_observations': '觀察條數',
     # ── aud_tgt_observed ──
     'aud_tgt_observed': '實測',
+    # ── aud_tgt_oid ──
+    'aud_tgt_oid': '物件',
     # ── aud_tgt_on_duty ──
     'aud_tgt_on_duty': '值班',
+    # ── aud_tgt_only_missing ──
+    'aud_tgt_only_missing': '僅補缺',
     # ── aud_tgt_only_winner ──
     'aud_tgt_only_winner': '僅贏家',
     # ── aud_tgt_pack ──
@@ -1773,26 +1881,42 @@ ZH_HANT = {
     'aud_tgt_profile_id': '人設',
     # ── aud_tgt_profiles ──
     'aud_tgt_profiles': '人設數',
+    # ── aud_tgt_proposal ──
+    'aud_tgt_proposal': '建議',
     # ── aud_tgt_purge_cloud ──
     'aud_tgt_purge_cloud': '清雲端',
     # ── aud_tgt_purged ──
     'aud_tgt_purged': '已清理',
     # ── aud_tgt_questions ──
     'aud_tgt_questions': '題數',
+    # ── aud_tgt_queued ──
+    'aud_tgt_queued': '排隊',
     # ── aud_tgt_quiz ──
     'aud_tgt_quiz': '問卷',
     # ── aud_tgt_reason ──
     'aud_tgt_reason': '原因',
     # ── aud_tgt_ref_count ──
     'aud_tgt_ref_count': '引用數',
+    # ── aud_tgt_region ──
+    'aud_tgt_region': '地區',
+    # ── aud_tgt_rel ──
+    'aud_tgt_rel': '關係',
     # ── aud_tgt_remove ──
     'aud_tgt_remove': '移除',
+    # ── aud_tgt_restored ──
+    'aud_tgt_restored': '已恢復',
+    # ── aud_tgt_reuse ──
+    'aud_tgt_reuse': '複用',
     # ── aud_tgt_revoked ──
     'aud_tgt_revoked': '已吊銷',
+    # ── aud_tgt_rows ──
+    'aud_tgt_rows': '條數',
     # ── aud_tgt_saved ──
     'aud_tgt_saved': '已儲存',
     # ── aud_tgt_scanned ──
     'aud_tgt_scanned': '掃描',
+    # ── aud_tgt_scheduled ──
+    'aud_tgt_scheduled': '已排期',
     # ── aud_tgt_scope ──
     'aud_tgt_scope': '範圍',
     # ── aud_tgt_seconds ──
@@ -1815,6 +1939,8 @@ ZH_HANT = {
     'aud_tgt_slot': '槽位',
     # ── aud_tgt_src ──
     'aud_tgt_src': '來源',
+    # ── aud_tgt_storage ──
+    'aud_tgt_storage': '存放處',
     # ── aud_tgt_success ──
     'aud_tgt_success': '成功',
     # ── aud_tgt_target ──
@@ -1823,12 +1949,18 @@ ZH_HANT = {
     'aud_tgt_text': '文字',
     # ── aud_tgt_to ──
     'aud_tgt_to': '到',
+    # ── aud_tgt_token ──
+    'aud_tgt_token': '令牌',
     # ── aud_tgt_type ──
     'aud_tgt_type': '型別',
+    # ── aud_tgt_tz ──
+    'aud_tgt_tz': '時區',
     # ── aud_tgt_updated ──
     'aud_tgt_updated': '更新',
     # ── aud_tgt_upgrade ──
     'aud_tgt_upgrade': '升級',
+    # ── aud_tgt_value ──
+    'aud_tgt_value': '取值',
     # ── aud_tgt_variant ──
     'aud_tgt_variant': '變體',
     # ── aud_tgt_via ──
@@ -3322,7 +3454,7 @@ ZH_HANT = {
     'ck.kind.takeover_overdue': '接管超時',
     'ck.kind.waiting': '客戶在等',
     'ck.kpi.oldest': '等最久的客戶',
-    'ck.kpi.queue': '需介入',
+    'ck.kpi.queue': '要人處理',
     'ck.kpi.stale': '歷史積壓',
     'ck.kpi.takeover': '接管中',
     'ck.media.file': '[檔案]',
@@ -3330,12 +3462,12 @@ ZH_HANT = {
     'ck.media.other': '[附件]',
     'ck.media.video': '[影片]',
     'ck.media.voice': '[語音]',
-    'ck.nav': '駕駛艙',
+    'ck.nav': '待人工',
     'ck.q.empty': '一切正常，AI 在崗 ✓',
-    'ck.q.empty_sub': '沒有需要人工介入的會話；有紅點會第一時間排到這裡',
+    'ck.q.empty_sub': '沒有需要人來處理的會話；有紅點會第一時間排到這裡',
     'ck.q.fail': '佇列載入失敗，稍後自動重試',
     'ck.q.filter_empty': '這一類當前沒有卡',
-    'ck.q.title': '介入佇列',
+    'ck.q.title': '要人處理的會話',
     'ck.rail.acct': '賬號健康',
     'ck.rail.acct_empty': '暫無在冊賬號',
     'ck.rail.acct_fail': '賬號資料暫不可用',
@@ -3347,18 +3479,18 @@ ZH_HANT = {
     'ck.refresh': '重新整理',
     'ck.resolve.confirm': '把「需人工」標記從該會話摘掉？表示你已處理完或不需要再跟進。',
     'ck.resolved': '已清除「需人工」標記',
-    'ck.src.error': '部分訊號源異常（{list}）——佇列可能不全',
+    'ck.src.error': '這份名單這次沒取全：{list}',
     'ck.st.bad': '異常',
     'ck.st.ok': '線上',
     'ck.st.warn': '狀態未知',
     'ck.stale.sub': '超過 3 天的舊訊號——處理完點「已處理」清掉，別讓它一直佔屏',
     'ck.stale.title': '歷史積壓（{n}）',
-    'ck.sub': '誰需要人、按優先順序排好——處理完一個劃掉一個',
-    'ck.title': '駕駛艙',
+    'ck.sub': '按急的排在前面。點「接管」會讓 AI 對這個客戶停手。',
+    'ck.title': '待人工',
     'ck.unread': '未讀',
     'ck.wait.label': '已持續',
     'ck.why.draft_pending': 'AI 草稿寫好了，等人看過再發',
-    'ck.why.needs_human': 'AI 判斷需要真人處理（高風險 / 生成失敗 / 配額觸頂等）',
+    'ck.why.needs_human': 'AI 交了出來，要人看一眼',
     'ck.why.takeover_overdue': '接手後還沒交還，這段時間 AI 是停的',
     'ck.why.waiting': '客戶說了最後一句，還沒人回',
     # ── cl_js_001 ──
@@ -6254,6 +6386,7 @@ ZH_HANT = {
     'err.goals.template_unknown': '未知目標模板',
     'err.goals.update_failed': '目標更新失敗',
     'err.gs.group_required': '請指定要演的群（group_key）',
+    'err.gs.guide_account': '這個號不在登錄檔裡，不能釘成嚮導',
     'err.gs.live_config_off': '真發未開閘：配置 companion.group_show.live.enabled 仍為關',
     'err.gs.live_confirm_required': '真發必須顯式傳 confirm_live=true（引數側那把鎖）',
     'err.gs.live_inflight': '這個群已有一場真發在演（session={sid}），同群不能疊戲',
@@ -7293,6 +7426,20 @@ ZH_HANT = {
     'gs_gl_soft': '軟廣',
     # ── gs_gl_soft_d ──
     'gs_gl_soft_d': '把產品帶進對話的力度：0＝只閒聊完全不提，數字越大越明示；* 表示這一拍單獨調過、覆蓋了劇本預設值',
+    # ── gs_guide_acct ──
+    'gs_guide_acct': '固定向導號',
+    # ── gs_guide_acct_cleared ──
+    'gs_guide_acct_cleared': '已取消嚮導號',
+    # ── gs_guide_acct_fail ──
+    'gs_guide_acct_fail': '沒釘上',
+    # ── gs_guide_acct_hint ──
+    'gs_guide_acct_hint': '只有這個號可以說自己是 AI，並邀請對方私聊試一項功能。不輪換，也不發私聊。',
+    # ── gs_guide_acct_none ──
+    'gs_guide_acct_none': '不釘（沒有嚮導）',
+    # ── gs_guide_acct_save ──
+    'gs_guide_acct_save': '釘住這個號',
+    # ── gs_guide_acct_saved ──
+    'gs_guide_acct_saved': '已釘住',
     # ── gs_guide_flow_h ──
     'gs_guide_flow_h': '推薦順序（點下面的步驟可直接跳到對應卡片）',
     # ── gs_guide_glo_h ──
@@ -7302,7 +7449,7 @@ ZH_HANT = {
     # ── gs_guide_lead ──
     'gs_guide_lead': '把它想成一個微縮劇組：',
     # ── gs_guide_meta ──
-    'gs_guide_meta': '幾個 AI 賬號在同一個真實群裡按一個目標正常聊天。沒人自己提到那件事，就只聊天；有人提到了，向導才說自己是 AI，並只講這一件。旁邊的「風控體檢」卡片盯著別讓這批號被看出是一夥機器人。這個頁面可以離線彩排和體檢，彩排不發一條真訊息。',
+    'gs_guide_meta': '幾個 AI 賬號在同一個真實群裡按一個目標正常聊天。沒人自己提到那件事，就只聊天；有人提到了，嚮導才說自己是 AI，並只講這一件。旁邊的「風控體檢」卡片盯著別讓這批號被看出是一夥機器人。這個頁面可以離線彩排和體檢，彩排不發一條真訊息。',
     # ── gs_guide_title ──
     'gs_guide_title': '第一次用？30 秒看懂這個台子',
     # ── gs_hist ──
@@ -7353,8 +7500,14 @@ ZH_HANT = {
     'gs_js_running_llm': '真 LLM 排練中，可能要幾分鐘，別關頁面…',
     # ── gs_js_src_budget ──
     'gs_js_src_budget': '開口預算',
+    # ── gs_js_src_guide_dm ──
+    'gs_js_src_guide_dm': '嚮導私聊',
+    # ── gs_js_src_guide_reply ──
+    'gs_js_src_guide_reply': '嚮導群內回覆',
     # ── gs_js_src_inbox ──
     'gs_js_src_inbox': '收件箱',
+    # ── gs_js_src_members ──
+    'gs_js_src_members': '群成員',
     # ── gs_js_src_roles ──
     'gs_js_src_roles': '角色台賬',
     # ── gs_js_src_shows ──
@@ -7479,14 +7632,20 @@ ZH_HANT = {
     'gs_out': '演出效果（這場戲換來了什麼）',
     # ── gs_out_hint ──
     'gs_out_hint': '上面所有卡片回答的都是「會不會被封號」；這張回答「值不值得繼續投」。只統計**真發過**的場次——排練一條訊息都沒發出去，算它沒有意義。',
+    # ── gs_out_js_added ──
+    'gs_out_js_added': '嚮導新增',
     # ── gs_out_js_blind ──
     'gs_out_js_blind': '⚠ 台賬少讀了一本（{src}），效果讀數偏低——少一本賬恰好長得像「沒效果」，別當結論看。',
     # ── gs_out_js_bypb ──
     'gs_out_js_bypb': '按劇本對比',
     # ── gs_out_js_conv ──
     'gs_out_js_conv': '私聊轉化',
+    # ── gs_out_js_fallback ──
+    'gs_out_js_fallback': '可兜底',
     # ── gs_out_js_floor ──
     'gs_out_js_floor': '⚠ 轉化數是**下限**：潛水看完戲才來私聊的人無從歸因，系統不會假裝能算。這裡只認「在群裡發過言、且首次私聊發生在演出之後」這條硬證據鏈。',
+    # ── gs_out_js_guide_note ──
+    'gs_out_js_guide_note': '嚮導新增＝本群成員在開演後自己先私聊嚮導號。開始測試＝對方做了這一項功能（guide_trial 事件點了名）。私聊裡多說一句不算。可兜底只列人數：視窗走完後向導在群裡接過話、人仍沒來加。不發兜底私聊。',
     # ── gs_out_js_lat ──
     'gs_out_js_lat': '平均首次響應',
     # ── gs_out_js_need_restart ──
@@ -7509,10 +7668,14 @@ ZH_HANT = {
     'gs_out_js_reply': '群內回應條數',
     # ── gs_out_js_shows ──
     'gs_out_js_shows': '真發場次',
+    # ── gs_out_js_tested ──
+    'gs_out_js_tested': '開始測試',
     # ── gs_out_js_th_conv ──
     'gs_out_js_th_conv': '私聊轉化',
     # ── gs_out_js_th_group ──
     'gs_out_js_th_group': '群',
+    # ── gs_out_js_th_guide ──
+    'gs_out_js_th_guide': '新增 / 測完',
     # ── gs_out_js_th_resp ──
     'gs_out_js_th_resp': '開口人數 / 條數',
     # ── gs_out_js_th_show ──

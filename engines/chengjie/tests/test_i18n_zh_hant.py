@@ -36,6 +36,11 @@ def test_zh_hant_conversion_quality_spots():
     assert view.get("care") == "主動關懷", view.get("care")
     # 品牌名不受转换伤害（智聊简繁同形）
     assert "智聊" in view.get("brand", "")
+    # 驾驶舱三句为什么：简体源已是人话，OpenCC 必须原样转出，
+    # 不能再靠手改 zh_hant_auto.py（regen 会覆盖手改）。
+    assert view.get("ck.why.draft_pending") == "AI 草稿寫好了，等人看過再發"
+    assert view.get("ck.why.takeover_overdue") == "接手後還沒交還，這段時間 AI 是停的"
+    assert view.get("ck.why.waiting") == "客戶說了最後一句，還沒人回"
 
 
 def test_zh_hant_no_tai_variant_pin():
