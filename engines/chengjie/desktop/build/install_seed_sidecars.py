@@ -41,9 +41,11 @@ def main() -> int:
     if not (wa / "package.json").is_file() or not (msg / "package.json").is_file():
         raise SystemExit(f"边车目录不完整：{wa} / {msg}")
     _run(wa, [npm, "ci"])
-    _run(msg, [npm, "ci"])
-    _run(msg, [npm, "exec", "--", "playwright", "install", "chromium"],
-         {"PLAYWRIGHT_BROWSERS_PATH": "0"})
+    # postinstall 会再跑一遍 playwright install；环境变量必须在 npm ci 时就在，
+    # 否则浏览器落到缓存目录，不进 node_modules/playwright-core/.local-browsers。
+    browsers = {"PLAYWRIGHT_BROWSERS_PATH": "0"}
+    _run(msg, [npm, "ci"], browsers)
+    _run(msg, [npm, "exec", "--", "playwright", "install", "chromium"], browsers)
     return 0
 
 
