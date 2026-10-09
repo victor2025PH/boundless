@@ -201,25 +201,28 @@ _SPECS: Tuple[PlatformSpec, ...] = (
         facts_label="个人微信", sort=76, aliases=("weixin",),
         note="实施97 线 B：PC 副驾（桌面桥接账号 mode=desktop，非编排器 worker → implemented 保持 False）；接入引导 /workspace/connect/wechat_pc",
     ),
+    # ── 字节官方通道（2026-10-09 公开版）：official 已接线；未做的边车不进默认可点清单 ──
     PlatformSpec(
         id="douyin", name="Douyin", name_zh="抖音", family="bytedance",
         color="#FE2C55", modes=("official", "web", "device"), default_mode="official",
-        compliance=COMPLIANCE_MIXED, implemented=False,
+        compliance=COMPLIANCE_MIXED, implemented=True,
         msg_id_fields=("server_message_id", "msg_id"),
         console_url="https://developer.open-douyin.com/", facts_label="抖音", sort=80,
         aliases=("dy", "aweme"),
-        note="实施96：official＝企业主体小程序 IM（主站）；web/device＝网页/真机托管（准入区）",
+        note="实施96：official＝企业主体小程序 IM（DouyinOfficialWorker，公开版登录只列这一条）。"
+             "web/device 边车未做，不进默认登录清单",
     ),
     PlatformSpec(
         id="tiktok", name="TikTok", name_zh="TikTok", family="bytedance",
         color="#25F4EE", modes=("official", "web", "personal_rpa"), default_mode="official",
-        compliance=COMPLIANCE_MIXED, implemented=False, region_aware=True,
+        compliance=COMPLIANCE_MIXED, implemented=True, region_aware=True,
         msg_id_fields=("message_id", "msg_id"),
         console_url="https://business-api.tiktok.com/", facts_label="TikTok", sort=85,
         aliases=("tt", "trill", "musically"),
-        note="指令 TK-1：official＝Business Messaging / Shop CS API；账号必带 region。"
-             "TK-3：personal_rpa＝huoke 真机私信（非官方 notice_unofficial，默认关）；"
-             "web＝网页托管边车（阶段 1 未开工）。个人号无私信官方接口，implemented=False 不变",
+        note="指令 TK-1：official＝Business Messaging / Shop CS API（TikTokOfficialWorker，"
+             "公开版登录只列这一条）；账号必带 region。"
+             "TK-3：personal_rpa＝huoke 真机私信（notice_unofficial，默认关）；"
+             "web＝网页托管边车（阶段 1 未开工）。个人号没有官方私信接口",
     ),
 )
 

@@ -1241,9 +1241,10 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "工作台「账号管理 → 个人微信 · PC 副驾」三步（检测微信 → 选档位 → 点启动），半自动只发你批准的稿，"
         "全自动需勾风险知情同意后可代发文字；全自动档还可发人设语音（电脑微信 4.1.9+ + VB-CABLE，引导第 ① 步检测）。"
         "教程 /help/onboarding/wechat_pc。账号接入在坐席工作台的账号抽屉或「接入向导」完成。"
-        "抖音官方私信仍在接入中（默认关）。TikTok：**个人号没有官方私信接口**；可选获客真机"
-        "（非官方、默认关）接管对方开口之后的对话，不代发首触。TikTok Shop 店铺客服走官方 API（默认关）。"
-        "官方 Business Messaging 等权限，个人号不在范围内。需要接入其他平台，请切到「报障」标签把需求提交给产品团队。",
+        "抖音企业号走官方小程序 IM（接入向导填 Client Key / Secret 后扫码授权，默认关）："
+        "只能回复客户先发来的私信。TikTok 企业号走官方 Business Messaging，店铺客服走官方 API（都默认关）。"
+        "**个人号没有官方私信接口**；可选获客真机（非官方、默认关）接管对方开口之后的对话，不代发首触。"
+        "需要接入其他平台，请切到「报障」标签把需求提交给产品团队。",
         "Supported today: Telegram, WhatsApp, LINE, Messenger (Facebook), Instagram, Zalo, "
         "and WeChat Customer Service (the WeCom official channel — a 5-step guide under Accounts → "
         "WeChat Service → Connect; enter your WeCom self-built app credentials, no QR login; WeChat users "
@@ -1252,11 +1253,13 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "tier → Start). Semi-auto sends only approved drafts; full-auto can send text after risk ack, and "
         "voice in the persona's voice (WeChat 4.1.9+ and VB-CABLE, detected in step 1). See "
         "/help/onboarding/wechat_pc. Accounts "
-        "are connected from the account drawer or the Setup Wizard. Douyin official DMs are still being "
-        "wired (off by default). TikTok: there is no official DM API for personal accounts; an optional "
-        "capture-phone path (unofficial, off by default) can take over a chat after the other person writes "
-        "first. TikTok Shop CS uses the official API (off by default). Business Messaging is pending access "
-        "and does not cover personal accounts. To request another platform, submit it via the Report tab.",
+        "are connected from the account drawer or the Setup Wizard. Douyin enterprise accounts use the "
+        "official mini-program IM (save Client Key / Secret in the Setup Wizard, then authorize; off by "
+        "default) and can reply only after the customer writes first. TikTok business accounts use official "
+        "Business Messaging, and Shop customer service uses the official API (both off by default). "
+        "There is no official DM API for personal accounts; an optional capture-phone path (unofficial, "
+        "off by default) can take over a chat after the other person writes first. "
+        "To request another platform, submit it via the Report tab.",
         # ⚠ 词表刻意不含裸「支持/接入/渠道/哪些」：宽词把「支持多少个并发坐席」
         # （189.92 假命中）与「**哪些**对话需要我亲自处理」这类别家问题吸过来；
         # 标题已自带「支持哪些平台/支持抖音吗」锚点，词表只留平台名。

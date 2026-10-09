@@ -37,7 +37,8 @@ from typing import Any, Dict
 # 把这个漏报固化成「小智也说不支持」，所以这里以代码为准；话术那边属产品/销售
 # 侧决策，已在交付说明里点名。
 SUPPORTED_CHANNELS = ("Telegram", "WhatsApp", "LINE", "Facebook Messenger",
-                      "Instagram", "Zalo", "QQ 机器人", "微信客服（企业微信）", "官网网页聊天")
+                      "Instagram", "Zalo", "QQ 机器人", "微信客服（企业微信）", "官网网页聊天",
+                      "抖音", "TikTok")
 # **预览中**的渠道（QQ 线 A 段，2026-09-10）：代码 / 边车 / 工作台全链在、CI 全绿，但底层驱动还是演示
 # 替身——在真平台上**尚不能真收发**。与「支持」分列，小智被问「QQ 个人号能用吗」必须答「预览，尚不能
 # 真收发」而不是「能」。事实源 = platform_registry 的 driver_state=mock（门禁 test_platform_registry
@@ -50,6 +51,8 @@ CHANNEL_PLATFORM_KEYS = {
     "QQ 机器人": "qqbot",
     "QQ 个人号（协议登录）": "qq",
     "微信客服（企业微信）": "wechat_kf",
+    "抖音": "douyin",
+    "TikTok": "tiktok",
 }
 # 明确**不支持**的平台：说不支持比含糊其辞有用得多，也防销售侧谎称支持。
 # 「QQ 个人号（协议登录）」＝用自己的 QQ 号登录那条路（智聊内置 QQ 连接边车 services/qq-personal，
@@ -57,7 +60,7 @@ CHANNEL_PLATFORM_KEYS = {
 # 「个人微信」：不作为**自动聊天渠道**接入（没有官方接口，封号 + 法律风险），所以留在这张表里；
 # 但实施97 线 B 提供了「PC 副驾」——读取电脑上已登录的微信、AI 给建议、半自动按批准代发、全自动
 # 需风险确认，属读屏辅助而非渠道接入。边界说明见下面 _CHANNEL_CAVEATS_*，小智答「个人微信」时两句话都要说。
-UNSUPPORTED_CHANNELS = ("个人微信", "淘宝", "抖音", "小红书")
+UNSUPPORTED_CHANNELS = ("个人微信", "淘宝", "小红书")
 # 已支持渠道的边界说明（常驻注入；用户问「QQ 机器人能主动发消息吗」这类必须答得准）
 _CHANNEL_CAVEATS_ZH = (
     "QQ 机器人（QQ 开放平台官方 API）只能被动回复：单聊每条来话 60 分钟内最多回 4 条、"
@@ -74,6 +77,10 @@ _CHANNEL_CAVEATS_ZH = (
     "PC 副驾在全自动档还能用人设音色发**语音**消息：需电脑微信 4.1.9 以上并安装免费的 VB-CABLE 虚拟声卡"
     "（引导页第 ① 步会检测并可自测）；单条语音最长约 55 秒，超长自动分条，通路未就绪时自动改发文字。"
     "对方发来的语音目前听不到（屏上只有「语音N秒」占位、没有声音文件），人设会请对方打字说，不要假装听过。"
+    "抖音（企业号小程序 IM 官方接口）可收发私信：须客户先开口，24 小时内最多回 6 条，可发图片，"
+    "上传的视频发不了，无正在输入和已读回执。TikTok（Business Messaging / 店铺客服官方接口）同样只能回复"
+    "先开口的用户，48 小时内最多 10 条；注册地决定能否发图；无正在输入。个人抖音号和个人 TikTok 号"
+    "没有这条官方私信接口。"
 )
 _CHANNEL_CAVEATS_EN = (
     "QQ Bot (QQ Open Platform official API) is passive-only: at most 4 replies within "
@@ -96,7 +103,13 @@ _CHANNEL_CAVEATS_EN = (
     "4.1.9+ and the free VB-CABLE virtual audio device (step 1 of the guide detects and self-tests it); each clip "
     "is capped at about 55 s, longer replies are split automatically, and it falls back to text when the path isn't ready. "
     "Inbound customer voice cannot be heard yet (the window only shows a duration placeholder, no audio file); "
-    "the persona asks them to type and must never pretend to have heard it."
+    "the persona asks them to type and must never pretend to have heard it. "
+    "Douyin (enterprise mini-program IM, official API) can send and receive DMs only after the customer "
+    "writes first, at most 6 replies within 24 hours; images yes, uploaded video no, no typing indicator "
+    "and no read receipt. TikTok (Business Messaging / Shop customer service, official API) likewise "
+    "replies only after the other person writes first, at most 10 within 48 hours; whether images can be "
+    "sent depends on the account region; no typing indicator. Personal Douyin and personal TikTok "
+    "accounts are not this official DM path."
 )
 
 _FACTS_ZH = f"""【本产品是什么】

@@ -26,12 +26,12 @@ ACCEPTED_COLOR_DRIFT = {
     ("src/web/templates/workspace_base.html", "messenger"): "#a334fa",
 }
 
-# 「规划中 → 事实卡必须列为暂不支持」只对本线（实施96 / TK-1）引入的平台强制；
-# qq / wechat 是实施97 线登记的规划项，其事实卡措辞（「QQ 个人号」「个人微信」）随该线落地。
-FACTS_PLANNED_ENFORCED = {"douyin", "tiktok"}
-# 事实卡「暂不支持」清单里还没登记、但注册表已标规划中的平台 → 原因。
-# TikTok：事实卡措辞「…等国内平台」容不下 TikTok，随 TK-1 事实卡分层口径一并补。
-FACTS_UNSUPPORTED_PENDING = {"TikTok": "TK-1 事实卡分层口径"}
+# 「规划中 → 事实卡必须列为暂不支持」只对仍标规划中、且本线承诺要对齐事实卡的平台强制。
+# 抖音 / TikTok 已于 2026-10-09 标 implemented（官方通道），改走 SUPPORTED_CHANNELS。
+# wechat 仍是规划中，事实卡用「个人微信」自行对齐，不进这张强制表。
+FACTS_PLANNED_ENFORCED: set = set()
+# 曾经因措辞对不上而暂缓进「暂不支持」的平台。补进事实卡（无论支持还是不支持）后必须删掉。
+FACTS_UNSUPPORTED_PENDING: dict = {}
 
 
 def _js_obj_pairs(src: str, decl_regex: str) -> dict:
@@ -67,7 +67,10 @@ def test_ids_and_aliases_resolve():
 
 def test_planned_platforms_are_registered_but_not_implemented():
     planned = set(reg.planned_ids())
-    assert {"douyin", "tiktok"} <= planned
+    # 个人微信仍未作为编排器渠道落地；抖音 / TikTok 官方通道已落地，不能再标规划中。
+    assert "wechat" in planned
+    assert "douyin" not in planned and "tiktok" not in planned
+    assert {"douyin", "tiktok"} <= set(reg.implemented_ids())
     assert not (planned & set(reg.implemented_ids()))
     assert reg.get("tiktok").region_aware is True
 
@@ -82,7 +85,9 @@ def test_driver_state_three_way_and_qq_is_honestly_mock():
     from src.assistant.product_facts import PREVIEW_CHANNELS, SUPPORTED_CHANNELS, product_facts_block
     # 三态推导：已落地缺省 real，规划中缺省 none，只有显式标注的才是 mock
     assert reg.driver_state("telegram") == reg.DRIVER_REAL
-    assert reg.driver_state("tiktok") == reg.DRIVER_NONE
+    assert reg.driver_state("douyin") == reg.DRIVER_REAL
+    assert reg.driver_state("tiktok") == reg.DRIVER_REAL
+    assert reg.driver_state("wechat") == reg.DRIVER_NONE  # 仍规划中，缺省 none
     assert reg.driver_state("nope") == reg.DRIVER_NONE  # 未登记不猜
     assert reg.driver_state("qq") == reg.DRIVER_MOCK
     assert reg.get("qq").implemented is True and reg.get("qq").is_preview()
@@ -100,7 +105,8 @@ def test_driver_state_three_way_and_qq_is_honestly_mock():
     data = json.loads((ROOT / "src" / "web" / "static" / "platform_registry.json").read_text(encoding="utf-8"))
     by_id = {x["id"]: x for x in data["platforms"]}
     assert by_id["qq"]["driver_state"] == "mock" and by_id["qq"]["driver_note"]
-    assert by_id["telegram"]["driver_state"] == "real" and by_id["tiktok"]["driver_state"] == "none"
+    assert by_id["telegram"]["driver_state"] == "real" and by_id["tiktok"]["driver_state"] == "real"
+    assert by_id["wechat"]["driver_state"] == "none"
     # 工作台账号卡 / 连接面板消费同一字段（qq- 前缀钩子在模板里）
     html = _read("src/web/templates/unified_inbox.html")
     assert "_qqDriverDemoHtml" in html and "driver_state" in html

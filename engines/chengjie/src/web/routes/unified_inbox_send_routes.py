@@ -199,7 +199,7 @@ from src.inbox.media_limits import (  # noqa: E402
 # 灰态 tooltip 同源（unified_inbox.html 属 J-4，落点写进结束报告）。
 _PLATFORM_LABEL = {"line": "LINE", "whatsapp": "WhatsApp", "telegram": "Telegram",
                    "messenger": "Messenger", "instagram": "Instagram", "zalo": "Zalo",
-                   "qq": "QQ", "qqbot": "QQ Bot"}
+                   "qq": "QQ", "qqbot": "QQ Bot", "douyin": "Douyin", "tiktok": "TikTok"}
 
 
 def media_capability_or_none(orch: Any, platform: str, account_id: str) -> Dict[str, Any]:

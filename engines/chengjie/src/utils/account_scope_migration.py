@@ -49,6 +49,7 @@ KNOWN_PLATFORMS = frozenset({
     "telegram", "whatsapp", "line", "messenger", "instagram", "zalo", "web",
     "qqbot", "qq",
     "wechat_kf",   # 微信客服（企业微信官方通道，实施97 线 A）
+    "douyin", "tiktok",  # 官方私信（2026-10-09 公开版）
 })
 
 _SIMPLE_PEER = re.compile(r"^[A-Za-z0-9@.\-]+$")

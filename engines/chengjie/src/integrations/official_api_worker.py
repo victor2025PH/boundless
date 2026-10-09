@@ -27,13 +27,15 @@ logger = logging.getLogger(__name__)
 
 # 编排器接管的官方平台（platform 与 RPA/Kill-Switch 作用域命名保持一致）
 OFFICIAL_PLATFORMS = ("line", "messenger", "whatsapp", "instagram", "zalo", "qqbot", "wechat_kf",
-                      "telegram")
+                      "telegram", "douyin", "tiktok")
 #: 有**专属有状态 worker** 的官方平台（不由本模块的无状态 OfficialApiWorker 服务）：
 #: 微信客服（实施97）要 sync_msg 游标轮询 + token 自管 → src/integrations/wechat_kf_worker.py 自行
 #: register_worker。列在 OFFICIAL_PLATFORMS 里是为了渠道向导/一致性门禁把它当官方通道对待，
 #: register_official_workers 对这些平台跳过，免得抢注一个 start() 必抛的空壳。
 #: Telegram Bot API（2026-10-08）：专属 ``telegram_bot_official.TelegramBotWorker``，Webhook 挂载时自行注册。
-DEDICATED_WORKER_PLATFORMS = frozenset({"wechat_kf", "telegram"})
+#: 抖音 / TikTok（2026-10-09）：专属 ``douyin_official`` / ``tiktok_official``（令牌续期 + 回复窗），
+#: 无状态 OfficialApiWorker 发不了这两家的消息。
+DEDICATED_WORKER_PLATFORMS = frozenset({"wechat_kf", "telegram", "douyin", "tiktok"})
 
 
 def _meta(account: Dict[str, Any]) -> Dict[str, Any]:
@@ -359,6 +361,10 @@ def official_send_caps(platform: str, config: Dict[str, Any]) -> Dict[str, Any]:
         if not base:
             return {"can_media": False, "can_voice": False, "reason": "needs_public_url"}
         return {"can_media": True, "can_voice": False, "reason": "qqbot_media_pending"}
+    if p in ("douyin", "tiktok"):
+        # 专属 worker 只收图片（抖音视频只能按 item_id 分享自己的作品；TikTok 语音没有接口，
+        # 图片还受注册地限制，发送时由 worker 再拦）。这里不能沿用下面的「图和语音都能发」。
+        return {"can_media": True, "can_voice": False, "reason": ""}
     if p in OFFICIAL_MEDIA_URL_PLATFORMS:
         base = str(
             (((config or {}).get("official_media") or {}).get("public_base_url")) or ""
@@ -391,7 +397,8 @@ def official_enabled(config: Dict[str, Any], platform: str) -> bool:
     # 回退：对应官方通道块自身 enabled 也视为开
     key = {"line": "line", "messenger": "facebook_messenger",
            "whatsapp": "whatsapp_cloud", "instagram": "instagram",
-           "zalo": "zalo", "qqbot": "qqbot", "telegram": "telegram_bot"}.get(p)
+           "zalo": "zalo", "qqbot": "qqbot", "telegram": "telegram_bot",
+           "douyin": "douyin", "tiktok": "tiktok"}.get(p)
     if key and ((config or {}).get(key) or {}).get("enabled"):
         return True
     return False
