@@ -13,7 +13,7 @@ from src.utils.diagnostic_bundle import build_diagnostic_bundle, redact_secrets_
 def test_redact_yaml_secret_values():
     text = (
         "ai:\n"
-        "  api_key: sk-live-abc123\n"
+        "  api_key: not a real key\n"
         "  base_url: https://api.deepseek.com\n"
         "web_admin:\n"
         "  auth_token: admin\n"
@@ -23,7 +23,7 @@ def test_redact_yaml_secret_values():
         "  phone_number: ''\n"
     )
     out = redact_secrets_text(text)
-    assert "sk-live-abc123" not in out
+    assert "not a real key" not in out
     assert "deadbeef" not in out
     assert "api_key: ***" in out
     assert "auth_token: ***" in out
