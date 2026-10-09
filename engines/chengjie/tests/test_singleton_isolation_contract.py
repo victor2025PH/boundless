@@ -62,3 +62,17 @@ def test_autouse_fixture_gives_clean_slate_at_entry():
     assert int(metrics.get("total", {}).get("generated", 0)) == 0, \
         "进入用例时 MetricsStore 应无累积 draft 指标"
     assert eb.get_event_bus().subscriber_count == 0, "进入用例时 EventBus 应无残留订阅者"
+
+
+def test_kill_switch_pointer_reset_drops_account_block(tmp_path):
+    """热路径只读进程内指针。摘掉指针后，上一例留下的 account 级急停不得再拦发送。"""
+    import src.ops.kill_switch as ksmod
+    from tests.conftest import _reset_process_singletons_now
+
+    ks = ksmod.KillSwitch(tmp_path / "rf.db")
+    ks.set("account:messenger:100", reason="leak-probe")
+    ksmod._singleton = ks
+    assert ksmod.is_blocked("messenger", "100")[0] is True
+    _reset_process_singletons_now()
+    assert ksmod._singleton is None
+    assert ksmod.is_blocked("messenger", "100") == (False, "", "")

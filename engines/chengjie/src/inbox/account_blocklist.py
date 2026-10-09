@@ -144,10 +144,12 @@ class AccountBlocklist:
     # ── 读 ────────────────────────────────────────────────────────────────
     def get(self, platform: str, account_id: str, peer: str) -> Optional[Dict[str, Any]]:
         with self._lock:
+            if self._conn is None:
+                return None
             row = self._conn.execute(
                 "SELECT * FROM account_blocklist WHERE platform=? AND account_id=? AND peer=?",
                 (_norm(platform).lower(), _norm(account_id), _norm(peer))).fetchone()
-        return dict(row) if row is not None else None
+            return dict(row) if row is not None else None
 
     def is_blocked(self, platform: str, account_id: str, peer: str) -> bool:
         """名单在场且**未解冻** → True。绝不抛。"""
@@ -164,10 +166,12 @@ class AccountBlocklist:
             return False
         try:
             with self._lock:
+                if self._conn is None:
+                    return False
                 row = self._conn.execute(
                     "SELECT 1 FROM account_blocklist WHERE platform=? AND peer=? AND unfrozen_ts<=0 LIMIT 1",
                     (plat, pr)).fetchone()
-            return row is not None
+                return row is not None
         except Exception:
             return False
 
@@ -182,11 +186,12 @@ class AccountBlocklist:
             return False
         try:
             with self._lock:
-                rows = self._conn.execute(
+                if self._conn is None:
+                    return False
+                rows = [str(r["peer"] or "") for r in self._conn.execute(
                     "SELECT peer FROM account_blocklist WHERE unfrozen_ts<=0 AND peer LIKE ?",
-                    (f"%{pk[-4:]}%",)).fetchall()
-            for r in rows:
-                raw = str(r["peer"] or "")
+                    (f"%{pk[-4:]}%",)).fetchall()]
+            for raw in rows:
                 head = raw.split("@", 1)[0]
                 if ":" in head and head.split(":", 1)[0].isalpha():
                     head = head.split(":", 1)[1]
@@ -244,9 +249,11 @@ class AccountBlocklist:
             sql += " AND unfrozen_ts=0"
         sql += " ORDER BY ts DESC LIMIT ?"
         with self._lock:
+            if self._conn is None:
+                return []
             rows = self._conn.execute(
                 sql, (_norm(platform).lower(), _norm(account_id), int(limit))).fetchall()
-        return [dict(r) for r in rows]
+            return [dict(r) for r in rows]
 
     def blocked_peers(self, platform: str, account_id: str) -> List[str]:
         return [str(r["peer"]) for r in self.list_for_account(
@@ -263,8 +270,10 @@ class AccountBlocklist:
                 sql += " AND account_id=?"
                 args.append(_norm(account_id))
         with self._lock:
+            if self._conn is None:
+                return {"total": 0, "active": 0}
             row = self._conn.execute(sql, args).fetchone()
-        return {"total": int(row["n"] or 0), "active": int(row["active"] or 0)}
+            return {"total": int(row["n"] or 0), "active": int(row["active"] or 0)}
 
     # ── 导出 / 导入（随账号迁移包） ───────────────────────────────────────
     def export_rows(self, platform: str, account_id: str) -> List[Dict[str, Any]]:
@@ -371,10 +380,17 @@ class AccountBlocklist:
         return added
 
     def close(self) -> None:
-        try:
-            self._conn.close()
-        except Exception:
-            pass
+        """关掉连接。必须持有 ``_lock``：登录回填的 settle 线程可能正在读同一份名单，
+        3.13 上并发 ``close`` 会把 worker 段错误（xdist 把崩溃记到当时正在跑的无关用例上）。"""
+        with self._lock:
+            conn = self._conn
+            self._conn = None
+            if conn is None:
+                return
+            try:
+                conn.close()
+            except Exception:
+                logger.debug("[blocklist] close 失败", exc_info=True)
 
 
 # ── 单例（按库路径） ─────────────────────────────────────────────────────────

@@ -67,8 +67,10 @@ def _warn_mirror_fail(platform: str, account_id: str, chat_key: str, *, kind: st
     _mirror_fail_total += 1
     now = time.monotonic()
     key = str(platform or "?")
-    last = _mirror_fail_last_warn.get(key, 0.0)
-    if now - last < _MIRROR_FAIL_WARN_GAP_SEC:
+    # 缺键 = 该平台从未告警。不能回落 0：monotonic 从开机算起，开机 10 分钟内
+    # 第一条失败会被节流成 debug。
+    last = _mirror_fail_last_warn.get(key)
+    if last is not None and now - last < _MIRROR_FAIL_WARN_GAP_SEC:
         logger.debug("[orchestrator] 出站回写收件箱失败 %s:%s chat=%s kind=%s（节流）",
                      platform, account_id, chat_key, kind, exc_info=True)
         return

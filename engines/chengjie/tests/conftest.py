@@ -441,9 +441,15 @@ def _reset_process_singletons_now():
     - EventBus（_bus）：_subscribers / _history 累积，14 个测试文件用；漏挂的
       订阅者会把后续 publish 串到旧 sink，history 也会跨测试漏数。
 
-    不纳入 db-backed 单例（DocumentJobStore / EntitlementStore / CareSchedule /
-    KillSwitch / CompanionFunnel / DeviceRegistry 等）——它们测试里走 :memory:
-    或显式 path，天然隔离；盲目重置反而可能打断「fixture 初始化后复用」的用例。
+    不纳入多数 db-backed 单例（DocumentJobStore / EntitlementStore / CareSchedule /
+    CompanionFunnel / DeviceRegistry 等）——它们测试里走 :memory: 或显式 path，
+    天然隔离；盲目重置反而可能打断「fixture 初始化后复用」的用例。
+
+    KillSwitch 例外：热路径 ``is_blocked`` 只读进程内 ``_singleton``，不看库文件。
+    用例用 monkeypatch 换上带 ``account:messenger:100`` 的实例后，若还原没发生
+    （同 worker 上一个用例中途崩、或还原回了已被写过的旧实例），后面的 Messenger
+    发送用例会稳定 403。这里只把指针摘掉，不删库、不新建库；需要急停的用例在
+    本钩子之后用 monkeypatch 自己装上。
     """
     try:
         from src.monitoring import metrics_store as _ms
@@ -468,6 +474,11 @@ def _reset_process_singletons_now():
         _vt = _sys.modules.get("src.voice_transcriber")
         if _vt is not None and getattr(_vt, "_TRANSCRIPT_CACHE", None) is not None:
             _vt._TRANSCRIPT_CACHE.reset()
+    except Exception:
+        pass
+    try:
+        from src.ops import kill_switch as _ks
+        _ks._singleton = None
     except Exception:
         pass
 
@@ -637,6 +648,14 @@ def _reset_account_blocklist_singleton():
     CI 用 xdist ``-n auto``（按用例分发，不按文件），别的用例记下的停联（如 telegram u1）会漏进
     同 worker 后续用例的 STOP 硬闸判定 → 每个用例后清掉，保证用例间互不串名单。"""
     yield
+    # 先停回填结算定时器，再关名单库。note_backfill 的默认 debounce 会把 Timer
+    # 留到用例结束之后；3.13 上这个线程还在 list_for_account 时 close() 会段错误，
+    # xdist 把崩溃记到当时正在 teardown 的无关用例上。
+    try:
+        from src.inbox import dormant_review as _dr
+        _dr.reset_for_tests()
+    except Exception:
+        pass
     try:
         from src.inbox import account_blocklist as _ab
         _ab.reset_for_tests()
