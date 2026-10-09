@@ -597,7 +597,9 @@ def get_inbox_store() -> Any:
 
 
 _SINK_FAIL_WARN_GAP_SEC = 600.0
-_sink_fail_last_warn = 0.0
+# None = 从未告警。不能用 0：monotonic 从开机算起，开机 10 分钟内 0 仍在节流窗里，
+# 第一条落库失败会被吞成 debug（CI 新 runner / 刚重启的机器上看不到 WARNING）。
+_sink_fail_last_warn: Optional[float] = None
 _sink_fail_total = 0
 
 
@@ -626,7 +628,8 @@ def emit_incoming(msg: Dict[str, Any]) -> None:
     except Exception:
         _sink_fail_total += 1
         now = time.monotonic()
-        if now - _sink_fail_last_warn >= _SINK_FAIL_WARN_GAP_SEC:
+        last_warn = _sink_fail_last_warn
+        if last_warn is None or now - last_warn >= _SINK_FAIL_WARN_GAP_SEC:
             _sink_fail_last_warn = now
             try:
                 m = msg if isinstance(msg, dict) else {}

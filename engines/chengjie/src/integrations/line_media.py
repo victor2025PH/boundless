@@ -556,12 +556,17 @@ def _try_refresh_token(api: Any) -> bool:
     冷却防 refresh token 已死时每条媒体都白打一次 tokenRefresh。
     """
     now = time.monotonic()
-    try:
-        last = float(getattr(api, "_lm_refresh_ts", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        last = 0.0
-    if (now - last) < _OBS_REFRESH_COOLDOWN_SEC:
-        return False
+    # 缺属性才是「从未刷过」。不能把缺省折成 0：time.monotonic() 从开机算起，
+    # 进程若在开机 600s 内启动，0 会落在冷却窗里，第一次 401 被跳过（CI 新机器 /
+    # 刚重启的客户机上媒体下载全灭，文字链却正常）。
+    raw = getattr(api, "_lm_refresh_ts", None)
+    if raw is not None:
+        try:
+            last = float(raw)
+        except (TypeError, ValueError):
+            last = None
+        if last is not None and (now - last) < _OBS_REFRESH_COOLDOWN_SEC:
+            return False
     try:
         api._lm_refresh_ts = now  # noqa: SLF001 —— 按 client 记冷却戳（duck-typed）
     except Exception:

@@ -10,6 +10,7 @@ C：split_targets 四栏计数（active / dormant / frozen / self_chat）。
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 import pytest
@@ -365,3 +366,30 @@ def test_frontend_dr_wiring_static():
     for d in dicts:
         missing = sorted(k for k in keys if k not in d)
         assert not missing, missing
+
+
+def test_blocklist_close_serializes_with_reader():
+    """3.13：settle 线程还在读名单时 teardown close 连接，sqlite 会段错误。
+    close 与查询同一把锁，行在锁内物化；关库后的读取返回空而不是崩进程。"""
+    bl = ab.AccountBlocklist(None)
+    bl.add("whatsapp", "a", "p1")
+    start = threading.Barrier(2)
+    errors: list = []
+
+    def reader():
+        start.wait(timeout=2)
+        for _ in range(300):
+            try:
+                bl.blocked_peers("whatsapp", "a")
+                bl.list_for_account("whatsapp", "a")
+            except Exception as exc:
+                errors.append(exc)
+
+    t = threading.Thread(target=reader)
+    t.start()
+    start.wait(timeout=2)
+    bl.close()
+    t.join(timeout=5)
+    assert not t.is_alive()
+    assert errors == []
+    assert bl.blocked_peers("whatsapp", "a") == []
