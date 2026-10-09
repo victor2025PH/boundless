@@ -517,7 +517,7 @@ class VoiceTranscriber:
             m = {k: v for k, v in (meta or {}).items() if k != "cache_hit"}
             get_transcript_cache().put(key, text, m, last_error)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in VoiceTranscriber._cache_put", exc_info=True)
 
     async def _apply_lang_hint(
         self, text: str, meta: Dict[str, Any], lang_hint: str,
@@ -625,7 +625,7 @@ class VoiceTranscriber:
                     "[asr] 转写繁→简归一: %s → %s", text[:40], out[:40])
                 return out
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in VoiceTranscriber._normalize_zh_script", exc_info=True)
         return text
 
     def _record_asr(self, *, ok: bool = False, level: int = 0,
@@ -639,7 +639,7 @@ class VoiceTranscriber:
             else:
                 stats.record(ok=ok, level=level, provider=self.__class__.__name__)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in VoiceTranscriber._record_asr", exc_info=True)
 
     async def _transcribe_impl(self, voice_file_path: str, language: str) -> Optional[str]:
         """具体转录实现（由子类重写）"""
@@ -891,7 +891,7 @@ class OpenAITranscriber(VoiceTranscriber):
                     try:
                         old.close()
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in OpenAITranscriber._get_client", exc_info=True)
             return self._client
 
     async def _transcribe_impl(self, voice_file_path: str, language: str) -> Optional[str]:
@@ -1134,7 +1134,7 @@ class AvatarWhisperTranscriber(VoiceTranscriber):
                 try:
                     Path(cleanup).unlink(missing_ok=True)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in AvatarWhisperTranscriber._transcribe_impl", exc_info=True)
 
 
 class SenseVoiceTranscriber(VoiceTranscriber):
@@ -1256,7 +1256,7 @@ class FallbackTranscriber(VoiceTranscriber):
             try:
                 t._asr_chained_child = True
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in FallbackTranscriber.__init__", exc_info=True)
         _names = " → ".join(t.__class__.__name__ for t in self._chain) or "(空)"
         self.logger.info(f"级联转录服务初始化: {_names}")
 
@@ -1305,7 +1305,7 @@ class FallbackTranscriber(VoiceTranscriber):
                     get_asr_stats().record(
                         ok=True, level=idx, provider=t.__class__.__name__)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in FallbackTranscriber.transcribe_voice_message", exc_info=True)
                 meta = dict(getattr(t, "last_meta", {}) or {})
                 if lang_hint:
                     async def _retry(lang: str, _t: Any = t) -> Tuple[Optional[str], Dict[str, Any]]:
@@ -1327,7 +1327,7 @@ class FallbackTranscriber(VoiceTranscriber):
             from src.ai.asr_stats import get_asr_stats
             get_asr_stats().record(ok=False)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in FallbackTranscriber.transcribe_voice_message", exc_info=True)
         # 全链返空且每级都是「内容决定」的空（no_speech/empty_result）→ 负缓存，
         # AutoDraft 十几秒后再来不必让 GPU 再白跑两遍；任一级是超时/被拒/异常则不缓存。
         if key and errs and last_err is None and all(

@@ -16,6 +16,7 @@ seam 注入（inspect_fn/describe_fn）：门禁在无 runner/无 VLM 下测全�
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Dict, Optional
 
 from src.assistant import pc_vision
@@ -42,6 +43,7 @@ def _default_describe(path: str, target: str, vision_cfg: Optional[dict],
     try:
         from src.vision_client import VisionClient
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _default_describe", exc_info=True)
         return None
     cfg = dict(vision_cfg or {})
     if not cfg:
@@ -55,6 +57,7 @@ def _default_describe(path: str, target: str, vision_cfg: Optional[dict],
         return vc.describe_image_sync(
             path, prompt=_GROUND_PROMPT.format(target=str(target)[:200]))
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _default_describe", exc_info=True)
         return None
 
 

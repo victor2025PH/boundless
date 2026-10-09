@@ -1406,6 +1406,7 @@ def read_history(cm, limit: int = 40) -> List[Dict[str, Any]]:
         try:
             rec = json.loads(line)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in read_history", exc_info=True)
             continue
         if isinstance(rec, dict) and rec.get("op") in ("apply", "undo"):
             out.append(rec)
@@ -1453,6 +1454,7 @@ def apply_undo(
                     store.set_automation_mode(o["cid"], o["mode"])
                 conv_restored += 1
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in apply_undo", exc_info=True)
                 continue
         if conv_restored:
             _audit(cm, {"op": "align_modes", "actor": actor,

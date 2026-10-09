@@ -127,6 +127,7 @@ def fetch_account_conversations(
         try:
             before = float(page[-1].get("last_ts") or 0.0)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in fetch_account_conversations", exc_info=True)
             break
         if len(page) < _PAGE or not before:
             break
@@ -188,6 +189,7 @@ def _pair_linked(cpi: Any, old_cid: str, new_cid: str) -> Optional[bool]:
     try:
         return str(cpi.resolve(*op)) == str(cpi.resolve(*np_))
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _pair_linked", exc_info=True)
         return None
 
 

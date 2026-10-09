@@ -413,6 +413,7 @@ def _blocklist(store: Any = None):
         from src.inbox.account_blocklist import get_blocklist
         return get_blocklist(store)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _blocklist", exc_info=True)
         return None
 
 
@@ -537,7 +538,7 @@ def audit(
                     path or "-", action or "-", reason or "-",
                     conversation_id or f"{platform}:{account_id}:{peer}", (hit or "-")[:40])
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in audit", exc_info=True)
     bl = _blocklist(store)
     if bl is None:
         return False

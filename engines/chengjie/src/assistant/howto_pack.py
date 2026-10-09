@@ -14,6 +14,8 @@ id 稳定（howto:<slug>），重跑 = 幂等 upsert。path 供前端「带我�
 """
 from __future__ import annotations
 
+import logging
+
 # (slug, title, title_en, content, content_en, keywords, path)
 _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     (
@@ -2220,7 +2222,7 @@ try:
     from src.assistant.onboarding_guides import howto_tuples as _onboarding_howto_tuples
     _HOWTO.extend(_onboarding_howto_tuples())
 except Exception:  # 教程数据不可用不影响其余帮助条目
-    pass
+    logging.getLogger(__name__).debug("swallowed in module", exc_info=True)
 
 
 # 「带我去」聚光灯锚点（P3 2026-08-21）：跳页后高亮的目标选择器。
