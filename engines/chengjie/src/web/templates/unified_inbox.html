@@ -806,7 +806,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
           <span class="hdr-eff-chip" id="mode-eff-chip" onclick="openAiDiag()" style="display:none;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber8,#92400e);white-space:nowrap;cursor:pointer;"></span>
           <!-- Q-14 #262：「AI 本轮未生成（超时 · 23:41）」灰标——/thread 响应 ai_last_fail 有值才显示；
                点「重试起草」走既有 /api/drafts/{id}/regenerate；该会话下次 AI 成功自动清。 -->
-          <span class="hdr-eff-chip" id="aif-chip" style="display:none;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-gray100,#f1f5f9);color:var(--th-ink-gray6,#64748b);white-space:nowrap;"><span id="aif-chip-text"></span><button class="hdr-btn" id="aif-retry-btn" onclick="aifRetryDraft()" style="padding:0 6px;font-size:11px;line-height:16px;" data-i18n="inbox.aif.retry">重试起草</button></span>
+          <span class="hdr-eff-chip" id="aif-chip" style="display:none;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-gray100,#f3f4f6);color:var(--th-ink-gray6,#64748b);white-space:nowrap;"><span id="aif-chip-text"></span><button class="hdr-btn" id="aif-retry-btn" onclick="aifRetryDraft()" style="padding:0 6px;font-size:11px;line-height:16px;" data-i18n="inbox.aif.retry">重试起草</button></span>
           <!-- P0 2026-08-09 AI 状态体检入口：why_no_reply 排障 CLI 的面板化。
                「为什么这条没自动回」从工程师 SSH 变成坐席自己点一下。 -->
           <button class="hdr-btn" id="ai-diag-btn" onclick="openAiDiag()" title="AI 回复链路体检：这个会话为什么没自动回" data-i18n-title="inbox.diag.btn_t"><span>🩺</span><span data-i18n="inbox.diag.btn">AI 状态</span></button>
@@ -9236,7 +9236,7 @@ function _renderReplyWindow(rw, c){
       el.style.background=bg; el.style.border='1px solid '+bd;
       el.style.color=tone==='muted'?'var(--text-muted,#6b7280)':'var(--text-main,#0f172a)';
       el.innerHTML='<span style="flex:none;width:8px;height:8px;border-radius:50%;background:'
-        +(tone==='warn'?'#f59e0b':(tone==='muted'?'#9ca3af':'var(--accent,#1e8cf2)'))+'"></span>'
+        +(tone==='warn'?'var(--th-bg-amber5,#f59e0b)':(tone==='muted'?'var(--th-ink-gray4,#5b6b85)':'var(--accent,#1e8cf2)'))+'"></span>'
         +'<span style="flex:1;min-width:0;">'+esc(text)+'</span>';
       el.style.display='flex';
     };
@@ -19746,7 +19746,7 @@ function renderInfoSidebarAI(ai){
       ${(ai.suggested_replies||[]).map((r,i)=>{
         const bg=r.recommended?'rgba(13,148,136,.14)':'var(--bg-soft)';
         const border=r.recommended?'#0d9488':'var(--border)';
-        const badge=r.recommended?'<span style="font-size:11px;background:#0d9488;color:var(--th-ink-inverse,#fff);border-radius:4px;padding:1px 5px;margin-left:4px;">'+window.T('inbox.ai.recommended')+'</span>':'';
+        const badge=r.recommended?'<span style="font-size:11px;background:var(--th-bg-teal6,#0d9488);color:var(--th-ink-inverse,#fff);border-radius:4px;padding:1px 5px;margin-left:4px;">'+window.T('inbox.ai.recommended')+'</span>':'';
         return `<div style="margin-top:4px;background:${bg};border-left:3px solid ${border};border-radius:0 5px 5px 0;padding:5px 7px;">
           <div style="font-size:11px;color:var(--text-sub);margin-bottom:2px;">${esc(r.rationale||'')}${badge}</div>
           <div style="font-size:11px;color:var(--text-main);line-height:1.45;">${esc(r.text||'')}</div>
@@ -23115,7 +23115,7 @@ async function _vcmAuditionSys(){
     return;
   }
   box.innerHTML=
-    `<div style="color:#b45309;margin-bottom:4px">${window.T('inbox.vcm.audition_sys_note')}</div>`+
+    `<div style="color:var(--th-ink-amber7,#b45309);margin-bottom:4px">${window.T('inbox.vcm.audition_sys_note')}</div>`+
     `<audio controls src="${esc(url)}" style="width:100%;"></audio>`+
     `<div style="margin-top:6px"><button class="vcm-btn" data-act="vcm-audition-retry">${window.T('inbox.vcm.audition_retry')}</button></div>`;
 }
@@ -28372,7 +28372,7 @@ function _modeDesc(m){ return (m.desc_key&&window.T(m.desc_key,null))||m.desc||'
 function _showConnectModesFail(why){
   const box=document.getElementById('connect-modes');
   if(!box) return;
-  const hint=why?('<div style="margin-top:6px;color:var(--th-ink-slate4,#8b9bb4);font-weight:400;">'+esc(String(why).slice(0,160))+'</div>'):'';
+  const hint=why?('<div style="margin-top:6px;color:var(--th-ink-slate4,#5b6b85);font-weight:400;">'+esc(String(why).slice(0,160))+'</div>'):'';
   box.innerHTML='<div style="font-size:12px;color:var(--red);text-align:center;padding:16px;">'
     +window.T('inbox.connect.modes_fail')+hint
     +'<div class="connect-actions" style="justify-content:center;margin-top:12px;">'

@@ -404,7 +404,7 @@ textarea.f-inp.he-json-area{font-family:ui-monospace,SFMono-Regular,Consolas,mon
       <p class="f-hint">{{ (i18n or {}).get('set_fb_purge_hint', "只删「系统预置 · 已停用 · 从未命中」的条目（1.0.77 前播进去的【示例】三条与客服兜底）。先预览清单，核对后再删；启用过或命中过的一律不碰。") }}</p>
       <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
         <button type="button" class="btn-s" id="fb-purge-preview" style="padding:.45rem 1rem;border:1.5px solid var(--bd);border-radius:8px;background:transparent;color:var(--t,#111827);font-size:.8rem;font-weight:600;cursor:pointer">{{ (i18n or {}).get('set_fb_purge_preview', "预览清单（不删）") }}</button>
-        <button type="button" class="btn-s" id="fb-purge-go" style="display:none;padding:.45rem 1rem;border:1.5px solid var(--th-bd-red3,#fca5a5);border-radius:8px;background:var(--th-bg-red6,#dc2626);color:#fff;font-size:.8rem;font-weight:600;cursor:pointer"></button>
+        <button type="button" class="btn-s" id="fb-purge-go" style="display:none;padding:.45rem 1rem;border:1.5px solid var(--th-bd-red3,#fca5a5);border-radius:8px;background:var(--th-bg-red6,#dc2626);color:var(--th-ink-inverse,#fff);font-size:.8rem;font-weight:600;cursor:pointer"></button>
       </div>
       <p class="f-hint" id="fb-purge-out" style="display:none;margin-top:.5rem;font-weight:600"></p>
       <ul id="fb-purge-list" style="display:none;margin:.4rem 0 0 1rem;padding:0;font-size:.76rem;color:var(--t2)"></ul>
