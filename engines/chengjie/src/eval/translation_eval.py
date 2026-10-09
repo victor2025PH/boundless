@@ -28,6 +28,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from difflib import SequenceMatcher
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -270,6 +271,7 @@ def build_deterministic_evaluator(
         from src.ai.translation_service import TranslationService
         ts = TranslationService(ai_client=None, engines=det)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in build_deterministic_evaluator", exc_info=True)
         return None
 
     async def _translate(text: str, source_lang: str, target_lang: str) -> str:
@@ -381,6 +383,7 @@ def build_local_mt_evaluator(
             payload_extra=mc.get("payload_extra"),
         )
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in build_local_mt_evaluator", exc_info=True)
         return None
     if not eng.available:
         return None
@@ -388,6 +391,7 @@ def build_local_mt_evaluator(
         from src.ai.translation_service import TranslationService
         ts = TranslationService(ai_client=None, engines=[eng])
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in build_local_mt_evaluator", exc_info=True)
         return None
 
     async def _translate(text: str, source_lang: str, target_lang: str) -> str:
@@ -413,6 +417,7 @@ def build_ai_evaluator(
         from src.ai.translation_engines import AIEngine
         from src.ai.translation_service import TranslationService
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in build_ai_evaluator", exc_info=True)
         return None
 
     class _Cfg:
@@ -425,6 +430,7 @@ def build_ai_evaluator(
     try:
         client = AIClient(_Cfg())
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in build_ai_evaluator", exc_info=True)
         return None
     ts = TranslationService(ai_client=client, engines=[AIEngine(client)])
     state = {"inited": False}
@@ -434,7 +440,7 @@ def build_ai_evaluator(
             try:
                 await client.initialize()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in build_ai_evaluator._translate", exc_info=True)
             state["inited"] = True
         # 主对话 LLM 是付费通道。横比参照显式 pro，免费档守卫不会把样本译成空串。
         res = await ts.translate(

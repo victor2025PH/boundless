@@ -22,6 +22,7 @@ translation_eval_weekly …）里，没有一张「AI 本周替你干了什么�
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, List, Optional
 
@@ -153,7 +154,7 @@ def _goals_window(goal_store: Any, lo: float, hi: float,
                     tri[v] = tri.get(v, 0) + 1
                 out["triage"] = tri
     except Exception:
-        pass                        # 三分法失败退回纯计数，绝不拖垮周报
+        logging.getLogger(__name__).debug("swallowed in _goals_window", exc_info=True)
     return out
 
 
@@ -253,7 +254,7 @@ def build_weekly_value(store: Any, *, goal_store: Any = None,
                 if attr:
                     d_tw["chain_attributed"] = attr
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in build_weekly_value", exc_info=True)
             tw["deals"] = d_tw
             lw["deals"] = d_lw
         try:
@@ -269,7 +270,7 @@ def build_weekly_value(store: Any, *, goal_store: Any = None,
                     tw["goals"] = g_tw
                     lw["goals"] = g_lw
         except Exception:
-            pass                    # 目标段任何失败不拖垮周报主体
+            logging.getLogger(__name__).debug("swallowed in build_weekly_value", exc_info=True)
         try:
             cts = case_trend_store
             if cts is None:
@@ -283,7 +284,7 @@ def build_weekly_value(store: Any, *, goal_store: Any = None,
                     tw["cases"] = c_tw
                     lw["cases"] = c_lw
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in build_weekly_value", exc_info=True)
         # 融合 P2：学习队列段——AI 本周学会了什么（入库知识/覆盖提问/待审积压）
         try:
             ln = learner
@@ -298,7 +299,7 @@ def build_weekly_value(store: Any, *, goal_store: Any = None,
                     tw["learner"] = l_tw
                     lw["learner"] = l_lw
         except Exception:
-            pass                    # 学习段任何失败不拖垮周报主体
+            logging.getLogger(__name__).debug("swallowed in build_weekly_value", exc_info=True)
         # P2 2026-08-23：风控防护段——急停置位/解除的周计数（审计口径，重启不丢）
         try:
             oe = ops_events_store
@@ -312,7 +313,7 @@ def build_weekly_value(store: Any, *, goal_store: Any = None,
                     tw["safety"] = s_tw
                     lw["safety"] = s_lw
         except Exception:
-            pass                    # 防护段任何失败不拖垮周报主体
+            logging.getLogger(__name__).debug("swallowed in build_weekly_value", exc_info=True)
         return {"this_week": tw, "last_week": lw,
                 "text_lines": weekly_value_lines(tw, lw)}
     except Exception:

@@ -306,7 +306,7 @@ class ContactStore:
             try:
                 self._conn.close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in ContactStore.close", exc_info=True)
 
     # ── 通用 ────────────────────────────────────────────────
     @staticmethod
@@ -1456,6 +1456,7 @@ class ContactStore:
                 payload = _json.loads(r["payload_json"] or "{}")
                 to_stage = str(payload.get("to") or "").strip()
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in ContactStore.count_stage_transitions_by_day", exc_info=True)
                 continue
             if not to_stage:
                 continue

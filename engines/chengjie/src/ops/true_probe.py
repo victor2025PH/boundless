@@ -723,7 +723,7 @@ def run_probe(spec: Dict[str, Any]) -> Tuple[bool, str]:
                     purpose="probe", tier="probe",
                     provider=provider_from_base_url(url) or "lan")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in run_probe", exc_info=True)
             content = _chat_content(data)
             verdict_ok, why = content_verdict(content, spec)
             if not verdict_ok:

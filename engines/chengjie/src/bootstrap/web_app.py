@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 import asyncio
 import os
 from pathlib import Path
@@ -136,7 +137,7 @@ def start_web_server_thread(assistant: Any, server: Any, web_host: str, web_port
                 try:
                     web_loop.close()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in start_web_server_thread._run_web_in_thread", exc_info=True)
         except BaseException as e:  # 必须含 SystemExit：uvicorn bind 失败的真实路径
             exc = e
         reason = classify_web_serve_outcome(

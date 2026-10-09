@@ -77,7 +77,7 @@ def gate_cfg(config: Any = None) -> Dict[str, Any]:
         if isinstance(node, dict):
             out.update({k: v for k, v in node.items() if v is not None})
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in gate_cfg", exc_info=True)
     return out
 
 
@@ -201,7 +201,7 @@ def reset_script_scope(token: Any) -> None:
     try:
         _SCRIPT_CTX.reset(token)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in reset_script_scope", exc_info=True)
 
 
 def is_script_marker(value: Any) -> bool:
@@ -252,7 +252,7 @@ def classify_origin(origin: Any, *, platform: str = "", account_id: str = "",
         if acct and _match_list(script_accounts(config), f"{platform}:{acct}", acct):
             return ORIGIN_SCRIPT
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in classify_origin", exc_info=True)
     if o in ("manual", ORIGIN_AGENT, "human"):
         return ORIGIN_AGENT
     return ORIGIN_AI
@@ -317,7 +317,7 @@ class SendRateStore:
         try:
             self._conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SendRateStore.close", exc_info=True)
 
     def record(self, platform: str, account_id: str, origin: str, chat_key: str = "",
                *, ts: Optional[float] = None) -> None:
@@ -441,6 +441,7 @@ def _age_days(platform: str, account_id: str, registry: Any, now: float) -> Opti
         created = float((acc.get("created_at") if isinstance(acc, dict)
                          else getattr(acc, "created_at", 0)) or 0)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _age_days", exc_info=True)
         return None
     if created <= 0:
         return None
@@ -560,6 +561,7 @@ def block_info(platform: str, account_id: str, *, origin: str = "manual", chat_k
                                  cap=int(r.get("cap") or 0), config=config, now=now, store=store),
         }
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in block_info", exc_info=True)
         return None
 
 

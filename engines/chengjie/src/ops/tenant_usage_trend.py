@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import logging
 import json
 import time
 from pathlib import Path
@@ -40,7 +41,7 @@ def load_ledger(path: Path = DEFAULT_LEDGER) -> Dict[str, Any]:
             data.setdefault("hints_sent", {})
             return data
     except Exception:  # noqa: BLE001 - 首跑/损坏都从零攒（台账可再生）
-        pass
+        logging.getLogger(__name__).debug("swallowed in load_ledger", exc_info=True)
     return {"days": {}, "hints_sent": {}}
 
 
