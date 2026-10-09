@@ -71,10 +71,14 @@ def test_unsupported_list_covers_the_common_asks():
     「没提到」和「明确不支持」对用户是两种体验：前者让他继续追问/以为在路上，
     后者他当场就能决策。老板实录问的正是「支持抖音吗」。
     """
-    # 「微信」以「个人微信」条目承载（实施97：企业微信的「微信客服」已支持，个人号明确不支持）
-    for must in ("微信", "抖音"):
+    # 「微信」以「个人微信」条目承载（实施97：企业微信的「微信客服」已支持，个人号明确不支持）。
+    # 抖音已是官方通道，必须出现在支持清单里，不能再写进不支持。
+    for must in ("微信", "小红书"):
         assert any(must in ch for ch in UNSUPPORTED_CHANNELS), (
             f"{must} 是高频提问，必须显式回答")
+    assert any("抖音" in ch for ch in SUPPORTED_CHANNELS)
+    assert not any("抖音" in ch for ch in UNSUPPORTED_CHANNELS)
+    assert "TikTok" in SUPPORTED_CHANNELS
 
 
 def test_facts_block_carries_boundaries_in_both_langs():
@@ -84,8 +88,9 @@ def test_facts_block_carries_boundaries_in_both_langs():
         assert len(blk) > 200, f"{lang} 事实卡过短，多半被误删"
         assert "Telegram" in blk and "WhatsApp" in blk
         # 不支持清单是重点：只说支持什么，用户仍会追问「那抖音呢」
-        assert "抖音" in blk or "抖音" in "".join(UNSUPPORTED_CHANNELS)
+        assert "抖音" in blk
         assert ("不支持" in blk) or ("Not supported" in blk)
+    assert "Douyin" in product_facts_block("en") and "TikTok" in product_facts_block("en")
     # PC 副驾入站语音听不到 → 请打字（P3-1，防小智答「能听微信语音」）
     zh = product_facts_block("zh")
     assert "打字" in zh and ("听不到" in zh or "语音N秒" in zh)

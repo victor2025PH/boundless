@@ -94,6 +94,10 @@ _IMPLEMENTED_MODES = {
     # Telegram Bot API（官方 bot，2026-10-08）：与个人号协议轨并列的合规第二路；凭证在向导
     # 「Telegram 机器人」卡（channel_setup id=telegram_bot），见 _OFFICIAL_CHANNEL_OF。
     ("telegram", "official"),
+    # 抖音企业号小程序 IM / TikTok Business Messaging（2026-10-09 公开版）。
+    # 只登记 official：web / device / personal_rpa 没有可点的真边车，不能标成已实现。
+    ("douyin", "official"),
+    ("tiktok", "official"),
 }
 
 #: official 模式凭证所在的向导卡 id ≠ 平台名的情形（Telegram 的 telegram 卡是个人号 API 凭证，

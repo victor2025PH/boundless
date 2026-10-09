@@ -129,8 +129,10 @@ def test_tiktok_rpa_tab_enable_bind_and_render(auth_client, app, tmp_path, monke
 
 def test_howto_and_registry_do_not_claim_official_personal_dm():
     spec = preg.get("tiktok")
-    assert spec.implemented is False
+    # 官方 Business Messaging 已落地；个人号真机仍是非官方，不能被 implemented 连带说成官方私信。
+    assert spec.implemented is True
     assert "notice_unofficial" in spec.note and "personal_rpa" in spec.note
+    assert "个人号没有官方私信接口" in spec.note
     e = next(x for x in build_howto_entries() if x["id"] == "howto:supported-platforms")
     blob = e["content"] + e.get("content_en", "") + e.get("title", "")
     assert "个人号没有官方私信接口" in blob or "no official DM API for personal" in blob.lower()

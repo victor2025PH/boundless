@@ -91,7 +91,9 @@ _VL_EMOJI = {
 ACTION_PLATFORMS = ("telegram", "whatsapp", "line", "messenger", "zalo",
                     "instagram",
                     # QQ 协议登录（个人号，Milky；2026-09-07）：有状态 worker，进能力矩阵
-                    "qq")
+                    "qq",
+                    # 抖音 / TikTok 官方 worker（2026-10-09）：与节奏表白名单同序
+                    "douyin", "tiktok")
 
 # ── 注册表 ────────────────────────────────────────────────────────────────
 # level: L0 查询 / L1 导航 / L2 可逆设置。

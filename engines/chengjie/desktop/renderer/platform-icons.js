@@ -27,6 +27,8 @@
     qq_bot: "qqbot", "qq-bot": "qqbot", qqofficial: "qqbot", qq_official: "qqbot",
     // 微信客服（企业微信官方通道，实施97）复用 WeChat 字形：终端客户看到的都是微信
     wechat_kf: "wechat", wxkf: "wechat", weixin: "wechat",
+    aweme: "douyin", dy: "douyin",
+    tt: "tiktok", trill: "tiktok", musically: "tiktok",
     inbox: "web", website: "web", widget: "web"
   };
 
@@ -35,14 +37,16 @@
     telegram: "#229ED9", whatsapp: "#25D366", messenger: "#0084FF", line: "#06C755",
     instagram: "#E1306C", signal: "#3A76F0", x: "#000000", zalo: "#0068FF",
     wechat: "#07C160", viber: "#7360F2", web: "#3B82F6",
-    qq: "#1EBAFC", qqbot: "#1E63FF"
+    qq: "#1EBAFC", qqbot: "#1E63FF",
+    douyin: "#FE2C55", tiktok: "#25F4EE"
   };
 
   var NAMES = {
     telegram: "Telegram", whatsapp: "WhatsApp", messenger: "Messenger", line: "LINE",
     instagram: "Instagram", signal: "Signal", x: "X", zalo: "Zalo",
     wechat: "WeChat", viber: "Viber", web: "Web",
-    qq: "QQ", qqbot: "QQ Bot"
+    qq: "QQ", qqbot: "QQ Bot",
+    douyin: "Douyin", tiktok: "TikTok"
   };
 
   function norm(p) {
@@ -88,6 +92,8 @@
       + '<rect x="4.9" y="6.6" width="14.2" height="11.6" rx="3.4"/></g>'
       + '<g fill="url(#pfg-qqb)"><circle cx="9.15" cy="11.55" r="1.5"/><circle cx="14.85" cy="11.55" r="1.5"/>'
       + '<rect x="9.1" y="14.55" width="5.8" height="1.5" rx=".75"/></g>',
+    douyin: '<rect width="24" height="24" rx="5.6" fill="#FE2C55"/><path fill="#fff" d="M14.6 4.4c.2 1.5 1.1 2.8 2.6 3.3v2c-1-.2-1.9-.6-2.6-1.1v5.2c0 2.6-2.1 4.7-4.8 4.7S5 16.4 5 13.8c0-2.5 2-4.6 4.6-4.7v2.1c-1.4.1-2.5 1.3-2.5 2.6 0 1.5 1.2 2.7 2.7 2.7s2.7-1.2 2.7-2.7V4.4h2.1z"/>',
+    tiktok: '<rect width="24" height="24" rx="5.6" fill="#111"/><path fill="#25F4EE" d="M13.4 4.6c.3 1.5 1.2 2.7 2.6 3.2v1.9c-.9-.2-1.7-.6-2.4-1.1v4.8c0 2.5-2 4.5-4.5 4.5S4.6 15.9 4.6 13.4s2-4.5 4.5-4.5c.3 0 .5 0 .8.1v2c-.3-.1-.5-.2-.8-.2-1.4 0-2.5 1.1-2.5 2.6s1.1 2.6 2.5 2.6 2.5-1.1 2.5-2.6V4.6h1.8z"/><path fill="#FE2C55" transform="translate(1.15 .55)" d="M13.4 4.6c.3 1.5 1.2 2.7 2.6 3.2v1.9c-.9-.2-1.7-.6-2.4-1.1v4.8c0 2.5-2 4.5-4.5 4.5S4.6 15.9 4.6 13.4s2-4.5 4.5-4.5c.3 0 .5 0 .8.1v2c-.3-.1-.5-.2-.8-.2-1.4 0-2.5 1.1-2.5 2.6s1.1 2.6 2.5 2.6 2.5-1.1 2.5-2.6V4.6h1.8z"/>',
     web: '<rect width="24" height="24" rx="5.6" fill="#3B82F6"/><g fill="none" stroke="#fff" stroke-width="1.5"><circle cx="12" cy="12" r="6.3"/><ellipse cx="12" cy="12" rx="2.7" ry="6.3"/><path d="M5.9 10h12.2M5.9 14h12.2"/></g>',
     _fallback: '<rect width="24" height="24" rx="5.6" fill="#64748B"/><path fill="#fff" d="M7 7.5h10a1.8 1.8 0 0 1 1.8 1.8v4.4a1.8 1.8 0 0 1-1.8 1.8h-4.2L9 19v-2.7H7a1.8 1.8 0 0 1-1.8-1.8V9.3A1.8 1.8 0 0 1 7 7.5z"/>'
   };

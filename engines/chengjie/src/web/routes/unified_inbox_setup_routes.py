@@ -369,6 +369,10 @@ def _provision_official_account(channel_id: str, config: Dict[str, Any]) -> str:
         ch = get_channel(channel_id)
         if ch is None or not ch.official_platform:
             return ""
+        # 抖音 / TikTok：account_id 只能来自 OAuth 的 open_id。这里回落 "official"
+        # 会开出一行永远对不上入站的账号。
+        if not ch.official_auto_account:
+            return ""
         # 必填凭证未齐（如只填了一半）不开账号：开了也起不来，反而在账号栏挂个错误行
         if not _required_ready(ch, {}, config):
             return ""

@@ -2129,13 +2129,13 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
 /* ===== 常量 ===== */
 // wechat（个人微信 PC 副驾，准入区）不进 FIXED_PLATS：仅在该桌面账号真的接入时按「有账号的平台」动态出现，
 // 这里只给它配色/显示名，免得动态出现时退灰色兜底。
-const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',qq:'#1EBAFC',wechat_kf:'#07C160',wechat:'#07C160',web:'#3b82f6'};
+const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',qq:'#1EBAFC',wechat_kf:'#07C160',wechat:'#07C160',web:'#3b82f6',douyin:'#FE2C55',tiktok:'#25F4EE'};
 const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',web:'🌐'};   // wechat_kf / wechat / qq / qqbot 走 platformIconSVG（已有矢量），文本回落取 PI[p]||默认气泡。qq/qqbot 不占 emoji 额度（实施97 天花板）
-const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',qqbot:'QQ Bot',qq:'QQ',wechat_kf:'WeChat Service',wechat:'WeChat',web:'Web'};
+const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',qqbot:'QQ Bot',qq:'QQ',wechat_kf:'WeChat Service',wechat:'WeChat',web:'Web',douyin:'Douyin',tiktok:'TikTok'};
 // 左栏常驻平台（无会话也显示；= 后端已实现接入的平台，见 platform_readiness._IMPLEMENTED_MODES）。
 // IG/Zalo/QQ 机器人/微信客服为官方 API 形态：未配凭证时以「未接入」暗态常驻，hover 卡 + 空态引导接入（2026-08-07）。
 // 仅有图标没有后端的平台（X/Signal/个人微信/Viber）刻意不进此表——展示了也没有接入路径。
-const FIXED_PLATS = ['telegram','line','whatsapp','messenger','instagram','zalo','qqbot','qq','wechat_kf'];
+const FIXED_PLATS = ['telegram','line','whatsapp','messenger','instagram','zalo','qqbot','qq','wechat_kf','douyin','tiktok'];
 const PLAT_DESC = {
   telegram:window.T('inbox.plat.telegram_desc'),
   line:window.T('inbox.plat.line_desc'),
@@ -2146,6 +2146,8 @@ const PLAT_DESC = {
   qqbot:window.T('inbox.plat.qqbot_desc'),
   qq:window.T('inbox.plat.qq_desc'),
   wechat_kf:window.T('inbox.plat.wechat_kf_desc'),
+  douyin:window.T('inbox.plat.douyin_desc'),
+  tiktok:window.T('inbox.plat.tiktok_desc'),
   web:window.T('inbox.plat.web_desc'),
 };
 // 各平台接入方式一句话说明（账号抽屉空状态 note 行）：登录形态不同，别让「扫码」心智一刀切
@@ -2160,6 +2162,8 @@ const PLAT_NOTE = {
   qqbot:window.T('inbox.acct.note_qqbot'),
   qq:window.T('inbox.acct.note_qq'),
   wechat_kf:window.T('inbox.acct.note_wechat_kf'),
+  douyin:window.T('inbox.acct.note_douyin'),
+  tiktok:window.T('inbox.acct.note_tiktok'),
 };
 const PLAT_STATE_LABEL = {on:window.T('inbox.pstate.on'),off:window.T('inbox.pstate.off'),none:window.T('inbox.pstate.none')};
 const PLAT_STATE_COLOR = {on:'#16a34a',off:'#dc2626',none:'#94a3b8'};
@@ -28569,6 +28573,8 @@ const _OFFICIAL_CONSOLE={
   line:'https://developers.line.biz/console/',
   qqbot:'https://q.qq.com/',
   wechat_kf:'https://work.weixin.qq.com/wework_admin/frame#apps',
+  douyin:'https://developer.open-douyin.com/',
+  tiktok:'https://business-api.tiktok.com/',
 };
 // 准备清单：让用户点「去接入向导」之前就知道要带什么材料、去哪拿、大约多久。
 // 字段 chip 标必填/可选/已填；win_note_<platform> 键存在时附平台政策注释（如 7 天窗）。
@@ -30620,7 +30626,7 @@ async function init(){
     const _drawerRaw=String(_q.get('drawer')||'').toLowerCase().trim();
     const _wantDrawer=_drawerRaw==='1'||_drawerRaw==='true'||!!_connect;
     // Instagram/Zalo/QQ 机器人/微信客服无扫码态，openConnect → 模式选 → credentials → /workspace/setup
-    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger','instagram','zalo','qqbot','qq','wechat_kf']);
+    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger','instagram','zalo','qqbot','qq','wechat_kf','douyin','tiktok']);
     if(_wantDrawer && typeof openDrawer==='function'){
       openDrawer();
       if(_connect && _CONNECT_PLATS.has(_connect) && typeof openConnect==='function'){

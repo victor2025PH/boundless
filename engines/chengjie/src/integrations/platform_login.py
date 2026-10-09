@@ -51,6 +51,9 @@ SUPPORTED_PLATFORMS = (
     # 微信客服（企业微信官方通道，实施97 线 A，2026-09-07）：与「个人微信」（platform=wechat，
     # 准入区 PC 副驾）是两个独立平台——身份空间（external_userid vs 微信号）/ 合规归属不同。
     "wechat_kf",
+    # 抖音企业号小程序 IM / TikTok Business Messaging（官方 API，2026-10-09 公开版）。
+    # 网页托管与真机边车未做，不进本表的默认可点方式；个人号不是这条官方通道。
+    "douyin", "tiktok",
 )
 
 # 登录方式（mode）：协议多开 / 网页隔离 / 真机RPA / 官方 API / 手机号验证码
@@ -266,6 +269,10 @@ DEFAULT_PLATFORM_MODES: Dict[str, Dict[str, Any]] = {
     "qq": {"modes": ["protocol"], "default": "protocol"},
     # 微信客服：只有官方形态（企微 CorpID/Secret 经向导）；个人微信是另一个平台 wechat
     "wechat_kf": {"modes": ["official"], "default": "official"},
+    # 抖音 / TikTok：公开版只列已接线的官方 API。web / device / personal_rpa 仍在注册表
+    # 备注里，但不进默认可点清单——没做的边车摆出来就是一张点不通的卡。
+    "douyin": {"modes": ["official"], "default": "official"},
+    "tiktok": {"modes": ["official"], "default": "official"},
 }
 
 # 个人号扫码登录（web/qr 边车）可**增量**补给这些原本纯官方的渠道。刻意不写进上面的
@@ -312,6 +319,14 @@ PLATFORM_INSTRUCTIONS: Dict[str, str] = {
         "微信客服走企业微信官方接入：在「接入向导」里填好企微自建应用的 CorpID / Secret 即自动上线，"
         "无需扫码；应用需配可信 IP，客户扫客服二维码即可咨询。"
     ),
+    "douyin": (
+        "抖音企业号走官方小程序 IM：在「接入向导」里填好 Client Key / Client Secret，"
+        "再用企业号扫码授权。只能回复客户先发来的私信；个人号不是这条通道。"
+    ),
+    "tiktok": (
+        "TikTok 走官方 Business Messaging：在「接入向导」里填好 App ID / Secret，"
+        "再按注册地完成授权。只能回复对方先发来的私信；个人号没有官方私信接口。"
+    ),
 }
 
 # 上表的 i18n 键（英文坐席不该看到中文指引）。仅在指引取自上表（即 provider 没给
@@ -328,6 +343,8 @@ PLATFORM_INSTRUCTION_KEYS: Dict[str, str] = {
     "qqbot": "inbox.connect.instr_qqbot",
     "qq": "inbox.connect.instr_qq",
     "wechat_kf": "inbox.connect.instr_wechat_kf",
+    "douyin": "inbox.connect.instr_douyin",
+    "tiktok": "inbox.connect.instr_tiktok",
 }
 
 

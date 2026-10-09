@@ -350,6 +350,8 @@ ZH = {
     "inbox.acct.qq_driver_demo_t": "QQ 个人号连接边车已随安装包装好，但底层真驱动尚未接入：当前扫码与收发都是演示数据，不能真收发。真驱动通过去风险验证后自动开放。",
     # 微信客服（企业微信官方通道，实施97 线 A，2026-09-07）：与「个人微信」是两个独立渠道
     "inbox.acct.note_wechat_kf": "企业微信官方通道：填自建应用凭证即接通（不扫码），客户扫客服二维码即可咨询；五步引导页约 10 分钟",
+    "inbox.acct.note_douyin": "官方小程序 IM：填 Client Key / Secret 后用企业号扫码授权；只能回复客户先发来的私信，个人号不是这条通道",
+    "inbox.acct.note_tiktok": "官方 Business Messaging：填 App ID / Secret 后按注册地授权；只能回复对方先发来的私信，个人号没有官方接口",
     # ── 账号详情二级面板 P1（概览 / 归属 / 官方资料编辑 / 变更记录）──
     "inbox.acct.head_view_t": "查看账号详情",
     "inbox.acct.detail_title": "账号详情",
@@ -1326,6 +1328,12 @@ ZH = {
     "inbox.connect.instr_wechat_kf":
         "微信客服走企业微信官方接入：在「接入向导」里填好企微自建应用的 CorpID / Secret 即自动上线，"
         "无需扫码；应用需配可信 IP，客户扫客服二维码即可咨询。",
+    "inbox.connect.instr_douyin":
+        "抖音企业号走官方小程序 IM：在「接入向导」里填好 Client Key / Client Secret，"
+        "再用企业号扫码授权。只能回复客户先发来的私信；个人号不是这条通道。",
+    "inbox.connect.instr_tiktok":
+        "TikTok 走官方 Business Messaging：在「接入向导」里填好 App ID / Secret，"
+        "再按注册地完成授权。只能回复对方先发来的私信；个人号没有官方私信接口。",
     "inbox.connect.instr_ig_web":
         "服务器上已打开 Instagram 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
         "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
@@ -2372,6 +2380,8 @@ ZH = {
     "inbox.plat.qqbot_desc": "QQ 开放平台官方机器人 · 单聊 / 群 @ 被动回复（60 分钟内 4 条）· 填 AppID/AppSecret 即用（无扫码）",
     "inbox.plat.qq_desc": "QQ 个人号 · 用你自己的 QQ 号 · 文字/图片/语音/视频 · 智聊内置连接，扫码即用",
     "inbox.plat.wechat_kf_desc": "微信客服（企业微信官方通道）· 微信用户扫客服二维码即聊，不用加好友 · 填企微凭证即接通，不扫码",
+    "inbox.plat.douyin_desc": "抖音企业号官方私信 · 客户先开口才能回 · 24 小时内最多 6 条 · 填凭证后扫码授权",
+    "inbox.plat.tiktok_desc": "TikTok 企业号官方私信 · 对方先开口才能回 · 48 小时内最多 10 条 · 注册地决定能否发图",
     "inbox.kf.transfer": "转企微人工",
     "inbox.kf.transfer_t": "把这个客户转给企业微信客服后台的接待人员：之后由他们在企微里应答，本端 AI 停手",
     "inbox.kf.transfer_confirm": "转给企微客服后台的接待人员？转出后本端 AI 不再自动回复这位客户。",
@@ -3631,6 +3641,8 @@ EN = {
     "inbox.acct.qq_driver_demo": "Sidecar installed · driver not wired (demo mode)",
     "inbox.acct.qq_driver_demo_t": "The QQ personal-account connector sidecar ships with the installer, but the real low-level driver is not wired yet: QR login and messages are demo data and nothing is actually sent or received. It opens automatically once the driver passes risk validation.",
     "inbox.acct.note_wechat_kf": "WeCom official channel: connect with your self-built app credentials (no QR); customers scan the service QR to chat; the 5-step guide takes about 10 minutes",
+    "inbox.acct.note_douyin": "Official mini-program IM: save Client Key / Secret, then authorize with the enterprise account. Replies only after the customer writes first; personal accounts are not this path",
+    "inbox.acct.note_tiktok": "Official Business Messaging: save App ID / Secret, then authorize for the account region. Replies only after the other person writes first; personal accounts have no official DM API",
     # ── Account detail panel P1 (overview / attribution / official profile editor / change history) ──
     "inbox.acct.head_view_t": "View account details",
     "inbox.acct.detail_title": "Account details",
@@ -4608,6 +4620,14 @@ EN = {
         "WeChat Customer Service connects via the WeCom official API: save your WeCom self-built "
         "app CorpID / Secret in the Setup Wizard and it goes online automatically — no QR scan. "
         "The app needs a trusted-IP allowlist; customers scan the service QR code to chat.",
+    "inbox.connect.instr_douyin":
+        "Douyin enterprise accounts use official mini-program IM: save the Client Key / Client Secret "
+        "in the Setup Wizard, then authorize with the enterprise account. You can reply only after "
+        "the customer writes first. Personal accounts are not this path.",
+    "inbox.connect.instr_tiktok":
+        "TikTok uses official Business Messaging: save the App ID / Secret in the Setup Wizard, "
+        "then authorize for the account's region. You can reply only after the other person writes "
+        "first. Personal accounts have no official DM API.",
     "inbox.connect.instr_ig_web":
         "An Instagram login window is open on the server — complete login there (password / 2FA). "
         "This window confirms automatically once done. No QR code, no phone scan needed.",
@@ -5622,6 +5642,8 @@ EN = {
     "inbox.plat.qqbot_desc": "QQ Open Platform official bot · private / group @-mention passive replies (4 per 60 min) · AppID/AppSecret only (no QR)",
     "inbox.plat.qq_desc": "QQ personal account · your own QQ number · text / image / voice / video · built-in connector, just scan to use",
     "inbox.plat.wechat_kf_desc": "WeChat Customer Service (WeCom official channel) · WeChat users scan the service QR to chat, no friend request · connect with WeCom credentials, no QR login",
+    "inbox.plat.douyin_desc": "Douyin enterprise official DM · reply only after the customer writes · at most 6 within 24 hours · credentials, then authorize",
+    "inbox.plat.tiktok_desc": "TikTok business official DM · reply only after they write · at most 10 within 48 hours · region decides image sending",
     "inbox.kf.transfer": "Hand to WeCom agent",
     "inbox.kf.transfer_t": "Hand this customer to a human agent in the WeCom customer-service console; they reply from WeCom and our AI stops",
     "inbox.kf.transfer_confirm": "Hand over to a WeCom console agent? Our AI will stop auto-replying to this customer.",
