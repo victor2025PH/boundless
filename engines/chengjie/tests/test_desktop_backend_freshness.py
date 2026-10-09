@@ -47,10 +47,16 @@ def test_fingerprint_stable_and_content_sensitive(fp_mod, tmp_path):
     assert d3 != d1
 
 
-def test_verify_rejects_missing_stamp(fp_mod, tmp_path):
-    dist = tmp_path / "backend-dist"
+def _touch_backend(dist):
+    """校验器按平台找二进制：Windows 是 backend.exe，其余是 backend。两个都放上。"""
     dist.mkdir()
     (dist / "backend.exe").write_bytes(b"MZ")
+    (dist / "backend").write_bytes(b"ELF")
+
+
+def test_verify_rejects_missing_stamp(fp_mod, tmp_path):
+    dist = tmp_path / "backend-dist"
+    _touch_backend(dist)
     ok, reason, _, _ = fp_mod.verify_stamp(_ENGINE, dist)
     assert ok is False
     assert "source-fingerprint" in reason or "unstamped" in reason
@@ -58,8 +64,7 @@ def test_verify_rejects_missing_stamp(fp_mod, tmp_path):
 
 def test_verify_rejects_stale_stamp(fp_mod, tmp_path):
     dist = tmp_path / "backend-dist"
-    dist.mkdir()
-    (dist / "backend.exe").write_bytes(b"MZ")
+    _touch_backend(dist)
     fp_mod.write_stamp(dist, {
         "version": 1,
         "algorithm": "sha256",

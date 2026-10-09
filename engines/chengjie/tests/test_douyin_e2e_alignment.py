@@ -173,7 +173,8 @@ def test_registry_json_served_and_inbox_falls_back_to_it(auth_client):
     from pathlib import Path
     html = (Path(__file__).resolve().parents[1] / "src/web/templates/unified_inbox.html").read_text(
         encoding="utf-8")
-    assert "fetch('/static/platform_registry.json'" in html
+    # 工作台统一走 apiFetch（带鉴权），不再用裸 fetch。回落契约不变。
+    assert "apiFetch('/static/platform_registry.json'" in html
     assert "function platColor(p){ return PC[p]||(_PREG[p]&&_PREG[p].color)" in html
     # 实施97 起 platName 先查两个微信平台的 i18n 显示名，再回落 PN / 注册表：只钉「注册表回落仍在」这一契约
     import re as _re
