@@ -224,9 +224,11 @@ def test_batch4_bus_alert_confirm_contract():
     与 AITRNotify.confirm（Promise 中央卡片，Esc/外点=取消）。"""
     src = _read(BUS)
     assert "alert: uxAlert" in src and "confirm: uxConfirm" in src
+    assert "prompt: uxPrompt" in src, "prompt 的统一替身被移除"
     assert "window.showToast" in src, "管理壳 showToast 优先（报障 CTA 挂钩）被移除"
     assert "window.alert(msg)" in src, "alert 的原生回落被移除（渲染面全挂会吞反馈）"
     assert "window.confirm(" in src, "confirm 的原生回落被移除"
+    assert "window.prompt(" in src, "prompt 的原生回落被移除"
     assert "alertdialog" in src, "confirm 卡片 a11y role 被移除"
 
 

@@ -1432,7 +1432,7 @@ async function previewVersion(vid){
 }
 
 async function restoreVersion(vid){
-  if(!confirm(window.T('kb_js_025')))return;
+  if(!await AITRNotify.confirm(window.T('kb_js_025'),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true}))return;
   const r=await api('POST',`/api/kb/versions/${vid}/restore`);
   if(r.ok){
     toast(window.T('kb_js_026'));
@@ -1475,7 +1475,7 @@ async function saveEntry(forceTriggers, forceChannel){
         + r.overlap_messages.join('\n')
         + '\n\n'+window.T('kb_js_029')+'「'+window.T('kb_js_030')+window.T('kb_js_031')
         + '\n\n'+window.T('kb_js_032');
-      if(confirm(msg)){
+      if(await AITRNotify.confirm(msg,{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})){
         return saveEntry(true, forceChannel);
       }
       return;
@@ -1485,7 +1485,7 @@ async function saveEntry(forceTriggers, forceChannel){
         + r.warnings.join('\n\n')
         + '\n\n'+window.T('kb_js_033')+'【'+window.T('kb_js_034')+window.T('kb_js_035')+'\n'
         + window.T('kb_js_036');
-      if(confirm(msg)){
+      if(await AITRNotify.confirm(msg,{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})){
         return saveEntry(forceTriggers, true);
       }
       return;
@@ -1502,7 +1502,7 @@ async function saveEntry(forceTriggers, forceChannel){
 }
 
 async function deleteEntry(id){
-  if(!confirm(window.T('kb_js_040')))return;
+  if(!await AITRNotify.confirm(window.T('kb_js_040'),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true}))return;
   await api('DELETE',`/api/kb/entries/${id}`);
   loadEntries();
   refreshStats();
@@ -1581,7 +1581,7 @@ async function saveEc(){
   }catch(e){toast(window.T('ov_js_save_fail'),false);}
 }
 async function deleteEc(id){
-  if(!confirm(window.T('kb_js_047')))return;
+  if(!await AITRNotify.confirm(window.T('kb_js_047'),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true}))return;
   await api('DELETE',`/api/kb/error-codes/${id}`);
   loadEc();
   refreshStats();
@@ -1652,7 +1652,7 @@ async function saveEx(){
   }catch(e){toast(window.T('ov_js_save_fail'),false);}
 }
 async function deleteEx(id){
-  if(!confirm(window.T('kb_js_047')))return;
+  if(!await AITRNotify.confirm(window.T('kb_js_047'),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true}))return;
   await api('DELETE',`/api/kb/examples/${id}`);
   loadExamples();
   refreshStats();
@@ -2002,7 +2002,7 @@ async function presetPurgeConfirm(){
   const srcs=_presetSources();
   const ids=_presetItems.map(x=>x.id).filter(Boolean);
   if(!ids.length||!srcs.length) return;
-  if(!confirm(window.Tf('kb2_preset_confirm',{n:ids.length}))) return;
+  if(!await AITRNotify.confirm(window.Tf('kb2_preset_confirm',{n:ids.length}),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})) return;
   const st=document.getElementById('preset-status');
   const del=document.getElementById('btn-preset-delete');
   del.disabled=true; st.textContent=window.T('dash.loading');
@@ -2043,7 +2043,7 @@ async function kbPurgePaymentSeeds(){
   const s=await api('GET','/api/kb/stats');
   const n=(s&&s.entries_system_payment)||0;
   if(!n){ toast(window.T('kb2_syspay_none')); return; }
-  if(!confirm(window.Tf('kb2_syspay_purge_confirm',{n}))) return;
+  if(!await AITRNotify.confirm(window.Tf('kb2_syspay_purge_confirm',{n}),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})) return;
   let r;
   try{ r=await api('POST','/api/kb/entries/purge-payment-seeds',{}); }
   catch(err){ toast(String(err||'').slice(0,160)||window.T('kb2_vendor_purge_fail')); return; }
@@ -2157,7 +2157,7 @@ async function retransTrans(id, btn){
 
 async function confirmAllTrans(){
   if(!_transItems.length){toast(window.T('kb_js_078'));return;}
-  if(!confirm(window.Tf('kb_js_p07',{n:_transItems.length})))return;
+  if(!await AITRNotify.confirm(window.Tf('kb_js_p07',{n:_transItems.length}),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true}))return;
   const btn=document.getElementById('btn-confirm-all');
   btn.disabled=true;
   for(const t of _transItems){
@@ -2339,7 +2339,7 @@ function toggleStale(cb){
 
 async function bulkDisableStale(){
   if(!_staleIds.length){toast(window.T('kb_js_095'));return;}
-  if(!confirm(window.Tf('kb_js_p08',{n:_staleIds.length})))return;
+  if(!await AITRNotify.confirm(window.Tf('kb_js_p08',{n:_staleIds.length}),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true}))return;
   const r=await api('POST','/api/kb/entries/bulk-disable',{ids:_staleIds});
   toast(window.Tf('kb_js_p09',{n:r.count}));
   document.getElementById('stale-panel').style.display='none';
@@ -2537,14 +2537,14 @@ function _impShowDone(r){
 
 /* ── 导入记录：最近 20 批，整批撤销（导入后被改过的条目默认保留，可再强制撤销）── */
 async function kbUndoImport(batchId, force){
-  if(!force && !confirm(window.T('kb2_hist_undo_confirm'))) return;
+  if(!force && !await AITRNotify.confirm(window.T('kb2_hist_undo_confirm'),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})) return;
   let r;
   try{ r = await api('POST', `/api/kb/import-batches/${encodeURIComponent(batchId)}/undo`, {force:!!force}); }
   catch(e){ toast(_errText(e),'err'); return; }
   const done = window.Tf('kb2_hist_undo_done',{del:r.deleted||0,res:r.restored||0});
   if((r.kept||[]).length){
     const names = r.kept.slice(0,5).join('、') + (r.kept.length>5 ? '…' : '');
-    if(confirm(done+'\n\n'+window.Tf('kb2_hist_kept_confirm',{n:r.kept.length,names}))){
+    if(await AITRNotify.confirm(done+'\n\n'+window.Tf('kb2_hist_kept_confirm',{n:r.kept.length,names}),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})){
       return kbUndoImport(batchId, true);
     }
     toast(done+' · '+window.Tf('kb2_hist_kept',{n:r.kept.length}),'warn');
@@ -2963,7 +2963,7 @@ async function createBackup(){
 }
 
 async function restoreBackup(filename){
-  if(!confirm(window.Tf('kb_js_p17',{file:filename})))return;
+  if(!await AITRNotify.confirm(window.Tf('kb_js_p17',{file:filename}),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true}))return;
   const r=await api('POST',`/api/kb/restore/${filename}`);
   if(r.ok){toast(window.T('kb_js_119'));setTimeout(()=>location.reload(),1500);}
   else toast(window.T('wa_js_038'),'warn');
@@ -3251,7 +3251,7 @@ async function uploadImage(input){
 }
 
 async function deleteImage(imgId){
-  if(!confirm(window.T('kb_js_136'))) return;
+  if(!await AITRNotify.confirm(window.T('kb_js_136'),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})) return;
   const entryId=document.getElementById('entry-id').value;
   await api('DELETE',`/api/kb/images/${imgId}`);
   toast(window.T('kb_js_137'));
@@ -3260,7 +3260,7 @@ async function deleteImage(imgId){
 
 /* ── 种子数据导入 ─────────────────────────────────────── */
 async function importSeedData(category='all'){
-  if(!confirm(window.Tf('kb_js_p18',{cat:category==='all'?window.T('ov_js_all'):category}))) return;
+  if(!await AITRNotify.confirm(window.Tf('kb_js_p18',{cat:category==='all'?window.T('ov_js_all'):category}),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})) return;
   try{
     const d=await api('POST','/api/kb/seed',{category});
     toast(window.Tf('kb_js_p19',{a:d.added,s:d.skipped}));
