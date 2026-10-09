@@ -28,8 +28,11 @@ def test_default_off_and_base_url():
     assert twl.service_base_url({}) == "http://127.0.0.1:8794"
     assert twl.service_base_url({"platform_login": {"tiktok": {"web_url": "http://h:9/"}}}) == "http://h:9"
     assert twl.ASSIST_ONLY is True
-    # 阶段 1 刻意不进登录弹窗静态表（②-B 连同 worker / 矩阵一起）
-    assert "tiktok" not in pl.DEFAULT_PLATFORM_MODES and "tiktok" not in pl._PERSONAL_WEB_LOGIN
+    # 官方通道已进默认可点清单；网页边车阶段 1 仍不进静态表，也不走个人号网页登录注入。
+    spec = pl.DEFAULT_PLATFORM_MODES["tiktok"]
+    assert spec == {"modes": ["official"], "default": "official"}
+    assert "web" not in spec["modes"]
+    assert "tiktok" not in pl._PERSONAL_WEB_LOGIN
 
 
 def test_maybe_register_gated_and_idempotent():
