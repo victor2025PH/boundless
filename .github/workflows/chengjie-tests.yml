@@ -10,6 +10,8 @@ name: chengjie-tests
 # 同批修掉两处按旧规模写死的参数（实跑 `--collect-only` 为 22,421 条，而下方原注释写 6,500）：
 #   · timeout-minutes 15 → 30：按 6.5k→4min 的历史比例外推 22.4k 约 14 分钟，15 分钟只剩
 #     1 分钟余量，会变成「偶尔莫名超时」的噪声源，而噪声源最终都会被忽略；
+#   · 2026-10-09 30 → 45：全量已到 3.0 万条。慢的一轮 3.12 用了约 29 分钟才打完摘要，
+#     3.13 在第 30 分钟被作业超时取消，摘要都没出来。45 分钟留出余量，不改用例。
 #   · run 步骤补 --timeout=90（依赖 requirements-ci.txt 新增的 pytest-timeout）：与本地
 #     scripts/regression.ps1 对齐，让挂起的 worker 被点名而不是烧满 job。
 
@@ -38,7 +40,7 @@ defaults:
 jobs:
   regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       # 两版本互不熔断：一个挂也要看另一个结果，便于定位是否版本特异问题。
       fail-fast: false
