@@ -236,7 +236,7 @@ def log_action(action: str, *, conversation_id: str, reason: str = "",
             conversation_id or "-", action, reason or "-", draft_id or "-", hs,
             (" " + extra) if extra else "")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in log_action", exc_info=True)
 
 
 def freeze_conversation(
@@ -622,6 +622,7 @@ def login_scan_backfill(
                         if hasattr(store, "get_conversation") and not store.get_conversation(cid):
                             continue   # 会话不在本机 → 无需冻结（下次它来消息时 opener 谓词仍挡）
                     except Exception:
+                        logging.getLogger(__name__).debug("swallowed in login_scan_backfill", exc_info=True)
                         continue
                 if frozen_reason(store, cid) == "stop_contact":
                     continue

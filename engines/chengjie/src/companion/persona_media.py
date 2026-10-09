@@ -24,6 +24,7 @@
 """
 from __future__ import annotations
 
+import logging
 import random
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -603,7 +604,7 @@ def select_media(
             if _soft_seed:
                 _soft_seed = expand_ids_by_phash(rows, _soft_seed)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in select_media", exc_info=True)
     _tr_cut("family",
             (len(_hard_seed) - _n_hard0) + (len(_soft_seed) - _n_soft0))
     # 重发冷却：硬排除，绝不逐层放宽（id 面 + 文件名面，两条链同一张图都算）。
@@ -657,7 +658,7 @@ def select_media(
                     _tr("refused", "place")
                     return None
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in select_media", exc_info=True)
     # 时段软过滤：白天照深夜不发（有标注才判；剔空放行——配文层兜底诚实）。
     if now_hour is not None:
         lit = [r for r in pool if not tod_conflicts_with_hour(row_tod(r), now_hour)]
@@ -814,6 +815,7 @@ def pick_media(
     try:
         rows = store.list(str(persona_id), enabled_only=True)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in pick_media", exc_info=True)
         return None
     ex_ids, ex_series = None, None
     hard_ids: Optional[set] = None
@@ -866,7 +868,7 @@ def pick_media(
         from src.companion.album_gate_stats import record as _gate_record
         _gate_record(_trace, row is not None)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in pick_media", exc_info=True)
     # 语义召回·影子（实施90，默认关）：泛化要图却 miss（触发词字面没接住）→
     # 后台线程记「如果按语义召回会中哪张」；配置读取/嵌入全在线程里，热路零成本。
     if row is None and generic_ok and str(_trace.get("refused") or "") == "no_pool":
@@ -874,7 +876,7 @@ def pick_media(
             from src.companion.album_semantic_recall import maybe_shadow
             maybe_shadow(store, persona_id, text)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in pick_media", exc_info=True)
     return row
 
 

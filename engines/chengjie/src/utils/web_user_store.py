@@ -1,5 +1,6 @@
 """Web 管理面板用户存储 — SQLite + PBKDF2 密码哈希"""
 
+import logging
 import hashlib
 import hmac
 import json
@@ -435,13 +436,13 @@ class WebUserStore:
                 import logging
                 logging.getLogger(__name__).info("[session-sweep] %s", detail)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WebUserStore.expire_sessions", exc_info=True)
             fn = getattr(self, "audit_fn", None)
             if callable(fn):
                 try:
                     fn(actor, "session_expire_sweep", detail)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WebUserStore.expire_sessions", exc_info=True)
         return out
 
     def _maybe_sweep(self) -> None:
@@ -505,7 +506,7 @@ class WebUserStore:
         try:
             self._maybe_sweep()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WebUserStore.touch_session", exc_info=True)
         with self._lock:
             try:
                 row = self._conn.execute(
@@ -538,7 +539,7 @@ class WebUserStore:
         try:
             self._conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WebUserStore._reconnect", exc_info=True)
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
 

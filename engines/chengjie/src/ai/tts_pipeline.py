@@ -124,6 +124,7 @@ def _breath_from_local_ref(ref_path: str, cache_dir: Path, sr: int):
         x, _sr = vpac.wav_to_float(cache.read_bytes())
         return vpac.extract_breath(x, sr)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _breath_from_local_ref", exc_info=True)
         return None
 
 
@@ -296,6 +297,7 @@ async def verify_and_retry_synth(
                     transcriber.transcribe_voice_message(str(av_out), stt_lang),
                     timeout=stt_timeout)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in verify_and_retry_synth._stt", exc_info=True)
                 return None
             finally:
                 _t_stt[0] += time.monotonic() - _t0
@@ -326,7 +328,7 @@ async def verify_and_retry_synth(
                     try:
                         av_out.write_bytes(best_bytes)
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in verify_and_retry_synth", exc_info=True)
                 break                       # 重合成失败 → 保留上一版
             _t_resynth[0] += time.monotonic() - _tr0
             hyp2 = await _stt()
@@ -339,7 +341,7 @@ async def verify_and_retry_synth(
                     try:
                         av_out.write_bytes(best_bytes)
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in verify_and_retry_synth", exc_info=True)
         # hyp_chars（#121 三进宫除根，2026-09-02）：**最终保留那版音频**的转写
         # 内容字符数（归一后）。>0 ＝ ASR 从这份产物里听出了字＝音频有声，
         # 是「疑似无声」误报的终审白名单证据（KKXSTU 实锤：Whisper 全文转录
@@ -359,6 +361,7 @@ async def verify_and_retry_synth(
             str(synth_text or "")[:24])
         return out
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in verify_and_retry_synth", exc_info=True)
         return None
 
 
@@ -541,6 +544,7 @@ def _clone_lang_store(store: Any) -> Any:
         from src.integrations.protocol_bridge import get_inbox_store
         return get_inbox_store()
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _clone_lang_store", exc_info=True)
         return None
 
 
@@ -553,6 +557,7 @@ def _clone_lang_kv_get(cid: str, store: Any) -> Optional[Dict[str, Any]]:
         got = _json.loads(str(st.get_app_setting(CLONE_LANG_NOTE_PREFIX + cid, "") or "") or "{}")
         return got if isinstance(got, dict) and got.get("ts") else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _clone_lang_kv_get", exc_info=True)
         return None
 
 
@@ -590,6 +595,7 @@ def note_clone_lang_skip(conv: str, lang: str, *, now: Optional[float] = None,
         _clone_lang_kv_set(cid, rec, store)
         return dict(rec)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in note_clone_lang_skip", exc_info=True)
         return None
 
 
@@ -866,7 +872,7 @@ def resolve_ambience_amplitude(
         if is_quiet_hour(hour):
             base *= float(a.get("night_factor", 0.6) or 0.6)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in resolve_ambience_amplitude", exc_info=True)
     return max(0.001, min(0.12, base))
 
 
@@ -1059,7 +1065,7 @@ class TTSPipeline:
             if is_voice_placeholder(_voice_raw):
                 _voice_raw = ""
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline.__init__", exc_info=True)
         self.voice = _voice_raw or (
             "zh-CN-XiaoxiaoNeural" if self.backend == "edge_tts" else "alloy")
         self.model = str(cfg.get("model") or "gpt-4o-mini-tts").strip()
@@ -1135,7 +1141,7 @@ class TTSPipeline:
             if _ivp(_fb_raw):
                 _fb_raw = ""
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline.__init__", exc_info=True)
         self.fallback_voice = _fb_raw or "zh-CN-XiaoxiaoNeural"
         # ── P0：TTS 输出缓存（默认开；neutral 输出与升级前一致，缓存无行为副作用）──
         cache_cfg = cfg.get("tts_cache") if isinstance(cfg.get("tts_cache"), dict) else {}
@@ -1323,7 +1329,7 @@ class TTSPipeline:
                 text_s = presynth_text_guard(
                     text_s, persona_id=str(self.persona_id or ""))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline.synthesize", exc_info=True)
         # ── 繁体 → 简体发音输入（P0-3 2026-08-31，zh-tw 零成本进克隆覆盖）────
         # 克隆引擎按简体建模、繁简同音——只转喂给合成的文本，展示层（译稿/
         # 消息记录）不动；日文/粤语/非中文主体在转换器内建豁免，backend 非
@@ -1342,7 +1348,7 @@ class TTSPipeline:
                         text_s = _conv
                         _t2s_applied = True
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline.synthesize", exc_info=True)
         if emotion is not None:
             spec = coerce_emotion(emotion)
         elif self.emotion_enabled:
@@ -1426,7 +1432,7 @@ class TTSPipeline:
                         try:
                             Path(cached.audio_path).unlink(missing_ok=True)
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in TTSPipeline.synthesize", exc_info=True)
                         logger.warning(
                             "[tts] 缓存命中疑似截断音（%.1fs / %d字）→ 驱逐重合成",
                             max(cached.duration_sec, 0.0), len(text_s))
@@ -1455,7 +1461,7 @@ class TTSPipeline:
                         format=self.format, error=QUOTA_EXCEEDED_ERROR,
                     )
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline.synthesize", exc_info=True)
 
         rv = await self._synthesize_uncached(
             text_s, voice=voice, timeout_sec=timeout_sec, spec=spec,
@@ -1498,7 +1504,7 @@ class TTSPipeline:
                         cache_key, (data, rv.format, rv.provider, rv.voice),
                         max_entries=self.cache_max_entries)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline.synthesize", exc_info=True)
         # P0-4：成功合成后按文本字符记额度（无额度授权零开销；绝不抛）
         if rv.ok:
             try:
@@ -1506,7 +1512,7 @@ class TTSPipeline:
 
                 record_license_chars("tts", len(text_s))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline.synthesize", exc_info=True)
             # 2026-08-19 Token 计量（P5a 观测接线，licensing.token_ledger.enabled
             # 默认关=零行为）：只对**克隆声引擎**计 voice_clone（10 Token/100 字符）；
             # 预渲染命中不进本路径、edge 等兜底声=免费路径不计——兑现对外承诺
@@ -1518,7 +1524,7 @@ class TTSPipeline:
 
                     record_action_for_status("voice_clone", len(text_s))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline.synthesize", exc_info=True)
         self._record_stats(rv, text_s, cache_hit=False, spec=spec)
         return rv
 
@@ -1619,7 +1625,7 @@ class TTSPipeline:
                         get_avatar_voice_stats().record_prerender_miss(
                             norm, persona_id=self.persona_id)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_prerendered", exc_info=True)
                 return None
             self.out_dir.mkdir(parents=True, exist_ok=True)
             sent_copy = copy_for_send(hit, self.out_dir)
@@ -1635,16 +1641,17 @@ class TTSPipeline:
                     rv.duration_sec = ms / 1000.0
                     rv.duration_source = "ffprobe"
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_prerendered", exc_info=True)
             try:
                 from src.ai.avatar_voice_stats import get_avatar_voice_stats
                 get_avatar_voice_stats().record_prerender_hit()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_prerendered", exc_info=True)
             logger.info("[tts] 预渲染命中 persona=%s → %s（零合成）",
                         self.persona_id, hit.name)
             return rv
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_prerendered", exc_info=True)
             return None
 
     def _record_stats(self, rv: "TTSResult", text: str, *, cache_hit: bool,
@@ -1678,7 +1685,7 @@ class TTSPipeline:
                 stats.record(provider, ok=False, latency_ms=rv.latency_ms)
                 record_tts_cost(provider, ok=False)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._record_stats", exc_info=True)
 
     def _cache_key(self, text: str, voice: str, backend: str, spec: Any,
                    *, hour: Optional[int] = None, variant: str = "") -> str:
@@ -1870,6 +1877,7 @@ class TTSPipeline:
                 f"tts-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.{suffix}")
             out.write_bytes(data)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._result_from_cache", exc_info=True)
             return None
         rv = TTSResult(
             ok=True, text=text, provider=provider, voice=voice,
@@ -1974,7 +1982,7 @@ class TTSPipeline:
                 from src.ai.voice_synth_stats import get_voice_synth_stats
                 get_voice_synth_stats().record_blocked(_lang_blocked)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._synthesize_uncached", exc_info=True)
             logger.warning(
                 "[tts] 文本语种 '%s' 超出克隆链 '%s' 能力（persona=%s）→ 跳过克隆，%s",
                 _lang_blocked, primary_backend, self.persona_id or "-",
@@ -2257,7 +2265,7 @@ class TTSPipeline:
                 if lg:
                     return lg
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._fallback_lang_hint", exc_info=True)
         return ""
 
     def _pick_fallback_edge_voice(self, text_lang: str = "") -> str:
@@ -2445,7 +2453,7 @@ class TTSPipeline:
             if p.is_file():
                 p.unlink(missing_ok=True)   # type: ignore[call-arg]
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._discard_garbled_take", exc_info=True)
         rv.ok = False
         rv.audio_path = ""
         rv.duration_sec = -1.0
@@ -2454,7 +2462,7 @@ class TTSPipeline:
             from src.ai.voice_synth_stats import get_voice_synth_stats
             get_voice_synth_stats().record_blocked(lang)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._discard_garbled_take", exc_info=True)
 
     async def _clone_take_garbled(self, rv: "TTSResult") -> str:
         """克隆产物**事后**判「念错」→ 返回被判语种前缀，否则 ""（#161 自动链腿）。
@@ -2512,7 +2520,7 @@ class TTSPipeline:
             if dialect_acoustic_override(str(vp.get("dialect_flavor") or "")):
                 return False
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._should_try_lan", exc_info=True)
         ref = str(vp.get("reference_audio_path") or "").strip()
         return bool(ref) and Path(ref).is_file()
 
@@ -2576,7 +2584,7 @@ class TTSPipeline:
             try:
                 lan_out.unlink(missing_ok=True)  # type: ignore[call-arg]
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_lan_clone", exc_info=True)
             if lan.cloud_fallback:
                 logger.warning("[tts] voice_clone_lan failed (%s) → 回落云端", ex)
                 return None
@@ -2641,6 +2649,7 @@ class TTSPipeline:
             from src.ai import voice_pacing as vpac
             from src.ai.voice_colloquial import _is_chinese_dominant
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_minicpm_pacing", exc_info=True)
             return None
         if not vpac.numpy_available():
             return None
@@ -2675,7 +2684,7 @@ class TTSPipeline:
                 try:
                     tmp.unlink(missing_ok=True)  # type: ignore[call-arg]
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_minicpm_pacing._synth_chunk", exc_info=True)
 
         breath_loader = None
         if bool(pc.get("breath", True)):
@@ -2833,7 +2842,7 @@ class TTSPipeline:
                                 "（约 20–30s 后恢复克隆声；自动链等一拍重试一次，"
                                 "仍不可用则改发文字，不出系统音）")
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_minicpm_clone", exc_info=True)
             if cloud_fallback:
                 logger.info("[tts] minicpm_clone unreachable → 回落兜底")
                 return None
@@ -2890,7 +2899,7 @@ class TTSPipeline:
             try:
                 mc_out.unlink(missing_ok=True)  # type: ignore[call-arg]
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_minicpm_clone", exc_info=True)
             if cloud_fallback:
                 logger.warning("[tts] minicpm_clone failed (%s) → 回落兜底", ex)
                 return None
@@ -3023,7 +3032,7 @@ class TTSPipeline:
                 from src.ai.voice_synth_stats import get_voice_synth_stats
                 get_voice_synth_stats().record_lang_routed(language, _eng_routed)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_hub_fish", exc_info=True)
         # 引擎冒名＝按合成失败处理（默认开）。置 false 只记录不拦，用于 hub 侧排障。
         verify_engine = bool(hf.get("verify_engine", True))
         strict_voice = str(
@@ -3138,7 +3147,7 @@ class TTSPipeline:
                     if _applied:
                         rv.extra["vocal_bursts"] = True
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_hub_fish._do_synth", exc_info=True)
             synth["path"].write_bytes(audio)
 
         # 音色一致性 strict（2026-07-27）：该人设的音色事实源＝hub 档。hub 挂了就**不许**
@@ -3168,7 +3177,7 @@ class TTSPipeline:
                         "mismatch", f"{hub_engine} 在 hub 目录里 available=false",
                         profile=profile)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_hub_fish", exc_info=True)
                 # 需求驱动唤醒（2026-08-22）：hub 的 idle_park 是「按需换回」的设计，
                 # 而「有人现在要合成」就是那个需求信号——只靠看门狗（宽限 20min）
                 # 意味着客户侧降级窗口最坏 20 分钟，挂在这里收缩到一次冷载（~18s）
@@ -3180,7 +3189,7 @@ class TTSPipeline:
                         from src.ai.avatar_voice import hub_engine_wake_bg
                         hub_engine_wake_bg(hf.get("base_url"), hub_engine)
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_hub_fish", exc_info=True)
                 logger.warning(
                     "[tts] hub 目录称引擎 %s 不可用 → 跳过 hub（再打就是别人的"
                     "声音）persona=%s", hub_engine, self.persona_id or "")
@@ -3239,7 +3248,7 @@ class TTSPipeline:
             try:
                 synth["path"].unlink(missing_ok=True)  # type: ignore[call-arg]
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_hub_fish", exc_info=True)
             # 只有**超时**喂熔断（其余是快败，没有延迟税可省；引擎冒名另有指纹闸）
             if isinstance(ex, (asyncio.TimeoutError, TimeoutError)):
                 self._note_hub_timing(base_url, hub_engine, timed_out=True)
@@ -3278,7 +3287,7 @@ class TTSPipeline:
                         rv.duration_sec = ms / 1000.0
                         rv.duration_source = "ffprobe"
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_hub_fish", exc_info=True)
             rv.latency_ms = int((time.monotonic() - t0) * 1000)
             return rv
         return None
@@ -3296,7 +3305,7 @@ class TTSPipeline:
             from src.ai.avatar_voice import note_hub_synth_outcome
             note_hub_synth_outcome(base_url, engine, timed_out=timed_out)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._note_hub_timing", exc_info=True)
 
     def _engine_gate(
         self, rv: "TTSResult", audio: bytes, fmt: str, *,
@@ -3338,7 +3347,7 @@ class TTSPipeline:
             get_avatar_voice_stats().record_engine_check(
                 verdict, detail, profile=profile)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._engine_gate", exc_info=True)
         if verdict != "mismatch":
             return
         rv.extra["hub_engine_mismatch"] = detail
@@ -3378,6 +3387,7 @@ class TTSPipeline:
             from src.ai import voice_pacing as vpac
             from src.ai.avatar_voice import HubEngineMismatch
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in TTSPipeline._hub_fish_paced", exc_info=True)
             return None
         if not vpac.numpy_available():
             return None
@@ -3715,7 +3725,7 @@ class TTSPipeline:
                             if _lp:
                                 rv.extra["colloquial_provider"] = _lp
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in TTSPipeline._colloquialize_for_synth", exc_info=True)
                     else:
                         _col = None
                 except Exception:
@@ -3784,7 +3794,7 @@ class TTSPipeline:
                             rv.extra["thinking_repeat"] = True
                             rv.extra["colloquial"] = True
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in TTSPipeline._colloquialize_for_synth", exc_info=True)
             elif re.match(r"^\s*嘿，", synth_text or ""):
                 rv.extra["soft_laugh"] = True
             elif re.search(r"嗯……|([\u4e00-\u9fff]{2})……\1", synth_text or ""):
@@ -3808,7 +3818,7 @@ class TTSPipeline:
                     rv.extra["opener_deduped"] = True
                     synth_text = _og
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._colloquialize_for_synth", exc_info=True)
         return synth_text
 
     async def _try_avatar_clone(
@@ -3890,7 +3900,7 @@ class TTSPipeline:
                     colloquial_generated=bool(rv.extra.get("colloquial_generated")),
                     paralinguistic=False)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_avatar_clone", exc_info=True)
             return hub_rv
         if rv.extra.pop("hub_fish_required", False):
             # 错误码分两种（2026-08-22）：hub **挂了** 与 hub **换了引擎** 的处置完全
@@ -4074,7 +4084,7 @@ class TTSPipeline:
                 if synth_text != _before_para:
                     rv.extra["paralinguistic"] = True
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_avatar_clone", exc_info=True)
 
         av_out = out.with_suffix(".wav")
 
@@ -4111,7 +4121,7 @@ class TTSPipeline:
                 if _applied:
                     rv.extra["vocal_bursts"] = True
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_avatar_clone._do_synth", exc_info=True)
             av_out.write_bytes(audio)
 
         def _record_avatar(ok: bool, latency_ms: int = 0) -> None:
@@ -4126,7 +4136,7 @@ class TTSPipeline:
                     colloquial_generated=bool(rv.extra.get("colloquial_generated")),
                     paralinguistic=bool(rv.extra.get("paralinguistic")))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_avatar_clone._record_avatar", exc_info=True)
 
         try:
             # 总预算 = 单请求超时 ×(1+重试) × 预估块数 + 余量；wait_for 只兜底极端卡死。
@@ -4155,7 +4165,7 @@ class TTSPipeline:
             try:
                 av_out.unlink(missing_ok=True)  # type: ignore[call-arg]
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_avatar_clone", exc_info=True)
             _record_avatar(False)
             # TimeoutError 的 str() 为空 → 旧日志打出 "failed ()" 无从排查；带上异常类型名
             _exs = f"{type(ex).__name__}: {ex}".rstrip(": ")
@@ -4175,7 +4185,7 @@ class TTSPipeline:
                 if _sv:
                     rv.extra["synth_verify"] = _sv
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TTSPipeline._try_avatar_clone", exc_info=True)
 
         if av_out.exists() and av_out.stat().st_size > 0:
             rv.ok = True
@@ -4664,7 +4674,7 @@ def compute_audio_duration_sec(
             if d > 0:
                 return d, "wave_header"
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in compute_audio_duration_sec", exc_info=True)
     # MP3
     if fmt_low == "mp3" or path.lower().endswith(".mp3"):
         d = _duration_from_mp3(path)

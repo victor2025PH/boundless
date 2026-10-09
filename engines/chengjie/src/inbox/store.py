@@ -1502,6 +1502,7 @@ class InboxStore:
                 try:
                     cols = {str(c[1]) for c in conn.execute(f"PRAGMA table_info({t})")}
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in InboxStore._merge_wa_device_suffix_convs", exc_info=True)
                     continue
                 if "conversation_id" not in cols:
                     continue
@@ -1553,7 +1554,7 @@ class InboxStore:
             try:
                 conn.commit()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore._merge_wa_device_suffix_convs", exc_info=True)
         return merged
 
     def _rebuild_fts5_if_empty(self) -> bool:
@@ -1611,7 +1612,7 @@ class InboxStore:
             try:
                 self._conn.close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore.close", exc_info=True)
 
     def dedup_stats(self) -> Dict[str, int]:
         """去重护栏命中累计（进程生命周期内）：
@@ -1923,7 +1924,7 @@ class InboxStore:
                     try:
                         msg.sent_by = _twin_sent_by   # 让随后的认领 / 冲突升级看到同一口径
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in InboxStore.ingest_batch", exc_info=True)
                 cur = self._conn.execute(
                     """
                     INSERT OR IGNORE INTO messages
@@ -1985,7 +1986,7 @@ class InboxStore:
                     "session_id": conv.conversation_id, "platform": conv.platform,
                     "chat_type": conv.chat_type or "private"})
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore.ingest_batch", exc_info=True)
         return inserted
 
     # ── P0：协议通讯录（好友名单）+ 会话列表占位 ──────────────────────────
@@ -2397,6 +2398,7 @@ class InboxStore:
                 cols = {str(c[1]) for c in
                         self._conn.execute(f"PRAGMA table_info({name})")}
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in InboxStore._conversation_tables_locked", exc_info=True)
                 continue
             if "conversation_id" in cols:
                 tables.append(name)
@@ -2559,7 +2561,7 @@ class InboxStore:
             try:
                 return self._search_messages_fts5(query, limit=limit, platform=platform)
             except Exception:
-                pass  # FTS5 查询失败（特殊字符/语法错），降级 LIKE
+                logging.getLogger(__name__).debug("swallowed in InboxStore.search_messages", exc_info=True)
 
         return self._search_messages_like(query, limit=limit, platform=platform)
 
@@ -5656,7 +5658,7 @@ class InboxStore:
                 try:
                     _cb()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in InboxStore.upsert_draft", exc_info=True)
         return draft_id
 
     def update_draft_status(
@@ -5776,7 +5778,7 @@ class InboxStore:
                 try:
                     _cb()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in InboxStore.finalize_draft_enrichment", exc_info=True)
         return updated
 
     def get_draft(self, draft_id: str) -> Optional[Dict[str, Any]]:
@@ -6226,6 +6228,7 @@ class InboxStore:
             try:
                 ts = float(r["last_ts"] or 0.0)
             except Exception:  # noqa: BLE001
+                logging.getLogger(__name__).debug("swallowed in InboxStore.group_last_spoke_at", exc_info=True)
                 continue
             if a and ts > 0:
                 out[a] = ts
@@ -6288,6 +6291,7 @@ class InboxStore:
             try:
                 ts = float(r["ts"] or 0.0)
             except Exception:  # noqa: BLE001
+                logging.getLogger(__name__).debug("swallowed in InboxStore.group_inbound_since", exc_info=True)
                 continue
             text = str(r["text"] or "").strip()
             if not text or ts <= 0:
@@ -6672,7 +6676,7 @@ class InboxStore:
                 scores = [r[0] for r in csat_rows if r[0] is not None and r[0] >= 0]
                 p["avg_csat"] = round(sum(scores) / len(scores), 1) if scores else None
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in InboxStore.get_agent_perf", exc_info=True)
 
         return perf
 
@@ -7726,7 +7730,7 @@ class InboxStore:
             track("session.handed_off",
                   {"session_id": cid, "reason": str(reason or "")})
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in InboxStore.record_escalation", exc_info=True)
         return True
 
     def escalation_takeovers(
@@ -9439,6 +9443,7 @@ class InboxStore:
                 try:
                     tags = json.loads(r["conv_tags"] or "[]")
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in InboxStore.remove_tag_from_all_conversations", exc_info=True)
                     continue
                 if not isinstance(tags, list) or t not in tags:
                     continue
@@ -9611,7 +9616,7 @@ class InboxStore:
                 from src.utils.telemetry import track
                 track("session.closed", {"session_id": cid})
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore.set_conv_archived", exc_info=True)
         return True
 
     def set_travel_cleared(self, conversation_id: str) -> bool:
@@ -10175,7 +10180,7 @@ class InboxStore:
                 hr = dt.hour
                 matrix[wd][hr] += 1
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore.activity_heatmap", exc_info=True)
 
         total = sum(matrix[wd][hr] for wd in range(7) for hr in range(24))
         peak_hour, peak_wd = 0, 0
@@ -10245,6 +10250,7 @@ class InboxStore:
         try:
             return json.loads(raw)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in InboxStore.get_qa_score", exc_info=True)
             return None
 
     def batch_agent_qa_stats(
@@ -10284,6 +10290,7 @@ class InboxStore:
                 score = int(qa.get("score") or 0)
                 grade = str(qa.get("grade") or "N/A")
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in InboxStore.batch_agent_qa_stats", exc_info=True)
                 continue
             if agent not in agg:
                 agg[agent] = {"agent_id": agent, "scores": [], "grades": {}}

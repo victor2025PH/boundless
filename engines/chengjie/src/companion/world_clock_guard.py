@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, List, Optional, Sequence, Tuple
 
@@ -125,6 +126,7 @@ def detect_persona_self_time_conflict(
             return None
         return tag
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in detect_persona_self_time_conflict", exc_info=True)
         return None
 
 
@@ -161,6 +163,7 @@ def detect_daypart_conflict(
         if claimed is not None and claimed[2] == "persona_late" and 8 <= h < 23:
             return "persona_late"
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in detect_daypart_conflict", exc_info=True)
         return None
     return None
 
@@ -263,6 +266,7 @@ def detect_venue_conflict(text: str, local_hour: int) -> Optional[str]:
                 if pat.search(sent) and not (lo <= h < hi):
                     return _tag
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in detect_venue_conflict", exc_info=True)
         return None
     return None
 
@@ -350,6 +354,7 @@ def detect_weekday_conflict(
                 and not (allowed & {5, 6}):
             return -1  # 周末断言但两边都是工作日
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in detect_weekday_conflict", exc_info=True)
         return None
     return None
 
@@ -440,6 +445,7 @@ def detect_wrong_place_claim(text: str, place: Optional[PersonaPlace]) -> Option
                     return slug
         return None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in detect_wrong_place_claim", exc_info=True)
         return None
 
 
@@ -525,6 +531,7 @@ def apply_world_clock_guard(
             try:
                 _w = int(_dt.weekday())
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in apply_world_clock_guard", exc_info=True)
                 continue
             if _w not in allowed_wd:
                 allowed_wd.append(_w)

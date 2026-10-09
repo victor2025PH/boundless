@@ -7,6 +7,7 @@ Telegram 收件箱 auto-draft 此前只传纯 text，导致已开发的「像真
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -79,7 +80,7 @@ def _match_media_prefix(text: str) -> tuple:
             if is_voice_duration_placeholder(t):
                 return "voice", ""
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _match_media_prefix", exc_info=True)
         return "", ""
     if t in _PLACEHOLDER_KIND:
         return _PLACEHOLDER_KIND[t], ""
@@ -430,7 +431,7 @@ def _complaint_lang_code(lang: str, text: str) -> str:
             from src.ai.translation_service import detect_zh_variant
             code = detect_zh_variant(text) or code
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _complaint_lang_code", exc_info=True)
     return code
 
 
@@ -711,7 +712,7 @@ def apply_inbound_enrichments(
             _obs_note(t, str(user_context.get("conversation_id") or user_context.get("chat_id") or ""),
                       media_desc=str(media_patch.get("_media_desc") or ""))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
 
     # 四类语境提示汇入 _topic_switch_hint（ai_client 同一消费口）：
     # 工作语言说明（草稿语言≠客户语言，P0-198）/ 语言切换承接 / 语言事实钉子
@@ -747,11 +748,11 @@ def apply_inbound_enrichments(
                     conversation_id=str(user_context.get("chat_id") or ""),
                     target=_lc_target)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
             if not mismatch:
                 hints.append(build_language_recovery_hint())
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
     # 时间断层（P2-198 复活）：Phase8 只在 process_message 链写 _turn_gap_sec，
     # 草稿链恒缺 → 该提示从未生效。键**缺席**时从历史行的可选 ts 推导
     # （normalize_history 已透传）：取「最后一条 != 当前文本的用户消息」时间。
@@ -763,7 +764,7 @@ def apply_inbound_enrichments(
             if _g is not None:
                 user_context["_turn_gap_sec"] = float(_g)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
     gap_hint = build_time_gap_hint(user_context.get("_turn_gap_sec") or 0)
     if gap_hint:
         hints.append(gap_hint)
@@ -775,7 +776,7 @@ def apply_inbound_enrichments(
             _gms().record_inbox_draft_event(
                 "time_hint_gap:" + _gb(user_context.get("_turn_gap_sec") or 0))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
     # 虚假前提（客户声称往事）：与上面三条同一消费口。长期记忆此时已注入
     # （_inject_episodic_into_context 在本函数之前跑），拿它当核对底料；
     # 目录登记的商业事实一并作证据（真产品事实可能这轮还没提过）。
@@ -795,7 +796,7 @@ def apply_inbound_enrichments(
         if sc_hint:
             hints.append(sc_hint)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
     # 近时自述「你刚说过」锚点（#62 2026-08-30）：即时行为（泡了杯茶）与时间
     # 承诺（下个月过去一趟）带新鲜度窗口回注——上面的槽位锚只管长期个人事实，
     # 这两类会过期的自述曾在 31/10 分钟内被 AI 当客户面自我否认（钧截图实锤）。
@@ -814,7 +815,7 @@ def apply_inbound_enrichments(
         if rs_hint:
             hints.append(rs_hint)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
     # #62扩②（0830 第三例「方向混淆」实锤）：对方最近的请求/提议显式标注
     # 「是 TA 说的」——防 AI 把客户请求（「你可以打字嘛」）转述成自己的承诺
     # （「之前不是答应了打字陪你嘛」）。保守触发（请求形+陪伴类动词才注入）。
@@ -824,14 +825,14 @@ def apply_inbound_enrichments(
         if rq_hint:
             hints.append(rq_hint)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
     # Q-36（#313）：客户提议发自己的图 → 接受 + 期待，不走拒发 / 承诺 / 认领任何一套（A/B 两线同经）。
     try:
         _om_hint = build_offer_media_hint(t)
         if _om_hint:
             hints.append(_om_hint)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
     # AI 质疑应对（2026-08-03，AI 味周报闭环）：客户质疑「你是AI/机器人」或吐槽
     # 「机器味」→ 注入应对要点（别否认三连/别自证/别突然热情），并进程计数供观测。
     # 词表保守（宁漏勿误，正常聊 AI 工具不命中），与周报离线口径同源
@@ -849,7 +850,7 @@ def apply_inbound_enrichments(
             if _sus_hint:
                 hints.append(_sus_hint)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
     try:
         from src.inbox.withdrawn_cite import (
             build_withdrawn_hint, own_quotes_for, quotes_for, redact_history)
@@ -866,7 +867,7 @@ def apply_inbound_enrichments(
             if isinstance(history, list) and history:
                 history[:] = redact_history(history, _qs, _oqs)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in apply_inbound_enrichments", exc_info=True)
     if hints:
         user_context["_topic_switch_hint"] = "\n".join(hints)
 

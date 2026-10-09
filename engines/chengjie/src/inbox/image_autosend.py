@@ -107,7 +107,7 @@ def record_image_sent(kind: str = "", source: str = "") -> None:
 
             record_action_for_status("ai_image", 1)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in record_image_sent", exc_info=True)
     with _METRICS_LOCK:
         _METRICS["sent"] = int(_METRICS["sent"]) + 1
         _METRICS["last_kind"] = str(kind or "")
@@ -199,7 +199,7 @@ def record_promise_event(name: str) -> None:
         from src.inbox.media_promise_trend_store import record_media_promise_trend
         record_media_promise_trend(str(name or "").strip())
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in record_promise_event", exc_info=True)
 
 
 def record_sent_claim_event(name: str) -> None:
@@ -224,7 +224,7 @@ def metrics_snapshot() -> Dict[str, Any]:
         from src.ai.caption_image_guard import stats_snapshot as _cg
         snap["caption_guard"] = _cg()
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in metrics_snapshot", exc_info=True)
     return snap
 
 
@@ -634,7 +634,7 @@ async def stage_image_file(
             from src.companion.outfit_state import outfit_slug
             info["series"] = outfit_slug(_outfit)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in stage_image_file", exc_info=True)
     # 服装连续性账本：出图记住本会话用的 series（相册系列/生成衣着），
     # 连续窗内下次优先同系列。
     if conv_key and info["series"]:
@@ -754,7 +754,7 @@ def bind_prompt_conv(conv_key: str) -> None:
         if _PROMPT_CONV is not None:
             _PROMPT_CONV.set((str(conv_key or "").strip(), time.monotonic()))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in bind_prompt_conv", exc_info=True)
 
 
 def bound_prompt_conv(max_age_sec: float = _PROMPT_CONV_TTL_SEC) -> str:
@@ -824,7 +824,7 @@ def recent_outbound_media(
             _consider(float(rec.get("ts") or 0), str(rec.get("media_type") or "image"),
                       "receipt")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in recent_outbound_media", exc_info=True)
     try:
         st = store
         if st is None:
@@ -849,7 +849,7 @@ def recent_outbound_media(
             for it in items:
                 _consider(float((it or {}).get("ts") or 0), "image", "album")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in recent_outbound_media", exc_info=True)
     return best
 
 
@@ -1097,6 +1097,7 @@ def pick_registered_media(
         from src.companion.persona_media import pick_media, scene_class_of
         from src.companion.persona_media_store import get_persona_media_store
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in pick_registered_media", exc_info=True)
         return None
     store = get_persona_media_store()
     if store is None:
@@ -1608,7 +1609,7 @@ async def run_autosend_image(
                 from src.ai.companion_selfie import ensure_time_of_day
                 _scene = ensure_time_of_day(_scene)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in run_autosend_image", exc_info=True)
         _d = {"kind": str(directive_override.get("kind")),
               "subject": _scene, "scene": _scene,
               # LLM 亲口点名的场景＝硬要求：相册兜底必须同场景类，挑不到如实失败
@@ -1762,7 +1763,7 @@ async def run_autosend_image(
             if is_cantonese_text(str(peer_text or "")):
                 _cap_lang = "yue"
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in run_autosend_image", exc_info=True)
         # 条目实际场景/系列：配文与账本都以它为准（配文层先要，别等发完再算）。
         _row_scene = ""
         _row_series = ""
@@ -1771,7 +1772,7 @@ async def run_autosend_image(
             _row_scene = row_scene_class(row)
             _row_series = series_of(row)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in run_autosend_image", exc_info=True)
         cap = media_caption(row, _cap_lang, fallback="")
         cap_src = "registry" if cap else ""
         # 时刻词守卫（2026-08-12，与 A 线 skill_manager 同口径）：固定配文里
@@ -1786,7 +1787,7 @@ async def run_autosend_image(
                         row.get("id"))
                     cap, cap_src = "", ""
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in run_autosend_image", exc_info=True)
         if not cap:
             # 相册条目无运营配文（如 auto 定妆照）→ LLM 按当前对话写配文 → 固定配文。
             # freshness=old：相册图是「之前拍的」，配文不得写「刚拍的」。
@@ -1850,7 +1851,7 @@ async def run_autosend_image(
                                        series=series_of(row),
                                        file_key=os.path.basename(local or ""))
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in run_autosend_image", exc_info=True)
                 record_image_sent(mt, source="registry")
                 _album_sent(cap, cap_src, picked=str(row.get("id") or "-"),
                             source="registry", mid=_mid)
@@ -2012,7 +2013,7 @@ async def run_autosend_image(
                             series=f"auto-{_scene}" if _scene else "",
                             file_key=os.path.basename(local or ""))
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in run_autosend_image", exc_info=True)
     else:
         record_image_fallback("deliver_failed")
     return ok

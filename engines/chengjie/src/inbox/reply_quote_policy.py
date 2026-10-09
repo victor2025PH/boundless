@@ -33,6 +33,7 @@
 """
 from __future__ import annotations
 
+import logging
 import hashlib
 import re
 import threading
@@ -533,7 +534,7 @@ def _gray(rec: Dict[str, Any]) -> None:
         from src.ops import region_quote_gray
         region_quote_gray.append("quote", rec)
     except Exception:  # noqa: BLE001
-        pass
+        logging.getLogger(__name__).debug("swallowed in _gray", exc_info=True)
 
 
 def record_decision(dec: QuoteDecision) -> None:

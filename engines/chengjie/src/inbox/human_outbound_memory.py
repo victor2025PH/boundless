@@ -273,6 +273,7 @@ def resolve_skill_manager(app_state: Any) -> Any:
         tc = getattr(app_state, "telegram_client", None)
         return getattr(tc, "skill_manager", None) if tc is not None else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in resolve_skill_manager", exc_info=True)
         return None
 
 
@@ -490,13 +491,13 @@ def on_human_outbound(
             from src.inbox.handoff_memory import note_human_outbound_started
             note_human_outbound_started(ctx, now=ts)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in on_human_outbound", exc_info=True)
         try:
             push = getattr(sm, "_push_recent_reply", None)
             if callable(push):
                 push(ctx, shown)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in on_human_outbound", exc_info=True)
         # 1b) 图片 / 视频出站 → 已发媒体账本（A 线同账本；desc 可能由 attach_human_media_desc 晚到）
         if mt in _IMAGE_KINDS or mt in _VIDEO_KINDS:
             try:
@@ -512,13 +513,13 @@ def on_human_outbound(
                 from src.companion.self_state import record_self_state
                 record_self_state(ctx, body, now=ts)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in on_human_outbound", exc_info=True)
             # 2b) J-10 二期：坐席替人设做的承诺（「明天给你打电话」）进承诺账本，author=human
             try:
                 from src.utils.memory_promises import record_promises
                 record_promises(ctx, body, author="human", now=ts)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in on_human_outbound", exc_info=True)
             # 3) 人设自述事实 → 接地护栏 → 持久 log
             facts = _grounded(extract_self_facts(body), body)
             if facts:

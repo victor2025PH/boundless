@@ -15,6 +15,7 @@ UIA 只给**显示名**（备注 / 昵称 / 群名），不给 wxid。改备注�
 """
 from __future__ import annotations
 
+import logging
 import hashlib
 import re
 import time
@@ -145,7 +146,7 @@ class ChatIdentityCache:
                              str(item.get("avatar_fp") or ""), False)
                 self._put(ent)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in ChatIdentityCache._load", exc_info=True)
 
     def save(self) -> None:
         """落盘微信号级条目（best-effort；无路径/未变更＝no-op）。"""
@@ -163,7 +164,7 @@ class ChatIdentityCache:
             os.replace(tmp, self._path)
             self._dirty = False
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in ChatIdentityCache.save", exc_info=True)
 
     def resolve(self, *, display_name: str, wxid: str = "", avatar_fp: str = "",
                 is_group: bool = False) -> str:

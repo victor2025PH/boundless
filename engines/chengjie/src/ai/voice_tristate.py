@@ -18,6 +18,7 @@ clone；其余→preset 并标注 basis），绝不写回（三态迁移全案�
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -242,7 +243,7 @@ def _preset_backend_for_voice(voice: str) -> str:
         if v.lower() in OPENAI_VOICES:
             return "openai"
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _preset_backend_for_voice", exc_info=True)
     return "edge_tts"
 
 
@@ -372,7 +373,7 @@ def binding_summary(vp: Any) -> Dict[str, str]:
             elif out["voice"].lower() in OPENAI_VOICES:
                 out["gender"] = OPENAI_VOICES[out["voice"].lower()]
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in binding_summary", exc_info=True)
     return out
 
 

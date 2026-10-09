@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
@@ -197,7 +198,7 @@ def derive_emotion(
                 _pace = "slow" if _reply_emo in ("empathetic", "calm") else "normal"
                 return EmotionSpec(_reply_emo, intensity=0.78, pace=_pace)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in derive_emotion", exc_info=True)
 
     # 2) intent 子串匹配
     it = str(intent or "").strip().lower()

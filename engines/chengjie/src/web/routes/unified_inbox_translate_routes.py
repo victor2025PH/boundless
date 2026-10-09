@@ -295,7 +295,7 @@ def _log_toolbox_asr(chain: str, received: dict, out: dict, *, src: str) -> None
             out.get("reason") or "", out.get("asr_code") or "",
             out.get("asr_model") or "", out.get("asr_latency_ms") or "")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _log_toolbox_asr", exc_info=True)
 
 
 def register_translate_routes(app, *, api_auth) -> None:
@@ -1115,7 +1115,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                 return {"ok": False, "reason": "no_vision_backend",
                         "message": "未配置可用的图像识别后端（Ollama base_url 或智谱 api_key）"}
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_image", exc_info=True)
 
         path, reason = decode_image_to_temp(image_b64)
         if path is None:
@@ -1139,7 +1139,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             try:
                 _os.remove(path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_image", exc_info=True)
 
     @app.post("/api/unified-inbox/translate-voice")
     async def api_unified_inbox_translate_voice(request: Request, _=Depends(api_auth)):
@@ -1223,7 +1223,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             try:
                 _os.remove(path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_voice", exc_info=True)
 
     @app.post("/api/unified-inbox/translate-video")
     async def api_unified_inbox_translate_video(request: Request, _=Depends(api_auth)):
@@ -1313,7 +1313,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             try:
                 _os.remove(path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_video", exc_info=True)
 
     @app.post("/api/unified-inbox/translate-message-media")
     async def api_unified_inbox_translate_message_media(request: Request, _=Depends(api_auth)):
@@ -1450,7 +1450,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                         return {"ok": False, "reason": "no_vision_backend",
                                 "message": "未配置可用的图像识别后端"}
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)
                 # P3（2026-08-18）：patch=true → 译文贴回原图（bbox OCR + 逐块译 + 回绘）。
                 # 计量按全部识出块的源文本长度（真送翻译引擎的量）；PNG 走 base64 内联
                 # （几百 KB 级，一次性展示不值得走令牌存储的取回即删语义——灯箱要反复切看）。
@@ -1509,7 +1509,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                                 lang=target_lang, stats=pout.get("stats"),
                                 ms=int((_ix_mono() - _ix_t0) * 1000))
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)
                     pout["media_kind"] = "image"
                     pout["from_upload"] = False
                     pout["from_remote"] = _tmp_download is not None
@@ -1551,7 +1551,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                                 lang=target_lang, stats=uout.get("stats"),
                                 ms=int((_ix_mono() - _ix_t0) * 1000))
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)
                         return out
                 svc = ImageTranslateService(
                     _get_translation_service(request),
@@ -1576,7 +1576,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                             lang=target_lang, stats=None,
                             ms=int((_ix_mono() - _ix_t0) * 1000))
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)
                 return _attach_vision_failure_message(request, out)
 
             from src.ai.voice_translate import (
@@ -1642,4 +1642,4 @@ def register_translate_routes(app, *, api_auth) -> None:
                 try:
                     os.unlink(_tmp_download)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)

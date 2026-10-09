@@ -620,6 +620,7 @@ class WeChatPcService:
         try:
             return fn(self.account_id, chat_key)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in WeChatPcService._thread_texts", exc_info=True)
             return None
 
     def _ingest_bubbles(self, chat_key: str, display_name: str, is_group: bool, bubbles: List[Bubble]) -> int:
@@ -784,7 +785,7 @@ class WeChatPcService:
                 if os.path.isfile(ref):
                     return ref
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WeChatPcService._resolve_voice_media", exc_info=True)
         url = str(it.get("media_url") or "")
         fetch = getattr(self.bridge, "fetch_media", None)
         if not url or not callable(fetch):
@@ -946,7 +947,7 @@ class WeChatPcService:
         try:
             self._sleep(wait)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WeChatPcService._pace_between_parts", exc_info=True)
 
     def _drain_outbound(self) -> int:
         if not self.policy.sends_allowed or self.frozen():

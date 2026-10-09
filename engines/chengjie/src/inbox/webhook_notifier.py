@@ -2973,7 +2973,7 @@ class WebhookNotifier:
                 desc = str(json.loads(raw.decode("utf-8", "replace"))
                            .get("description") or "")[:200]
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WebhookNotifier._http_post", exc_info=True)
             raise RuntimeError(
                 f"HTTP {e.code}" + (f": {desc}" if desc else f" {e.reason}")
             ) from None
@@ -3022,5 +3022,5 @@ class WebhookNotifier:
             from src.integrations.alert_link_audit import config_fingerprint
             snap["config_fp"] = config_fingerprint(self._webhooks)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WebhookNotifier.status_snapshot", exc_info=True)
         return snap

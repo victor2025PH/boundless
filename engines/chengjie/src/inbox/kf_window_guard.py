@@ -152,14 +152,14 @@ class KfStateStore:
             try:
                 os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in KfStateStore.__init__", exc_info=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in KfStateStore.__init__", exc_info=True)
         self._conn.executescript(_DDL)
         self._conn.commit()
 
@@ -258,7 +258,7 @@ class KfStateStore:
         try:
             self._conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in KfStateStore.close", exc_info=True)
 
 
 _STORE: Optional[KfStateStore] = None

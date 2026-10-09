@@ -63,7 +63,7 @@ def workflows_disabled_reason_cfg(cfg: Any) -> str:
             if not feature_enabled("workflows", cfg):
                 return "license"
         except Exception:
-            pass  # licensing 层异常恒放行（与 feature_gate 内部口径一致）
+            logging.getLogger(__name__).debug("swallowed in workflows_disabled_reason_cfg", exc_info=True)
         return ""
     except Exception:
         return ""
@@ -94,7 +94,7 @@ def _require_workflows(request: Request) -> None:
             from src.web.feature_lock_stats import get_feature_lock_stats
             get_feature_lock_stats().record("workflows", "api")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _require_workflows", exc_info=True)
         raise HTTPException(403, tr(request, "err.lic.feature_locked"))
 
 
@@ -365,7 +365,7 @@ def register_workflow_routes(app, *, api_auth) -> None:
                 "ts": _t.time(),
             })
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_workflow_routes.api_cancel_chain_execution", exc_info=True)
         from src.inbox.workflow_monitor import enrich_execution
         _goal_chain_event(request, str(ex.get("conversation_id") or ""), "chain_cancelled",
                           str(ex.get("chain_name") or ex.get("chain_id") or ""))

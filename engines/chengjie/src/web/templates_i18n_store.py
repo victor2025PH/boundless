@@ -51,6 +51,7 @@ def resolve_path(config_manager) -> Path:
             if Path(cand).exists():
                 return Path(cand)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in resolve_path", exc_info=True)
             continue
     return Path(cands[0])
 

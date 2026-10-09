@@ -93,7 +93,7 @@ def init(db_path: Any) -> None:
             try:
                 _conn.close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in init", exc_info=True)
             _conn = None
             _db_path = None
         _connect_locked(path)

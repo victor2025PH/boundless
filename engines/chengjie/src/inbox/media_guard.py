@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Optional
@@ -184,6 +185,7 @@ def resolve_contained_path(root: str, candidate: str) -> Optional[str]:
             return None
         return cand_r
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in resolve_contained_path", exc_info=True)
         return None
 
 

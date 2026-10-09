@@ -121,7 +121,7 @@ def make_provider(config: Dict[str, Any]):
                         ensure_account_default_persona(
                             get_account_registry(), "zalo", aid, config)
                     except Exception:  # noqa: BLE001
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in make_provider._provider._poll", exc_info=True)
                 except Exception:  # noqa: BLE001
                     logger.debug("[zalo_personal] 注册表写入失败", exc_info=True)
                 # 身份化：Node 若回传 display_name/avatar_url → 富集自身昵称/头像

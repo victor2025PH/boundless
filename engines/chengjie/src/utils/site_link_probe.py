@@ -73,6 +73,7 @@ def site_link_snapshot(config_manager, *, probe=None,
             return None
         site = _site_url(cfg)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in site_link_snapshot", exc_info=True)
         return None
     if not site:
         return None

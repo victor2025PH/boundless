@@ -142,7 +142,7 @@ def _bump(key: str, n: int = 1) -> None:
             if key in _STATS:
                 _STATS[key] += int(n)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _bump", exc_info=True)
 
 
 def dump_stats() -> Dict[str, int]:
@@ -192,6 +192,7 @@ def _cache_get(
         with _CACHE_LOCK:
             return (_CACHE if cache is None else cache).get(cid)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _cache_get", exc_info=True)
         return None
 
 
@@ -216,7 +217,7 @@ def _cache_put(
                 except StopIteration:
                     break
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _cache_put", exc_info=True)
 
 
 def invalidate(conversation_id: str) -> None:
@@ -243,7 +244,7 @@ def invalidate(conversation_id: str) -> None:
                 except StopIteration:
                     break
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in invalidate", exc_info=True)
 
 
 def _consume_force_mark(cid: str) -> bool:
@@ -262,7 +263,7 @@ def clear_cache_for_tests() -> None:
             _PEER_CACHE.clear()
             _FORCE_NEXT.clear()
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in clear_cache_for_tests", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +432,7 @@ def utc_hours_from_rows(rows: Any) -> List[int]:
                 continue
             out.append(int(datetime.fromtimestamp(ts, tz=timezone.utc).hour))
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in utc_hours_from_rows", exc_info=True)
             continue
     return out
 
@@ -606,6 +608,7 @@ def stated_place_from_inbound_rows(rows: Any) -> Tuple[str, float]:
             if place and ts >= best_ts:
                 best_ts, best_place = ts, place
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in stated_place_from_inbound_rows", exc_info=True)
             continue
     return best_place, best_ts
 
@@ -651,6 +654,7 @@ def _stated_place_with_ts(episodic_store: Any, memory_key: str) -> Tuple[str, fl
             if cand and (hint_ts is None or created > hint_ts):
                 hint_ts, hint_place = created, cand
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in _stated_place_with_ts", exc_info=True)
             continue
     if best_place:
         return best_place, float(best_ts or 0.0)

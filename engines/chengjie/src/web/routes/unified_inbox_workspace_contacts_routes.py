@@ -357,7 +357,7 @@ def register_workspace_contacts_routes(
                 if _wa.get("site_name"):
                     ctx["site_name"] = _wa.get("site_name")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_workspace_contacts_routes.workspace_contact_page", exc_info=True)
         return templates.TemplateResponse(request, "contact360.html", ctx)
 
     # ── Phase 6-2：客户列表 / CRM 入口 ──────────────────────────

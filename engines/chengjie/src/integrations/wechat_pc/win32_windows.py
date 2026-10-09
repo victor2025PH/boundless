@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import logging
 import ctypes
 import os
 from ctypes import wintypes
@@ -75,7 +76,7 @@ def enum_top_windows(process_names: Optional[tuple] = None, *, visible_only: boo
                     w, h = max(0, rc.right - rc.left), max(0, rc.bottom - rc.top)
             out.append(TopWindow(int(hwnd), p, buf.value, tbuf.value, visible, pid_cache.get(p, ""), w, h))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in enum_top_windows._cb", exc_info=True)
         return True
 
     user32.EnumWindows(_cb, 0)

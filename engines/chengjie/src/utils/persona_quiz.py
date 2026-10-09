@@ -1246,7 +1246,7 @@ def run_quiz(persona: dict, chat_fn: Callable[[str, str, float], str],
             try:
                 on_stage(stage, int(progress))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in run_quiz._stage", exc_info=True)
 
     quiz = build_quiz(persona, n=n)
     system = build_quiz_system_prompt(persona)
@@ -1379,7 +1379,7 @@ def run_retired_quiz(persona: dict, chat_fn: Callable[[str, str, float], str],
             try:
                 on_stage(stage, int(progress))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in run_retired_quiz._stage", exc_info=True)
 
     quiz = build_retired_quiz(persona, max_terms=max_terms)
     if not quiz:
@@ -1410,7 +1410,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")   # 防 Windows GBK 控制台崩
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in main", exc_info=True)
 
     ap = argparse.ArgumentParser(
         description="人设一致性考题离线冒烟：档案出题 → 真人设 prompt 问 LLM → 判分")

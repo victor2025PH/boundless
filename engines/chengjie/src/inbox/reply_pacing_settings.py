@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 AUTOMATION_MODES = ("manual", "review", "multi_choice", "auto_ai")
@@ -772,6 +773,7 @@ def _coerce_tzname(v: Any) -> Optional[str]:
         ZoneInfo(s)
         return s
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _coerce_tzname", exc_info=True)
         return None
 
 

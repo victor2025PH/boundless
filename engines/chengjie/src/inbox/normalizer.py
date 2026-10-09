@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Optional
 
@@ -204,7 +205,7 @@ def infer_chat_type(
             if bool(src.get("is_group")):
                 return "group"
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).debug("swallowed in infer_chat_type", exc_info=True)
     pt = str(src.get("peer_type") or "").strip().lower()
     if pt in _GROUP_SOURCE_TYPES:
         return "group"
@@ -220,7 +221,7 @@ def infer_chat_type(
             if bool(src.get("is_group_thread")):
                 return "group"
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).debug("swallowed in infer_chat_type", exc_info=True)
     for _k in ("participants_count", "participant_count", "participantCount"):
         if _k not in src:
             continue
@@ -699,4 +700,4 @@ try:
             _PLATFORM_MSG_ID_FIELDS.setdefault(_spec.id, tuple(_spec.msg_id_fields))
     del _spec
 except Exception:  # 注册表不可用时保持旧行为（回落 title()）
-    pass
+    logging.getLogger(__name__).debug("swallowed in module", exc_info=True)

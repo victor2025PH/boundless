@@ -54,7 +54,7 @@ def resolve_reply_yield_cfg(cfg_root: Any) -> Dict[str, Any]:
         da = str(ry.get("default_action") or "pause").strip().lower()
         out["default_action"] = da if da in _VALID_ACTIONS else "pause"
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in resolve_reply_yield_cfg", exc_info=True)
     return out
 
 
@@ -138,7 +138,7 @@ def sweep(
                                         str(ex.get("chain_name")
                                             or ex.get("chain_id") or ""))
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in sweep", exc_info=True)
                 logger.info("[reply-yield] 客户已回，链按完成收束: %s conv=%s",
                             ex.get("chain_id"), cid)
                 continue

@@ -107,6 +107,7 @@ def find_prerendered(
             return None
         return ogg
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in find_prerendered", exc_info=True)
         return None
 
 
@@ -183,6 +184,7 @@ def read_ref_manifest(
         data = json.loads(f.read_text(encoding="utf-8", errors="replace"))
         return data if isinstance(data, dict) else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in read_ref_manifest", exc_info=True)
         return None
 
 
@@ -235,6 +237,7 @@ def read_prerender_lines(
         try:
             raw = f.read_text(encoding="utf-8", errors="replace")
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in read_prerender_lines", exc_info=True)
             continue
         for line in raw.splitlines():
             s = line.strip()
@@ -296,7 +299,7 @@ def append_prerender_line(
                 if s and not s.startswith("#"):
                     existing.add(prerender_key(normalize_prerender_text(s)))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in append_prerender_line", exc_info=True)
     if key in existing:
         return {"ok": True, "added": False, "reason": "duplicate",
                 "target": tgt, "text": t, "file": str(f)}

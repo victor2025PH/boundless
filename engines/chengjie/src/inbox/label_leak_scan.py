@@ -13,6 +13,7 @@ strip_system_labels``）负责拦，本模块负责**兜底看见**：按落库�
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -74,6 +75,7 @@ def scan_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "text": text[:120],
             })
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in scan_rows", exc_info=True)
             continue
     out.sort(key=lambda e: e["ts"])
     return out

@@ -33,7 +33,7 @@ def _tc_metric(name: str) -> None:
         from src.monitoring.metrics_store import get_metrics_store
         get_metrics_store().record_inbox_draft_event(name)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _tc_metric", exc_info=True)
 
 
 def _prompt_addenda(
@@ -1347,7 +1347,7 @@ async def _generate_persona_reply_impl(
     try:
         _goal_skip.__exit__(None, None, None)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _generate_persona_reply_impl", exc_info=True)
 
     reply = (reply or "").strip()
     if reply and _cid_q6:
@@ -1361,7 +1361,7 @@ async def _generate_persona_reply_impl(
             from src.inbox.media_claim_block import tick_outbound
             tick_outbound(_cid_q6)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _generate_persona_reply_impl", exc_info=True)
     # ── 出站复读守卫（P0 2026-08-12）：生成稿与我方最近已发消息近重复 → 带
     # 负样本重生成一次（相似度归一化/阈值与 proactive_variety 生产校准同源）。
     # 实录：智能回复几乎逐字复读了 4 天前已发出的回答——对方看过的话原样再说

@@ -154,7 +154,7 @@ async def maybe_send_holding_reply(
             _record("skipped_quota_platform")
             return False
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in maybe_send_holding_reply", exc_info=True)
     from src.integrations.account_orchestrator import get_orchestrator as _go
     _orch = _go(_cfg)
     # 与语音/图片同口径：仅对编排器管理的账号发（原生 standalone 不归编排器）
@@ -171,7 +171,7 @@ async def maybe_send_holding_reply(
                 _record("skipped_crisis")
                 return False
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in maybe_send_holding_reply", exc_info=True)
 
     # 先自动已读（真人先看后回；即便下面不发话术也让客户看到「已读」）——
     # mark_read best-effort，不支持/失败静默。

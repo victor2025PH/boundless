@@ -239,6 +239,7 @@ class SLAWatcher:
         try:
             drafts = self._svc.list_drafts(status="pending", limit=500)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in SLAWatcher._check_sla_breach", exc_info=True)
             return
 
         bus = get_event_bus()
@@ -402,6 +403,7 @@ class SLAWatcher:
         try:
             all_presence = self._store.list_agent_presence(active_within_sec=86400)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in SLAWatcher._check_reassign", exc_info=True)
             return
 
         offline_agents: List[str] = [
@@ -436,6 +438,7 @@ class SLAWatcher:
         try:
             pending_drafts = self._svc.list_drafts(status="pending", limit=500)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in SLAWatcher._check_reassign", exc_info=True)
             return
 
         bus = get_event_bus()

@@ -935,7 +935,7 @@ async def _handle_one_message(
         if inbox_will_autosend("whatsapp", phone_number_id, chat_key):
             return
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _handle_one_message", exc_info=True)
 
     # Phase G4c：走主管道 → maybe_auto_reply（护栏/canary/记忆），回复经 orch.send→官方 worker；不在此自答。
     if use_pipeline:

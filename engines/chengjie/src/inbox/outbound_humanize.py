@@ -545,6 +545,7 @@ def _deferred_db_path(store: Any) -> Optional[Path]:
         db = Path(p).parent / _DEF_DB_NAME
         return db if db.exists() else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _deferred_db_path", exc_info=True)
         return None
 
 
@@ -596,7 +597,7 @@ def _reset_probe_for_tests() -> None:
             try:
                 c.close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in _reset_probe_for_tests", exc_info=True)
         _def_conns.clear()
 
 
@@ -616,7 +617,7 @@ def resolve_origin(item: Any, store: Any = None) -> str:
                 store, str(item.get("conversation_id") or ""), str(item.get("text") or "")):
             return "verbatim"
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in resolve_origin", exc_info=True)
     return "auto"
 
 
@@ -643,7 +644,7 @@ def apply_outbound_humanize(
                 from src.inbox.excuse_budget import note_outbound_excuse
                 note_outbound_excuse(src, conversation_id=conversation_id, cfg_root=cfg_root, origin=org)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in apply_outbound_humanize", exc_info=True)
             logger.info(
                 "[outbound] conv=%s stage=%s origin=%s lang=%s len=%d humanize=skip fp=%s preview=%r",
                 conversation_id or "-", stage or "-", org, lg, len(src),
@@ -707,7 +708,7 @@ def _fp_stats(*, record_gate: Optional[int] = None, record_draft: Optional[int] 
         if svc_action is not None:
             _fp.record_service_tone(svc_action)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _fp_stats", exc_info=True)
 
 
 # ── 起草层挂点（P-1 A · #259 #254）──────────────────────────────────────────

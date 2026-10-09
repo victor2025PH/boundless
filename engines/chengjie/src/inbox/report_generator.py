@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import logging
 import datetime
 import time
 from collections import Counter
@@ -198,7 +199,7 @@ class ReportGenerator:
                         "errors": whn.total_errors,
                     }
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in ReportGenerator.generate", exc_info=True)
         report["system"] = sys_snap
 
         return report

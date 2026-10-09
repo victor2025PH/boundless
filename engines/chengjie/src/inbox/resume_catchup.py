@@ -78,7 +78,7 @@ def catchup_on_resume(
             from src.inbox.draft_trigger import note as _trig_note
             _trig_note(cid, "takeover_rearm")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in catchup_on_resume", exc_info=True)
         cb(conv_arg, text, skip_companion_yield=True)
         out["dispatched"] = True
         out["reason"] = "dispatched"

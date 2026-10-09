@@ -132,7 +132,7 @@ class RateLimiter:
                 self._stats["passed"] += 1
                 return True, ""
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in RateLimiter.allow", exc_info=True)
 
         if user_id and self.is_banned(user_id):
             return False, "banned"

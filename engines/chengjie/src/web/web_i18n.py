@@ -1654,7 +1654,7 @@ def _update_coverage(merged: dict, extras: dict) -> None:
         _COVERAGE.clear()
         _COVERAGE.update(cov)
     except Exception:  # noqa: BLE001 —— 观测数据，绝不干扰词典构建
-        pass
+        _logging.getLogger(__name__).debug("swallowed in _update_coverage", exc_info=True)
 
 
 def get_ui_lang_coverage() -> dict:
@@ -1814,7 +1814,7 @@ def tr(request, key: str, default: str = None, /, **fmt) -> str:
         try:
             s = s.format(**fmt)
         except Exception:
-            pass
+            _logging.getLogger(__name__).debug("swallowed in tr", exc_info=True)
     return s
 
 

@@ -15,6 +15,7 @@ LLM 不总是遵守 prompt 里"禁止使用 X"的指令；一旦回复漏出客�
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
@@ -408,7 +409,7 @@ def rewrite_service_tone(text: str, *, formal_you: bool = True,
             from src.inbox.ai_fingerprint_stats import record_service_tone
             record_service_tone(str(rep.get("action") or "clean"))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in rewrite_service_tone", exc_info=True)
     return out_text, rep
 
 
@@ -1121,7 +1122,7 @@ def build_self_name_allowlist(
                     seen.add(nv)
                     out.append(v)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in build_self_name_allowlist", exc_info=True)
     return out
 
 
@@ -1739,7 +1740,7 @@ def find_name_denial(text: str, client_name: str, self_names: Optional[List[str]
                 if str(y or "").strip() and names_consistent(x, y):
                     return []
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in find_name_denial", exc_info=True)
         for sent in _split_sentences_sn(s):
             if _name_denial_exempt(sent, x):
                 continue

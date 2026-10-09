@@ -314,6 +314,7 @@ def _find_recipient_in_share(
     try:
         root = ET.fromstring(xml)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _find_recipient_in_share", exc_info=True)
         return None
 
     hits: List[Tuple[int, Tuple[int, int, int, int], str]] = []
@@ -374,6 +375,7 @@ def _find_share_send_button(xml: str) -> Optional[Tuple[int, int]]:
     try:
         root = ET.fromstring(xml)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _find_share_send_button", exc_info=True)
         return None
 
     candidates: List[Tuple[int, Tuple[int, int, int, int]]] = []
@@ -420,6 +422,7 @@ def _find_search_field(xml: str) -> Optional[Tuple[int, int]]:
     try:
         root = ET.fromstring(xml)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _find_search_field", exc_info=True)
         return None
     for el in root.iter():
         cls = (el.get("class") or "")

@@ -639,7 +639,7 @@ async def enrich_inbound_media_text(
             try:
                 os.unlink(tmp_download)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in enrich_inbound_media_text", exc_info=True)
 
 
 #: 我方（坐席手动 / 手机端）发出的图片在上下文里的标签——与 ``persona_reply.normalize_history``

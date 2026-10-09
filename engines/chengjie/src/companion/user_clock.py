@@ -40,6 +40,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import threading
@@ -153,7 +154,7 @@ def _record_stat(key: str, n: int = 1) -> None:
             if key in _STATS:
                 _STATS[key] += int(n)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _record_stat", exc_info=True)
 
 
 def dump_stats() -> Dict[str, int]:
@@ -377,6 +378,7 @@ def _zone(tz_name: str) -> Optional[ZoneInfo]:
         name = str(tz_name or "").strip()
         return ZoneInfo(name) if name else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _zone", exc_info=True)
         return None
 
 
@@ -389,6 +391,7 @@ def _tz_offset_hours(tz_name: str, now: Any = None) -> Optional[float]:
         off = _as_utc(now).astimezone(zone).utcoffset()
         return None if off is None else off.total_seconds() / 3600.0
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _tz_offset_hours", exc_info=True)
         return None
 
 
@@ -401,6 +404,7 @@ def _clock_tzinfo(clock: Optional[UserClock]):
             return timezone(timedelta(hours=float(clock.offset_hours)))
         return _zone(clock.tz_name)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _clock_tzinfo", exc_info=True)
         return None
 
 
@@ -469,6 +473,7 @@ def clock_from_tz_name(
             trust=str(trust or TRUST_REPLACE),
         )
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in clock_from_tz_name", exc_info=True)
         return None
 
 
@@ -509,6 +514,7 @@ def _match_preset_name(text: str) -> Optional[str]:
             if s == str(meta.get("city_zh", "")).lower() or s == str(meta.get("city_en", "")).lower():
                 return slug
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _match_preset_name", exc_info=True)
         return None
     return None
 
@@ -520,6 +526,7 @@ def _stated_clock(text: Any, now: Any = None) -> Optional[UserClock]:
         slug = _match_preset_name(text) or infer_place_from_text(text)
         return _clock_from_slug(slug, now) if slug else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _stated_clock", exc_info=True)
         return None
 
 
@@ -583,6 +590,7 @@ def _phone_clock(raw: Any, now: Any = None) -> Optional[UserClock]:
             trust=TRUST_ADVISORY,
         )
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _phone_clock", exc_info=True)
         return None
 
 
@@ -615,6 +623,7 @@ def _histogram(utc_hour_counts: Any) -> Dict[int, int]:
                 h = int(hour)
                 c = int(count)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in _histogram", exc_info=True)
                 continue
             if not (0 <= h <= 23) or c <= 0:
                 continue
@@ -681,6 +690,7 @@ def infer_from_activity(
             trust=TRUST_NARROW,
         )
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in infer_from_activity", exc_info=True)
         return None
 
 
@@ -772,6 +782,7 @@ def _language_clock(lang: Any, now: Any = None) -> Optional[UserClock]:
             trust=TRUST_ADVISORY,
         )
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _language_clock", exc_info=True)
         return None
 
 
@@ -1204,6 +1215,7 @@ def shift_hours_to_clock(utc_hours: Any, clock: Optional[UserClock]) -> List[int
             try:
                 h = int(raw)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in shift_hours_to_clock", exc_info=True)
                 continue
             if not (0 <= h <= 23):
                 continue

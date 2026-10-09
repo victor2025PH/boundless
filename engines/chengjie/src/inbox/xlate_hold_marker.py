@@ -41,6 +41,7 @@ def _default_store() -> Any:
         from src.integrations.protocol_bridge import get_inbox_store
         return get_inbox_store()
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _default_store", exc_info=True)
         return None
 
 
@@ -50,7 +51,7 @@ def _parse(raw: Any) -> Optional[Dict[str, Any]]:
         if isinstance(got, dict) and got.get("ts"):
             return got
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _parse", exc_info=True)
     return None
 
 
@@ -121,6 +122,7 @@ def get(cid: str, *, store: Any = None, now: Optional[float] = None,
     try:
         rec = _parse(st.get_app_setting(_key(cid), ""))
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in get", exc_info=True)
         return None
     if not rec:
         return None

@@ -57,7 +57,7 @@ def build_policy_cfg(file_cfg: Dict[str, Any], *, tier: Optional[str] = None, ri
             a, b = str(work_hours).replace("~", "-").split("-", 1)
             cfg["work_hours"] = [int(a), int(b)]
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in build_policy_cfg", exc_info=True)
     return cfg
 
 
@@ -72,7 +72,7 @@ def resolve_token(token: Optional[str], token_file: str, token_env: str) -> str:
             if t:
                 return t
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).debug("swallowed in resolve_token", exc_info=True)
     env_name = token_env or DEFAULT_TOKEN_ENV
     t = os.environ.get(env_name, "").strip()
     return t or "admin"
@@ -188,6 +188,7 @@ def main(argv=None) -> int:
         try:
             new_policy = _policy_from_disk()
         except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).debug("swallowed in main._sleep_and_watch", exc_info=True)
             return
         if new_policy != svc.policy:
             log.info("[policy] 配置已变更 → tier=%s work_hours=%s（热生效，未重启）", new_policy.tier, new_policy.work_hours)

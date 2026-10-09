@@ -68,6 +68,7 @@ def probe_duration_sec(path: str) -> Optional[float]:
         val = float((r.stdout or "").strip().splitlines()[0])
         return val if val > 0 else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in probe_duration_sec", exc_info=True)
         return None
 
 
@@ -84,6 +85,7 @@ def _has_audio_stream(path: str) -> Optional[bool]:
             return None
         return bool((r.stdout or "").strip())
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _has_audio_stream", exc_info=True)
         return None
 
 
@@ -108,7 +110,7 @@ def extract_audio_wav_sync(video_path: str) -> Tuple[Optional[str], str]:
             try:
                 os.remove(out)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in extract_audio_wav_sync", exc_info=True)
             tail = (r.stderr or b"")[-300:].decode("utf-8", "replace")
             logger.debug("[video-xlate] 抽轨失败 rc=%s tail=%s", r.returncode, tail)
             return None, "no_audio_track" if r.returncode == 0 else "extract_failed"
@@ -117,13 +119,13 @@ def extract_audio_wav_sync(video_path: str) -> Tuple[Optional[str], str]:
         try:
             os.remove(out)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in extract_audio_wav_sync", exc_info=True)
         return None, "extract_timeout"
     except Exception as exc:  # noqa: BLE001
         try:
             os.remove(out)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in extract_audio_wav_sync", exc_info=True)
         return None, f"extract_error:{type(exc).__name__}"
 
 
@@ -213,7 +215,7 @@ class VideoTranslateService:
                 try:
                     os.remove(wav)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in VideoTranslateService.translate_video", exc_info=True)
         out["media_kind"] = "video"
         if dur is not None:
             out["video_duration_sec"] = dur

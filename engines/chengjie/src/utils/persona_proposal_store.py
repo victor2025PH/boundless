@@ -170,6 +170,7 @@ class PersonaProposalStore:
         try:
             rid = int(proposal_id)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in PersonaProposalStore.get", exc_info=True)
             return None
         if not pid or rid <= 0:
             return None

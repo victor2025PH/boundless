@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Dict, Optional, Set, Tuple
 
 __all__ = [
@@ -197,6 +198,7 @@ def own_fleet_candidates(
             if name:
                 by_name[(plat, name)] = info
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in own_fleet_candidates", exc_info=True)
             continue
     if not by_id and not by_name:
         return []
@@ -238,6 +240,7 @@ def own_fleet_candidates(
                 "last_ts": float(c.get("last_ts") or 0.0),
             })
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in own_fleet_candidates", exc_info=True)
             continue
     out.sort(key=lambda x: -x["last_ts"])
     return out[: max(1, int(max_items))]
@@ -263,6 +266,7 @@ def build_own_fleet_index(
             plat = str(a.get("platform") or "").strip().lower()
             acct = str(a.get("account_id") or "").strip()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in build_own_fleet_index", exc_info=True)
             continue
         if plat and acct:
             index.setdefault(plat, set()).add(acct)
@@ -271,6 +275,7 @@ def build_own_fleet_index(
             plat = str(e.get("platform") or "").strip().lower()
             acct = str(e.get("account_id") or "").strip()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in build_own_fleet_index", exc_info=True)
             continue
         if plat and acct:
             index.setdefault(plat, set()).add(acct)
@@ -322,7 +327,7 @@ def proactive_candidate_ok(
         if proactive_exclude_row(r, config or {}):
             return (False, "bot")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in proactive_candidate_ok", exc_info=True)
     try:
         if is_own_fleet_peer(
                 str(r.get("platform") or ""),
@@ -331,7 +336,7 @@ def proactive_candidate_ok(
                 own_index):
             return (False, "own_fleet")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in proactive_candidate_ok", exc_info=True)
     # P-2 E / F（#259 #252 · D-P4）：客户要求过停联（账号级名单，随重装 / 迁移包持久）
     # 与自聊会话（peer == 自己）**永不**主动触达——关怀 / 唤醒 / opener / 目标同一入口。
     # 名单取进程默认实例（首次 get_blocklist(store) 已登记路径）；未初始化 → 空名单放行。
@@ -341,7 +346,7 @@ def proactive_candidate_ok(
                         str(r.get("chat_key") or "")):
             return (False, "self_chat")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in proactive_candidate_ok", exc_info=True)
     try:
         from src.inbox.account_blocklist import get_blocklist
         if get_blocklist().is_blocked(str(r.get("platform") or ""),
@@ -349,7 +354,7 @@ def proactive_candidate_ok(
                                       str(r.get("chat_key") or "")):
             return (False, "stop_contact")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in proactive_candidate_ok", exc_info=True)
     # 智安 P0-2（2026-10-08）STOP 硬闸跨账号视角：同平台同 external_id 在别的账号停联过、
     # 或同一手机号停联过 → 同样永不主动触达（开关显式关时跳过本扩展）。
     try:
@@ -359,7 +364,7 @@ def proactive_candidate_ok(
                 str(r.get("chat_key") or ""), phone=str(r.get("phone") or r.get("peer_phone") or "")):
             return (False, "stop_contact")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in proactive_candidate_ok", exc_info=True)
     return (True, "")
 
 

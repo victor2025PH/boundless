@@ -80,12 +80,12 @@ def _request_actor(request: "Request") -> str:
         if u:
             return f"user:{u}"
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _request_actor", exc_info=True)
     try:
         if (request.headers.get("Authorization") or "").startswith("Bearer "):
             return "bearer-token"
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _request_actor", exc_info=True)
     return "unknown"
 
 
@@ -216,7 +216,7 @@ def _session_present(request: Request) -> bool:
             s = request.session
             return bool(s.get("user_id") or s.get("auth"))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _session_present", exc_info=True)
     return False
 
 
@@ -674,7 +674,7 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
                     "rate_key": "ai_primary_guard:lock",
                 })
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_setup_routes.api_setup_ai_primary_save", exc_info=True)
             return {
                 "ok": False,
                 "locked": True,
@@ -1177,6 +1177,7 @@ def register_setup_routes(app, *, api_auth, config_manager=None) -> None:
             if not is_private_endpoint(base):
                 return None
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in register_setup_routes._local_endpoint", exc_info=True)
             return None
         return {"base_url": base, "model": str((fb or {}).get("model") or "")}
 

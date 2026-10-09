@@ -48,7 +48,7 @@ def _note_outbound_block(reason: str) -> None:
         from src.ops.outbound_policy import record_block
         record_block("business", reason, platform="whatsapp")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _note_outbound_block", exc_info=True)
 
 
 class WhatsAppRpaService:
@@ -623,7 +623,7 @@ class WhatsAppRpaService:
                     cat = detail.get("template_category", "unknown")
                     replied_by_category[cat] = replied_by_category.get(cat, 0) + 1
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WhatsAppRpaService.proactive_status", exc_info=True)
         return {
             "enabled": bool(cfg.get("enabled")),
             "cfg": cfg,

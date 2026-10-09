@@ -10,6 +10,7 @@ Phase13(2026-07-13)：主动消息**语音化**——主动打招呼按概率发
 """
 from __future__ import annotations
 
+import logging
 import asyncio
 import json
 import threading
@@ -85,7 +86,7 @@ def _snapshot_emotion(meta: Dict[str, Any], *, mood_ttl: float, now: float) -> s
                 record_mood_consume("proactive_gate")
                 return ovr
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _snapshot_emotion", exc_info=True)
     return machine
 
 
@@ -195,7 +196,7 @@ def news_upgradeable_modes(config: Dict[str, Any]) -> tuple:
         if bool(pro.get("upgrade_life_share", False)):
             return _NEWS_UPGRADEABLE_MODES + ("life_share",)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in news_upgradeable_modes", exc_info=True)
     return _NEWS_UPGRADEABLE_MODES
 # 同一会话 72h 内不重复用新闻开场——新闻是全网同一批素材，高频轮播一眼机器人。
 NEWS_REPEAT_WINDOW_HOURS = 72.0
@@ -242,6 +243,7 @@ def _ensure_news_ledger_loaded() -> None:
     try:
         data = json.loads(Path(_NEWS_LEDGER_PATH).read_text(encoding="utf-8"))
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _ensure_news_ledger_loaded", exc_info=True)
         return
     if not isinstance(data, dict):
         return
@@ -267,7 +269,7 @@ def _persist_news_ledger(now_v: float) -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(keep, ensure_ascii=False), encoding="utf-8")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _persist_news_ledger", exc_info=True)
 
 
 def news_opener_allowed(
@@ -430,7 +432,7 @@ def _news_opener(
                 # daemon 背景刷，绝不阻塞规划循环；now 透传保判定与本轮同钟
                 refresh_if_stale(rcfg, now=now_v)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in _news_opener", exc_info=True)
 
         def _fresh_cache(path: Any) -> Dict[str, Any]:
             c = read_topics_cache(path)
@@ -472,7 +474,7 @@ def _news_opener(
                 if m != max(counts):
                     pool = [t for t, c in zip(pool, counts) if c == m]
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in _news_opener", exc_info=True)
         words = persona_words
         if words is None and persona_words_fn is not None:
             try:
@@ -554,7 +556,7 @@ def maybe_upgrade_to_news(
             news["gap_bucket"] = str((op or {}).get("gap_bucket") or "")
             return news
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in maybe_upgrade_to_news", exc_info=True)
     return op
 
 
@@ -577,7 +579,7 @@ def resolve_proactive_topic_enabled(config: Any, *, log: Any = None) -> bool:
                 log.info("[proactive_topic] enabled=%s source=domain_default domain=%s (键缺席，按业务域解释)",
                          int(val), dom)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in resolve_proactive_topic_enabled", exc_info=True)
         return val
     except Exception:
         try:
@@ -608,7 +610,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     "companion proactive_topic 跳过：授权档位未含 companion（feature gate）")
                 enabled = False
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive", exc_info=True)
         # 预览（可观测面板）仅需 inbox + skill_manager；ai 仅"真发"时才需要。
         # 故即便未启用 / ai 未就绪，也先挂上"会发给谁、引用哪条记忆"的预览能力，
         # 让运营在真正开闸前先 dry-run 看清本轮候选。
@@ -1040,7 +1042,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         platform, account_id):
                     return True
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._account_can_send", exc_info=True)
             return (account_id == "default"
                     and assistant.telegram_client is not None)
 
@@ -1061,7 +1063,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         "接管了调度（推断源累计 %s）",
                         _uc_seen["resolved"], _uc_seen["takeover"], _uc_stats())
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._uc_tick_summary", exc_info=True)
             _uc_seen["resolved"] = 0
             _uc_seen["takeover"] = 0
 
@@ -1165,7 +1167,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             r, getattr(assistant.config, "config", None) or {}):
                         continue
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._conversations", exc_info=True)
                 # 舰队自嗨排除（P1 2026-08-03）：对端是自家账号（自己给自己 /
                 # 账号A→账号B）→ 主动情感触达零意义，跳过。收件箱镜像仍保留该会话。
                 try:
@@ -1177,7 +1179,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             _own_fleet_index):
                         continue
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._conversations", exc_info=True)
                 # 业务号排除（P2 2026-08-04）：接码/发卡/官方客服类显示名——
                 # 不是 bot 也不是自家号，但主动情感触达零意义且有暴露面
                 # （news_share 实锤给「实卡接码」号发过新闻问候）。
@@ -1188,7 +1190,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     if is_service_peer_name(str(r.get("display_name") or "")):
                         continue
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._conversations", exc_info=True)
                 if _pf == "telegram":
                     if _is_system_peer(
                             _pf, str(r.get("account_id") or ""), _ck):
@@ -1294,7 +1296,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     if not allows_direct_autosend(_amode):
                         continue
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._conversations", exc_info=True)
                 chat_key = str(r.get("chat_key") or "")
                 platform = str(r.get("platform") or "telegram")
                 account_id = str(r.get("account_id") or "default")
@@ -1355,7 +1357,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                                 last_in_ts=_last_in_ts):
                             continue
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._conversations", exc_info=True)
                 out.append({
                     "conversation_id": cid,
                     "platform": platform,
@@ -1415,6 +1417,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     last_inbound_ts=float(conv.get("last_in_ts") or 0),
                 )
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._resolve_clock", exc_info=True)
                 return None
 
         def _user_clock(cid):
@@ -1427,7 +1430,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     if getattr(clock, "trust", "") in ("replace", "narrow"):
                         _uc_seen["takeover"] += 1
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._user_clock", exc_info=True)
             return clock
 
         def _persona_for_conv(conv: dict):
@@ -1480,6 +1483,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     return None
                 return int(persona_local_hour(place))
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._persona_hour_for_plan", exc_info=True)
                 return None
 
         def _locale_holiday(cid):
@@ -1537,6 +1541,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     return None
                 return PersonaManager.get_instance().get_persona_by_id(pid)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._news_persona_obj", exc_info=True)
                 return None
 
         def _news_persona_words(contact_key: str) -> list:
@@ -1665,6 +1670,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                                 if not _elig(cid):
                                     continue
                             except Exception:
+                                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._opener", exc_info=True)
                                 continue
                         if spec["resolve"](memory_key) is not None:
                             continue  # 该槽位已知 → 不问
@@ -1701,7 +1707,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             )
                             record_checkin_gate()
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._opener", exc_info=True)
                         return {"mode": "", "directive": "", "fact": "",
                                 "silent_hours": (op or {}).get(
                                     "silent_hours", 0.0)}
@@ -1721,7 +1727,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 Path(assistant.config.config_path).parent
                 / "companion_news_opener.json"))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive", exc_info=True)
 
         # 与 proactive_care(Phase O) 去重：已排关怀的会话让路（best-effort）。
         # 仅在 care 子系统已就绪（store 已挂 web_app.state）时生效，否则不去重、无害。
@@ -2046,14 +2052,14 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 if e and e.get("last_text"):
                     out.append(str(e["last_text"]))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._avoid_texts", exc_info=True)
             try:
                 from src.utils.proactive_variety import trailing_unanswered_texts
                 msgs = assistant.inbox_store.list_recent_messages(
                     cid, limit=12) or []
                 out.extend(trailing_unanswered_texts(msgs, max_texts=3))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._avoid_texts", exc_info=True)
             seen: set = set()
             dedup: list = []
             for t in out:
@@ -2096,7 +2102,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     if _vm:
                         ctx = f"{ctx}\n{_vm}" if ctx else _vm
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._gen_text", exc_info=True)
             # 悬空话头（P0 2026-08-05）：最后若是 TA 发的且一直没回——晨安/回访
             # 必须先接住它再问候（实锤：22:27「介绍老公」无人接，07:10 通用晨安）。
             pending_in = trailing_unanswered_inbound(msgs, max_texts=2)
@@ -2277,7 +2283,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 from src.companion.proactive_stats import record_media_skip
                 record_media_skip(kind, reason)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._media_skip", exc_info=True)
 
         async def _try_send_voice(plan, text) -> bool:
             """主动开场语音分支：中文 + clone_languages 名单内外语→克隆声
@@ -2390,7 +2396,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                                 from src.companion.proactive_stats import record_voice
                                 record_voice(foreign=True)
                             except Exception:
-                                pass
+                                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._try_send_voice", exc_info=True)
                             return True
                         _media_skip("voice", "foreign_deliver_failed")
                     except Exception:
@@ -2432,7 +2438,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         from src.companion.proactive_stats import record_voice
                         record_voice(foreign=False)
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._try_send_voice", exc_info=True)
                     return True
                 _media_skip("voice", "deliver_failed")
             except Exception:
@@ -2463,7 +2469,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 if is_unlimited():
                     return False
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._photo_cap_blocks", exc_info=True)
             return bool(_photo_cap.would_exceed(1))
 
         async def _plan_photo(plan):
@@ -2559,7 +2565,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             if _ok:
                                 pool = _ok
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._plan_photo", exc_info=True)
                     # 时段硬冲突过滤（实施53 P2-2）：反选池此前不滤时段——LLM
                     # 按话题贴合挑出「图书馆」时不管人设当地是不是凌晨（P0-2
                     # 只收紧了轮换层，这里是它的镜像）。深夜全池冲突 → 清空池
@@ -2576,7 +2582,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         elif _h_pp >= 22 or _h_pp < 6:
                             pool = []
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._plan_photo", exc_info=True)
                     directive = str(plan.get("directive") or "").strip()
                     if pool and directive:
                         try:
@@ -2642,7 +2648,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         from src.companion.proactive_stats import record_photo
                         record_photo()
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._try_send_photo", exc_info=True)
                     return True
                 _media_skip("photo", "deliver_failed")
             except Exception:
@@ -2689,7 +2695,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                         get_goal_stats().record_offer_claim_stripped(
                             n, samples=hits, source="proactive", persona=pid)
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._guard_offer_text", exc_info=True)
                 return out
             except Exception:
                 return text
@@ -2778,7 +2784,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             )
                             record_optout_mute()
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._send", exc_info=True)
                         assistant.logger.info(
                             "[proactive] opt-out 静默 cid=%s %.0f 天（命中：%r）",
                             _cid_oo, _optout_days, _hit[:40])
@@ -2828,7 +2834,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             from src.ops.outbound_policy import record_unlimited_bypass
                             record_unlimited_bypass("proactive_variety")
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._send", exc_info=True)
                         assistant.logger.info(
                             "[proactive] 变体守卫放行(unlimited) cid=%s：重写仍雷同，照发",
                             plan.get("conversation_id"))
@@ -2841,7 +2847,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             )
                             record_variety_block()
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._send", exc_info=True)
                         assistant.logger.info(
                             "[proactive] 变体守卫拦截 cid=%s：文案与未回开场雷同"
                             "（新=%r ≈ 旧=%r），本轮放弃",
@@ -2885,7 +2891,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             )
                             record_fabrication_block()
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._send", exc_info=True)
                         assistant.logger.info(
                             "[proactive] 反编造守卫拦截 cid=%s：%s（文案=%r），本轮放弃",
                             plan.get("conversation_id"), _fab_ev, text[:48])
@@ -2922,7 +2928,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             )
                             record_season_block()
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._send", exc_info=True)
                         assistant.logger.info(
                             "[proactive] 季节守卫拦截 cid=%s：「%s」不合当下"
                             "时令（文案=%r），本轮放弃",
@@ -2978,7 +2984,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                             )
                             record_greeting_time_block()
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._send", exc_info=True)
                         assistant.logger.info(
                             "[proactive] 问候时刻守卫拦截 cid=%s：「%s」不合"
                             "收件人时刻 %d 点（文案=%r），本轮放弃",
@@ -3007,7 +3013,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                     )
                     record_lang_gate_block()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._send", exc_info=True)
                 assistant.logger.info(
                     "[proactive] 语言闸拦截 cid=%s（文案=%r），本轮放弃",
                     plan.get("conversation_id"), text[:48])
@@ -3139,7 +3145,7 @@ async def maybe_start_companion_proactive(assistant) -> None:
                 from src.companion.proactive_stats import record_sent_mode
                 record_sent_mode(_mode)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in maybe_start_companion_proactive._on_teaser_sent", exc_info=True)
             # P1：生活分享真发成功才扣周配额（规划/生成失败/被守卫拦下都不扣）。
             # 实施55：素材原文（plan.fact）一并记进「聊过即退役」会话账本——
             # 主动分享过＝确定聊过，该会话此后不再用这条素材。

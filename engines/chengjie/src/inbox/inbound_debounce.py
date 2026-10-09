@@ -90,14 +90,14 @@ def is_voice_piece(text: Any, conv: Optional[Dict[str, Any]] = None) -> bool:
         if mt == "voice":
             return True
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in is_voice_piece", exc_info=True)
     try:
         placeholder = _VOICE_PLACEHOLDER
         try:
             from src.integrations.protocol_bridge import media_placeholder
             placeholder = str(media_placeholder("voice") or _VOICE_PLACEHOLDER)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in is_voice_piece", exc_info=True)
         return str(text or "").lstrip().startswith(placeholder)
     except Exception:
         return False
@@ -237,7 +237,7 @@ class InboundMerger:
                     try:
                         _t.cancel()
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in InboundMerger.push", exc_info=True)
             # 碎片模式（一字一条打一句话）→ 条数/等待上限自动放宽，整句合一窗
             _frag = is_fragment_burst(st["texts"])
             _cap_texts = self._frag_max_texts if _frag else self._max_texts
@@ -273,7 +273,7 @@ class InboundMerger:
                 try:
                     _t.cancel()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in InboundMerger._fire", exc_info=True)
         texts = st["texts"]
         merged = merge_burst_texts(texts)
         self.fired += 1
