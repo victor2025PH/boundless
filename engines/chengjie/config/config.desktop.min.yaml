@@ -63,9 +63,12 @@ ai:
   timeout: 60                       # 读超时 ≥ 官网网关 chat 预算 55s + 余量（Q-14 #262；30s 时 2.4% 调用被客户端先放弃 → 本轮沉默）
   prompt_budget_tokens: 12000       # 系统提示 + 注入 + few-shot + 历史合计上限；超了按 历史(保底6条) → few-shot → 注入尾段 → 保底历史 裁，人设/硬规则永不砍；0 = 不裁。6000 时每轮都在裁（一轮完整装配 10-12k）
   # ChatX 27B：与办公室同一产品。干净包零 RFC1918；打官网 /api/ai/v1 model=chatx。
-  # 聊天主链不拿它顶话（chat_fallback: false）；目录 / 无限制档走这条。
+  # 聊天主链不拿它顶话（chat_fallback: false）。
+  # 2026-10-09：feature_registry 仍把 ai.fallback.enabled 标成 C 类（原因码 lan，
+  # 禁入客户种子）。地址虽然已经是官网网关，分级没改之前种子必须关着，
+  # 否则客户机被当成「开了 LAN 兜底」。要默认开，先改分级再动这里。
   fallback:
-    enabled: true
+    enabled: false
     base_url: https://bd2026.cc/api/ai/v1
     model: chatx
     timeout: 90
