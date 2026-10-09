@@ -34,6 +34,19 @@ def _account_not_in_cold_start(monkeypatch):
     monkeypatch.setattr(ac, "resolve_account_connected_at", lambda *a, **k: 1.0)
 
 
+@pytest.fixture(autouse=True)
+def _persona_already_selected(monkeypatch):
+    """本文件测业务线封顶，与「注册表有行但没选人设 → review」（#156）正交。
+
+    用例 upsert 的账号没有 ``persona_id``。``account_persona_unselected`` 会如实
+    封顶 review——那是人设闸的正确行为，不在这里放宽。未标注业务线的设计仍是
+    不封顶（``effective_automation``：无标签 = 不封顶 = 全局 auto_ai）。
+    两闸叠在同一断言上，会把人设闸误读成「未标注业务线默认 review」。
+    """
+    import src.ai.persona_voice as pv
+    monkeypatch.setattr(pv, "account_persona_unselected", lambda *a, **k: False)
+
+
 # ── 注册表列 + 缓存 ────────────────────────────────────────────────────────
 
 def test_registry_business_line_column_roundtrip():
