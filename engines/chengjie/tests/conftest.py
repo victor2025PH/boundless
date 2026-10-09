@@ -601,6 +601,10 @@ def _isolated_global_rules(tmp_path):
     from src.utils.persona_manager import PersonaManager
 
     pm = PersonaManager.get_instance()
+    # 会话绑定是进程单例。上一个用例 bind 了「c1 → Old」却没 reset 时，
+    # 下一个用 chat_id=c1 拼提示词的用例会被当成 chat_binding，全局名字被压掉。
+    # 只清内存绑定，不换单例（换了会把下面的 global_rules 临时路径弄丢）。
+    pm._chat_personas.clear()
     old_path = pm._global_rules_path        # noqa: SLF001 — 正是要拦的那个字段
     old_cache = pm._global_rules
     old_sig = pm._global_rules_sig
