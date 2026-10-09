@@ -157,8 +157,14 @@ def build_llm_extract_fn(
         # 召回假性掉到 50%（2026-07-26 实锤，逐条单跑全过而 harness 批跑随机漏）。
         loop = asyncio.new_event_loop()
         try:
-            _ = loop.run_until_complete(_probe())
+            probed = loop.run_until_complete(_probe())
         except Exception:
+            loop.close()
+            return None
+        # 探针句子必含「小明」。抽不出任何条目＝客户端在，但没有可用模型
+        # （CI 无 key 时常见：不抛、回空列表）。按本门禁「不可用则跳过」处理，
+        # 不把 0% 召回当成质量失败。
+        if not probed:
             loop.close()
             return None
 
