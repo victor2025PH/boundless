@@ -1502,6 +1502,10 @@ whatsapp_rpa:
 # Telegram 通过 telegram.voice_reply 和本节 voice_profile 选择音色
 personas:
   default: warm_companion
+  # 从文档创建人设（B 线）。默认关；生产在 gitignore 的 config.local.yaml 里打开。
+  # 仓库不跟踪 config.yaml，提交的基线以本文件为准。
+  doc_import:
+    enabled: false
   profiles:
     - id: warm_companion
       name: 小灵
