@@ -232,7 +232,7 @@ def _co_init() -> None:  # pragma: no cover - 平台相关
     try:
         _ct.CoInitialize()
     except Exception:
-        pass  # 已由 uiautomation 初始化（可能是另一线程模型）→ 忽略
+        logging.getLogger(__name__).debug("swallowed in _co_init", exc_info=True)
 
 
 def _enumerator():  # pragma: no cover - 平台相关
@@ -255,7 +255,7 @@ def _friendly_name(dev) -> str:  # pragma: no cover - 平台相关
             try:
                 ctypes.windll.ole32.PropVariantClear(ctypes.byref(pv))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in _friendly_name", exc_info=True)
     except Exception:
         return ""
 
@@ -337,7 +337,7 @@ def _process_name(pid: int) -> str:  # pragma: no cover - 平台相关
         finally:
             k32.CloseHandle(h)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _process_name", exc_info=True)
     return ""
 
 
@@ -384,6 +384,7 @@ def capture_in_use(*, exclude_endpoint_ids: Tuple[str, ...] = (), exclude_pids: 
                     out["sessions"].append({"endpoint": eid, "device": _friendly_name(dev), "pid": pid,
                                             "process": _process_name(pid)})
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in capture_in_use", exc_info=True)
                     continue
         out["busy"] = bool(out["sessions"])
     except Exception as exc:  # noqa: BLE001
@@ -534,6 +535,7 @@ def heal_default_mic(state_path: str) -> Optional[str]:
         with open(state_path, "r", encoding="utf-8") as fh:
             st = json.load(fh) or {}
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in heal_default_mic", exc_info=True)
         return None
     prev = str(st.get("prev_default") or "")
     cable = str(st.get("cable") or "")
@@ -549,7 +551,7 @@ def heal_default_mic(state_path: str) -> Optional[str]:
         try:
             os.remove(state_path)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in heal_default_mic", exc_info=True)
     return restored
 
 
@@ -593,7 +595,7 @@ class MicSwitch:
         try:
             os.remove(self.state_path)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in MicSwitch.__exit__", exc_info=True)
 
 
 # ── 音频：解码 / 重采样 / 归一 / 播放 ──────────────────────────────────────────────
@@ -742,11 +744,11 @@ class Playback:
         try:
             st.stop()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in Playback.close", exc_info=True)
         try:
             st.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in Playback.close", exc_info=True)
 
     @staticmethod
     def _run_during(during: Optional[Callable[[], Any]]) -> None:

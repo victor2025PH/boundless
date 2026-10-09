@@ -145,7 +145,7 @@ def diagnose_conversation(
         if store is not None and hasattr(store, "list_automation_mode_log"):
             out["mode_history"] = store.list_automation_mode_log(cid, limit=10)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in diagnose_conversation", exc_info=True)
 
     # ── 有效档位（与 A/B 两线同一实现）＋ 封顶 findings ────────────────
     effective: Dict[str, Any] = {}
@@ -303,7 +303,7 @@ def diagnose_conversation(
                          peer_account_id=chat_key,
                          peer_status=str(peer_row.get("status") or ""))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in diagnose_conversation", exc_info=True)
 
     # ── 部署形态 / 投递链（与 CLI 同判据）──────────────────────────────
     tg_login = ((cfg.get("platform_login") or {}).get("telegram") or {})
@@ -334,7 +334,7 @@ def diagnose_conversation(
         if hold:
             _finding(findings, "block", "work_schedule", hold=str(hold))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in diagnose_conversation", exc_info=True)
 
     # ── 待审草稿积压（AI 在拟稿、没人点发送）──────────────────────────
     pending_n = 0
@@ -473,7 +473,7 @@ def diagnose_conversation(
                         _category = _c3 or _category
                         _rk_level = _l3
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in diagnose_conversation", exc_info=True)
                 _p: Dict[str, Any] = {
                     "reason": _hold_reason or (_hm_reason or "needs_human"),
                     "category": _category,

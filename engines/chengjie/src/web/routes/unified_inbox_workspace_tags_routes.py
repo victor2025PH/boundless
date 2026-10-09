@@ -185,7 +185,7 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
             from src.inbox.work_hours_gate import strip_off_hours_hold_tags
             tags = strip_off_hours_hold_tags(tags)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_workspace_tags_routes.api_conv_tags_put", exc_info=True)
         store = _inbox_store(request)
         if store is None:
             return {"ok": False, "error": tr(request, "err.svc.inbox_not_ready")}
@@ -228,7 +228,7 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
                     "ts": _t.time(),
                 })
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_workspace_tags_routes.api_conv_tags_put", exc_info=True)
         return {"ok": ok, "tags": tags}
 
     @app.post("/api/workspace/conv/{conversation_id}/stop-contact/confirm")
@@ -265,7 +265,7 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
                 bus.publish("conv_archived", {"conversation_id": conversation_id,
                                               "archived": True, "ts": _t.time()})
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_workspace_tags_routes.api_conv_stop_contact_confirm", exc_info=True)
         return {"ok": bool(out.get("ok")), "error": out.get("error", ""),
                 "tags": store.get_conv_tags(conversation_id), "archived": bool(out.get("archived")),
                 "stop_contact_at": float(out.get("stop_contact_at") or 0),
@@ -304,7 +304,7 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
                                                         "tags": store.get_conv_tags(conversation_id),
                                                         "ts": _t.time()})
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_workspace_tags_routes.api_conv_stop_contact_unfreeze", exc_info=True)
         return {"ok": bool(out.get("ok")), "error": out.get("error", ""), "was": out.get("was", ""),
                 "still_stopped": out.get("still_stopped", ""),
                 "mode_restored": (out.get("detail") or {}).get("mode_restored", "")}
@@ -333,7 +333,7 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
                         None, store.compute_and_store_qa_score, conversation_id
                     )
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_workspace_tags_routes.api_conv_archive", exc_info=True)
             # P28：广播会话归档事件（修正 EventBus API 调用签名）
             try:
                 from src.integrations.shared.event_bus import get_event_bus
@@ -344,5 +344,5 @@ def register_workspace_tags_routes(app, *, api_auth) -> None:
                     "ts": _t.time(),
                 })
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_workspace_tags_routes.api_conv_archive", exc_info=True)
         return {"ok": ok, "archived": archived}

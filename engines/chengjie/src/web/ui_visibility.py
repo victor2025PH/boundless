@@ -117,6 +117,7 @@ simple=True 的既有哲学一致）：
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any, Dict, Optional
@@ -179,7 +180,7 @@ def _desktop_mode(config: Any) -> bool:
         from src.bootstrap.env_probe import _is_desktop_mode
         return bool(_is_desktop_mode(config))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _desktop_mode", exc_info=True)
     try:
         if str(os.environ.get("AITR_DESKTOP_MODE") or "").strip().lower() in _TRUTHY:
             return True
@@ -252,7 +253,7 @@ def _seat_roles() -> frozenset:
         if roles:
             return frozenset(roles)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _seat_roles", exc_info=True)
     return _SEAT_ROLES_FALLBACK
 
 
@@ -371,5 +372,5 @@ def seat_mode_verdict(config: Any = None, presence: Any = None, *,
             out["mode"] = SEAT_MULTI
             out["source"] = "presence"
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in seat_mode_verdict", exc_info=True)
     return out

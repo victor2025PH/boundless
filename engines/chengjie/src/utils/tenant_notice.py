@@ -12,6 +12,7 @@ CWD=实例数据根；从引擎根跑的 CLI 从不读它。
 """
 from __future__ import annotations
 
+import logging
 import json
 import time
 from pathlib import Path
@@ -71,8 +72,10 @@ def read_tenant_notice(now: Optional[float] = None,
     try:
         raw = json.loads(Path(p).read_text(encoding="utf-8-sig"))
     except Exception:  # noqa: BLE001 - 无文件=非托管/无提醒，任何读取问题都等价
+        logging.getLogger(__name__).debug("swallowed in read_tenant_notice", exc_info=True)
         return None
     try:
         return parse_tenant_notice(raw, float(time.time() if now is None else now))
     except Exception:  # noqa: BLE001 - 横幅数据绝不拖垮状态接口
+        logging.getLogger(__name__).debug("swallowed in read_tenant_notice", exc_info=True)
         return None

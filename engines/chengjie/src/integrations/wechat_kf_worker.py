@@ -84,7 +84,7 @@ def convert_voice_to_amr(path: str) -> Tuple[str, str]:
     try:
         os.remove(dst)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in convert_voice_to_amr", exc_info=True)
     return "", reason
 
 
@@ -103,7 +103,7 @@ def wechat_kf_enabled(config: Optional[Dict[str, Any]]) -> bool:
         if bool(pl.get("enabled")):
             return True
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in wechat_kf_enabled", exc_info=True)
     return bool(wechat_kf_cfg(config).get("enabled"))
 
 
@@ -244,7 +244,7 @@ class WeChatKfWorker:
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):
-                pass
+                logging.getLogger(__name__).debug("swallowed in WeChatKfWorker.stop", exc_info=True)
             self._task = None
         self.state = "stopped"
 
@@ -461,7 +461,7 @@ class WeChatKfWorker:
                     from src.integrations.protocol_bridge import report_message_status
                     report_message_status(PLATFORM, self.account_id, chat_key, fail_msgid, "failed")
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WeChatKfWorker._handle_event", exc_info=True)
             return
         if et == "enter_session":
             code = str(ev.get("welcome_code") or "")
@@ -476,7 +476,7 @@ class WeChatKfWorker:
                             msg_id=str((res.get("data") or {}).get("msgid") or ""),
                             source={"kf_event": "welcome"}))
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in WeChatKfWorker._handle_event", exc_info=True)
             return
         if et in ("user_recall_msg", "servicer_recall_msg"):
             rid = str(ev.get("recall_msgid") or "")
@@ -485,7 +485,7 @@ class WeChatKfWorker:
                     from src.integrations.protocol_bridge import report_deleted_messages
                     report_deleted_messages(PLATFORM, self.account_id, [rid], chat_key=chat_key)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WeChatKfWorker._handle_event", exc_info=True)
             return
         if et == "session_status_change":
             logger.info("[wechat_kf] 会话状态变更 acct=%s uid=%s change_type=%s servicer=%s→%s",
@@ -530,7 +530,7 @@ class WeChatKfWorker:
                 try:
                     os.remove(tmp_amr)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WeChatKfWorker.send_media", exc_info=True)
         if not up.get("ok"):
             return {"delivered": False, "error": str(up.get("errmsg") or ""),
                     "error_kind": str(up.get("error_kind") or "api_error")}

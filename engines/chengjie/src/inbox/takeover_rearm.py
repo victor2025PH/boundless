@@ -136,7 +136,7 @@ def record_agent_takeover(store: Any, conversation_id: str) -> str:
         from src.inbox.automation_mode_stats import record_takeover
         record_takeover(conversation_id=cid)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in record_agent_takeover", exc_info=True)
     return source
 
 
@@ -266,7 +266,7 @@ def sweep_takeover_rearm(
             from src.inbox.automation_mode_stats import record_rearm
             record_rearm(count=int(out["restored"]))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in sweep_takeover_rearm", exc_info=True)
     return out
 
 

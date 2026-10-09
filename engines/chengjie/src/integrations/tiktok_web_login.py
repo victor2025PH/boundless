@@ -86,7 +86,7 @@ async def service_health(config: Dict[str, Any]) -> Dict[str, Any]:
     try:
         accounts = len(((await _get_json(f"{base}/accounts", timeout=4.0)) or {}).get("accounts") or [])
     except Exception:  # noqa: BLE001
-        pass
+        logging.getLogger(__name__).debug("swallowed in service_health", exc_info=True)
     return {"reachable": bool(h.get("ok")), "assist_only": bool(h.get("assist_only", ASSIST_ONLY)),
             "accounts": accounts, "base": base}
 
@@ -131,7 +131,7 @@ def make_provider(config: Dict[str, Any]):
                         from src.ai.persona_voice import ensure_account_default_persona
                         ensure_account_default_persona(get_account_registry(), PLATFORM, aid, config)
                     except Exception:  # noqa: BLE001
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in make_provider._provider._poll", exc_info=True)
                 except Exception:  # noqa: BLE001
                     logger.debug("[tiktok_web] 注册表写入失败", exc_info=True)
                 try:

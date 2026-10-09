@@ -762,7 +762,7 @@ class TranslationService:
                 if result.ok and result.confidence >= 0 else "",
             )
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._log_xlate", exc_info=True)
 
     def _memory_get(self, key: str) -> Optional[TranslationResult]:
         if self._memory_store is None:
@@ -770,6 +770,7 @@ class TranslationService:
         try:
             row = self._memory_store.get(key)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in TranslationService._memory_get", exc_info=True)
             return None
         if not row:
             return None
@@ -787,7 +788,7 @@ class TranslationService:
             try:
                 self._memory_store.delete(key)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TranslationService._memory_get", exc_info=True)
             self._refusal_purged["memory"] = int(
                 self._refusal_purged.get("memory", 0)) + 1
             logger.info(
@@ -801,7 +802,7 @@ class TranslationService:
             result.confidence = translation_confidence(
                 result.source_text, result.translated_text, result.target_lang)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._memory_get", exc_info=True)
         return result
 
     def _memory_put(self, key: str, result: "TranslationResult", style: str,
@@ -820,7 +821,7 @@ class TranslationService:
                 glossary_ver=self._glossary_version,
             )
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._memory_put", exc_info=True)
 
     def _record_license_quota(self, src: str, *, tier: str = "",
                               provider: str = "") -> None:
@@ -835,7 +836,7 @@ class TranslationService:
 
             record_license_chars("translation", len(src))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._record_license_quota", exc_info=True)
         try:
             t = str(tier or "").strip().lower()
             if t in ("pro", "certified"):
@@ -850,7 +851,7 @@ class TranslationService:
 
                 note_translate_fair_use(len(src))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._record_license_quota", exc_info=True)
 
     def _record_cost(self, src: str, out: str, source: str, target: str,
                      engine: str = "") -> None:
@@ -882,7 +883,7 @@ class TranslationService:
                 suspected=not bool(engine and engine != "ai"),
             )
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._record_cost", exc_info=True)
 
     @staticmethod
     def _cjk_residue(text: str, source_lang: str, target_lang: str) -> bool:

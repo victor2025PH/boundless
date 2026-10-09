@@ -74,6 +74,7 @@ def ogg_opus_duration_ms(path: str) -> Optional[int]:
             return None
         return int(round(granule * 1000.0 / 48000.0))
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in ogg_opus_duration_ms", exc_info=True)
         return None
 
 
@@ -105,7 +106,7 @@ def probe_audio_duration_ms(path: str) -> Optional[int]:
                 if secs > 0:
                     return int(round(secs * 1000))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in probe_audio_duration_ms", exc_info=True)
     # 纯 python 兜底（#130）：wav/mp3 复用 tts_pipeline 轻量解析；ogg 读 granule
     try:
         from src.ai.tts_pipeline import compute_audio_duration_sec
@@ -113,7 +114,7 @@ def probe_audio_duration_ms(path: str) -> Optional[int]:
         if secs and secs > 0:
             return int(round(secs * 1000))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in probe_audio_duration_ms", exc_info=True)
     return ogg_opus_duration_ms(str(p))
 
 
@@ -153,7 +154,7 @@ def convert_to_ogg_opus(
                 return src_path
         except Exception:
             # 闸模块异常时保守重编码，绝不盲信扩展名
-            pass
+            logging.getLogger(__name__).debug("swallowed in convert_to_ogg_opus", exc_info=True)
 
     dst = src.with_suffix(".ogg")
     if dst == src or src.suffix.lower() == ".ogg":
@@ -194,7 +195,7 @@ def convert_to_ogg_opus(
             try:
                 src.unlink(missing_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in convert_to_ogg_opus", exc_info=True)
         logger.info("[voice_sender] converted %s → %s", src.name, dst.name)
         return str(dst)
     except subprocess.TimeoutExpired:
@@ -283,7 +284,7 @@ async def send_telegram_voice(
             try:
                 Path(ogg_path).unlink(missing_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in send_telegram_voice", exc_info=True)
 
 
 # 语音上传必须跑在 client 自己的 loop 上（2026-08-16 实锤修复）：

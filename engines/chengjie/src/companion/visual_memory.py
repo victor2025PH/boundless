@@ -116,6 +116,7 @@ def _load(s: Any) -> Optional[List[float]]:
         v = json.loads(str(s or "") or "null")
         return [float(x) for x in v] if isinstance(v, list) and v else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _load", exc_info=True)
         return None
 
 
@@ -198,7 +199,7 @@ class VisualMemoryStore:
                 try:
                     self._conn.execute("PRAGMA journal_mode=WAL")
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in VisualMemoryStore.__init__", exc_info=True)
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(_DDL)
             self._conn.commit()
@@ -488,7 +489,7 @@ class VisualMemoryStore:
         try:
             self._conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in VisualMemoryStore.close", exc_info=True)
 
 
 # ── 主动触达 / goal 消费：一句「TA 的照片记忆」（带外、无方括号标签）────────────

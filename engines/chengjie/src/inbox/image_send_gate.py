@@ -316,7 +316,7 @@ def compute_image_intent(
                     offer = bool(wanted_media_subject(
                         words, list(history or []), generic_request=False))
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in compute_image_intent", exc_info=True)
     asked_on_caption = ask or bool(kind) or kw
     # 入站是图时 offer-accept 不算索图：「好的」配自拍常是回应自己刚发的图，
     # 不是接受上一轮「要不要看我的照片」（#332 / 9PYWPG 复验）。
@@ -473,6 +473,7 @@ def _follow_ledger_path() -> Optional[Path]:
             return None
         return Path(base) / "logs" / "image_send_follow_ledger.json"
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _follow_ledger_path", exc_info=True)
         return None
 
 
@@ -546,6 +547,7 @@ def _promise_ledger_path() -> Optional[Path]:
             return None
         return Path(base) / "logs" / "promise_streak_ledger.json"
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _promise_ledger_path", exc_info=True)
         return None
 
 

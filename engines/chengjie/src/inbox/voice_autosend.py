@@ -143,7 +143,7 @@ def _nudge_7852_boot(config: Dict[str, Any]) -> None:
         from src.ai.avatar_voice import nudge_emotion_tts_boot
         nudge_emotion_tts_boot(config)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _nudge_7852_boot", exc_info=True)
 
 
 def _peek_prerender_hit(
@@ -308,7 +308,7 @@ def record_voice_sent(
         src = "desktop_bridge" if prov == "desktop_bridge" else "autosend"
         get_voice_outage().record_voice_attempt(True, src)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in record_voice_sent", exc_info=True)
 
 
 def record_voice_fallback(reason: str) -> None:
@@ -325,7 +325,7 @@ def record_voice_fallback(reason: str) -> None:
         src = "desktop_bridge" if r.startswith("driver_") else "autosend"
         get_voice_outage().record_voice_attempt(False, src, r)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in record_voice_fallback", exc_info=True)
 
 
 def record_voice_decision(send_voice: bool, reason: str) -> None:
@@ -746,11 +746,11 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
             from src.ai.avatar_voice_stats import get_avatar_voice_stats
             get_avatar_voice_stats().record_truncation_reject()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _synth_ogg", exc_info=True)
         try:
             os.unlink(result.audio_path)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _synth_ogg", exc_info=True)
         return None, meta
 
     audio_path = result.audio_path
@@ -774,7 +774,7 @@ async def _synth_ogg(config: Dict[str, Any], persona_id: str, text: str,
         try:
             os.unlink(audio_path)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _synth_ogg", exc_info=True)
     return None, meta
 
 
@@ -908,7 +908,7 @@ async def stage_voice_parts(
             from src.ai.spoken_variant import stash_spoken_variant
             stash_spoken_variant(core, _spoken, scope=str(account_id or ""))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in stage_voice_parts._restash_spoken", exc_info=True)
 
     try:
         from src.ai.tts_pipeline import TTSPipeline
@@ -944,7 +944,7 @@ async def stage_voice_parts(
             try:
                 os.remove(_loc)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in stage_voice_parts._cleanup", exc_info=True)
 
     try:
         from src.ai.tts_quality import looks_truncated, resolve_quality_gate
@@ -977,7 +977,7 @@ async def stage_voice_parts(
             try:
                 os.unlink(result.audio_path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in stage_voice_parts", exc_info=True)
             return None
         if _qg.get("enabled"):
             _bad, _why = looks_truncated(
@@ -993,7 +993,7 @@ async def stage_voice_parts(
                 try:
                     os.unlink(result.audio_path)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in stage_voice_parts", exc_info=True)
                 return None
         audio_path = result.audio_path
         try:
@@ -1019,7 +1019,7 @@ async def stage_voice_parts(
             try:
                 os.unlink(audio_path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in stage_voice_parts", exc_info=True)
             return None
         try:
             with open(audio_path, "rb") as fh:
@@ -1030,7 +1030,7 @@ async def stage_voice_parts(
             try:
                 os.remove(audio_path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in stage_voice_parts", exc_info=True)
         if not data or not looks_like_ogg_opus(data):
             _set_synth_failure("ptt_not_ogg_opus")
             _cleanup()
@@ -1104,7 +1104,7 @@ async def stage_voice_file(
         try:
             os.remove(audio_path)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in stage_voice_file", exc_info=True)
     if not data:
         _set_synth_failure("empty_audio_bytes")
         return None

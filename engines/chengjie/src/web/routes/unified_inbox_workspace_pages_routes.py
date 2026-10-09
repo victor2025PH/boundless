@@ -146,7 +146,7 @@ def register_workspace_pages_routes(
                 if "enabled" in _adk:
                     ctx["account_dock_enabled"] = bool(_adk.get("enabled"))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_workspace_pages_routes._page_ctx", exc_info=True)
         # P0-1 A3：token 直登（桌面默认 admin）绕过 /setup 时 AI Key 仍为空/占位 →
         # 工作台顶部出可关闭引导条（深链 /workspace/setup#ai）。仅主管可见（能修的人才看到）。
         # 托管试用（AITR_HOSTED_AI_KEY）或备用池有真 Key → 不算缺失；试用条单独提示额度。
@@ -173,7 +173,7 @@ def register_workspace_pages_routes(
                 _hai = _lic.get("hosted_ai") if isinstance(_lic.get("hosted_ai"), dict) else {}
                 ctx["ai_hosted_paid"] = bool(_hai.get("enabled")) and ctx["ai_trial_mode"]
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_workspace_pages_routes._page_ctx", exc_info=True)
         return ctx
 
     @app.get("/workspace", response_class=HTMLResponse)
@@ -308,6 +308,7 @@ def register_workspace_pages_routes(
                 _MATRIX_ROW_BY_CHANNEL.get(channel, ""))
             return dict(row) if row else None
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in register_workspace_pages_routes._platform_capability", exc_info=True)
             return None
 
     @app.get("/workspace/channels", response_class=HTMLResponse)

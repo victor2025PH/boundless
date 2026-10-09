@@ -108,7 +108,7 @@ def record(
                 int(tsf), (" detail=" + row["detail"]) if row["detail"] else "",
             )
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in record", exc_info=True)
 
 
 def dump_stats() -> Dict[str, Any]:

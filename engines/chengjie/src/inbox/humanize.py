@@ -198,6 +198,7 @@ def _derive_arousal(text: str) -> Optional[float]:
         a = emo.get("arousal")
         return float(a) if a is not None else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _derive_arousal", exc_info=True)
         return None
 
 

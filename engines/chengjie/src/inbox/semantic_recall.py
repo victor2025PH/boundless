@@ -116,7 +116,7 @@ class SemanticIndex:
             try:
                 self._conn.execute("PRAGMA journal_mode=WAL")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in SemanticIndex.__init__", exc_info=True)
         else:
             self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -186,7 +186,7 @@ class SemanticIndex:
         try:
             self._conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SemanticIndex.close", exc_info=True)
 
 
 _INSTANCES: Dict[str, SemanticIndex] = {}
@@ -201,6 +201,7 @@ def semantic_db_path(store: Any) -> Optional[Path]:
     try:
         return Path(str(p)).parent / DB_NAME
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in semantic_db_path", exc_info=True)
         return None
 
 
@@ -340,7 +341,7 @@ def _bump(key: str, hit: Optional[Dict[str, Any]] = None) -> None:
         from src.monitoring.metrics_store import get_metrics_store
         get_metrics_store().record_inbox_draft_event(f"semantic_recall:{key}")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _bump", exc_info=True)
 
 
 def snapshot() -> Dict[str, Any]:

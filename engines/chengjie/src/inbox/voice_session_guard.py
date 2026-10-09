@@ -131,7 +131,7 @@ def mark_voice_delivered(conv_key: str, *, now: Optional[float] = None) -> None:
             while len(_MARKS) > _MAX_MARKS:
                 _MARKS.popitem(last=False)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in mark_voice_delivered", exc_info=True)
 
 
 def marked_voice_ts(conv_key: str) -> float:

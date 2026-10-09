@@ -148,6 +148,7 @@ def copilot_presence(registry: Any, account_id: str = "", *, strict: bool = Fals
         from src.web.desktop_bridge_presence import bridge_presence
         rows = registry.list(platform="wechat") or []
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in copilot_presence", exc_info=True)
         return None
     first = None
     for row in rows:
@@ -325,6 +326,7 @@ def get_or_create_pool(app: FastAPI, *, popen: Optional[Callable[..., Any]] = No
                 strict = len(pool_ref[0].account_ids) > 1 if pool_ref else False
                 return copilot_presence(reg, account_id, strict=strict)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in get_or_create_pool.factory.presence", exc_info=True)
                 return None
 
         kw: Dict[str, Any] = dict(engine_root=paths["engine_root"], backend_url=f"http://127.0.0.1:{port}",
@@ -415,7 +417,7 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
         try:
             env["copilot"] = sup.presence_provider()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_wechat_pc_setup_routes.api_pc_env", exc_info=True)
         try:
             st = await asyncio.get_event_loop().run_in_executor(None, sup.status)
             env["supervisor"] = {k: st.get(k) for k in ("state", "reason", "attached", "managed", "pid", "autostart")}
@@ -664,6 +666,7 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
             from src.integrations.wechat_pc.win32_windows import find_wechat_main_windows
             wins = await asyncio.get_event_loop().run_in_executor(None, find_wechat_main_windows)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in register_wechat_pc_setup_routes._readopt", exc_info=True)
             return
         accounts = accounts_from_cfg(_cfg(request))
         me = next((a for a in accounts if a["account_id"] == sup.account_id), None)
@@ -773,7 +776,7 @@ def register_wechat_pc_setup_routes(app: FastAPI, api_auth: Any) -> None:
             elif sup is not None:
                 await sup.shutdown()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_wechat_pc_setup_routes._wechat_pc_supervisor_shutdown", exc_info=True)
 
 
 __all__ = ["register_wechat_pc_setup_routes", "policy_view", "validate_policy_change", "TIERS", "bridge_paths_for",

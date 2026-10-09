@@ -10,6 +10,7 @@ laugh — reject stems that need more than ~4× gain.
 """
 from __future__ import annotations
 
+import logging
 import io
 import wave
 from pathlib import Path
@@ -111,6 +112,7 @@ def load_burst(path: str | Path, sr: int, *, kind: str) -> Optional[np.ndarray]:
     try:
         x, src = _read_wav(p.read_bytes())
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in load_burst", exc_info=True)
         return None
     x = _resample(x, src, sr)
     if kind == "laugh":

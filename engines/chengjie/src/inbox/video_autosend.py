@@ -241,7 +241,7 @@ def resolve_avatar_profile(video_block: Dict[str, Any], persona_id: str) -> str:
         if isinstance(m, dict) and m.get(pid):
             return str(m[pid]).strip()
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in resolve_avatar_profile", exc_info=True)
     return pid
 
 

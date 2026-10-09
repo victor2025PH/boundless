@@ -891,7 +891,7 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                 from src.inbox.dormant_review import get_dormant_store
                 get_dormant_store(store).ack_login_review(_login_review_id, by=operator)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_stored_read_routes.api_unified_inbox_automation_account_bulk", exc_info=True)
         return {"ok": True, "dry_run": False, **res,
                 "summary": account_mode_summary(store, platform, account_id)}
 
@@ -979,7 +979,7 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                 cancelled += int(store.cancel_pending_l2_drafts(
                     cid, decided_by="bulk_mode_downgrade") or 0)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_stored_read_routes.api_unified_inbox_automation_bulk_downgrade", exc_info=True)
         # Q-3（#264 D）：应急止血也要拦住正在拟人等待的在途稿（全部范围）
         cancelled += _cancel_inflight_q3(request, by="mode_switch")
         return {

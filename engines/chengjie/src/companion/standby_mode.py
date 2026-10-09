@@ -37,6 +37,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from .capability_presets import CAP_BY_KEY, _intentions_for, _order
@@ -223,6 +224,7 @@ def align_existing_conversations(store: Any, target_mode: str) -> int:
             store.set_automation_mode(cid, target_mode, source="standby")
             changed += 1
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in align_existing_conversations", exc_info=True)
             continue
     return changed
 

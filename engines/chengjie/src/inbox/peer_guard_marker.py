@@ -97,7 +97,7 @@ def _parse(raw: Any) -> Optional[Dict[str, Any]]:
         if isinstance(got, dict) and str(got.get("reason") or ""):
             return got
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _parse", exc_info=True)
     return None
 
 
@@ -109,6 +109,7 @@ def get(store: Any, cid: str) -> Optional[Dict[str, Any]]:
     try:
         return _parse(store.get_app_setting(_key(cid), ""))
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in get", exc_info=True)
         return None
 
 

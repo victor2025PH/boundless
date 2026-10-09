@@ -11276,7 +11276,7 @@ class SkillManager(LoggerMixin):
                 from src.inbox.image_autosend import record_scene_request
                 record_scene_request(str(scene or ""), unmet=True)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SkillManager._photo_directive_selfie", exc_info=True)
         return False
 
     async def _photo_directive_object(
@@ -11378,7 +11378,7 @@ class SkillManager(LoggerMixin):
                     if _pf:
                         ev["texts"].append(_pf)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in SkillManager._apply_status_fabrication_guard", exc_info=True)
             new_text, info = strip_status_claims(reply, ev)
             record_fabrication_guard(info, source=source)
             if info.get("status_stripped"):
@@ -11537,7 +11537,7 @@ class SkillManager(LoggerMixin):
                     from src.ai.media_pending import note_ai_turn as _mp_out
                     _mp_out(user_context, reply)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in SkillManager._apply_media_promise_guard", exc_info=True)
                 return reply
             try:
                 from src.inbox.image_autosend import (
@@ -11548,7 +11548,7 @@ class SkillManager(LoggerMixin):
                 else:
                     record_promise_event("detected")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in SkillManager._apply_media_promise_guard", exc_info=True)
             # ── 1) 异步兑现（仅发图承诺；photo_directive 刚失败则跳过防复烧）──
             if (kind == "image" and not _directive_failed
                     and bool(pg_cfg.get("async_fulfill", False))
@@ -11572,7 +11572,7 @@ class SkillManager(LoggerMixin):
                     (record_sent_claim_event if _sent_claim
                      else record_promise_event)("fulfill_scheduled")
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in SkillManager._apply_media_promise_guard", exc_info=True)
                 self.logger.info(
                     "%s[promise_guard] 发图%s→异步兑现已排队（保留原文）",
                     log_prefix, "「已发」假声明" if _sent_claim else "承诺")
@@ -11582,7 +11582,7 @@ class SkillManager(LoggerMixin):
                     from src.ai.media_pending import note_ai_turn as _mp_out
                     _mp_out(user_context, reply)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in SkillManager._apply_media_promise_guard", exc_info=True)
                 return reply  # 承诺保留：图马上真的会到
             # ── 2) 撤回兜底（原行为）────────────────────────────────────────
             # 先剥「将发」承诺句，再剥「已发」断言句（claim；本轮无媒体=谎）。
@@ -11606,7 +11606,7 @@ class SkillManager(LoggerMixin):
                 (record_sent_claim_event if _sent_claim
                  else record_promise_event)("retracted")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in SkillManager._apply_media_promise_guard", exc_info=True)
             # 连续空头承诺计数（P1 熔断）：发图承诺/断言被撤回=又一次「说了没发」→
             # 累加；下一轮 pre-gen 读到 ≥2 会注入「别再答应」hint，打断
             # 「每轮都说马上拍→撤回→下轮又说」的死循环（对练 T9/T10 实证）。
@@ -11615,7 +11615,7 @@ class SkillManager(LoggerMixin):
                     user_context["_photo_promise_streak"] = int(
                         user_context.get("_photo_promise_streak", 0) or 0) + 1
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in SkillManager._apply_media_promise_guard", exc_info=True)
             self.logger.info(
                 "%s[promise_guard] 出站%s%s已撤回（本轮无媒体真发，streak=%s）",
                 log_prefix, "发图" if kind == "image" else "发语音",
@@ -11628,7 +11628,7 @@ class SkillManager(LoggerMixin):
                 from src.ai.media_pending import note_ai_turn as _mp_out
                 _mp_out(user_context, stripped)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in SkillManager._apply_media_promise_guard", exc_info=True)
             return stripped
         except Exception:
             self.logger.debug("media promise guard skipped", exc_info=True)
@@ -11770,7 +11770,7 @@ class SkillManager(LoggerMixin):
                     from src.inbox.image_autosend import record_promise_event
                     record_promise_event("fulfilled_async")
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in SkillManager._fulfill_promised_selfie_async", exc_info=True)
                 self.logger.info(
                     "%s[promise_guard] 异步兑现成功：承诺的自拍已送达 user=%s",
                     log_prefix, user_id_str)
@@ -11794,7 +11794,7 @@ class SkillManager(LoggerMixin):
                     from src.inbox.image_autosend import record_promise_event
                     record_promise_event("fulfill_failed")
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in SkillManager._fulfill_promised_selfie_async", exc_info=True)
                 self.logger.warning(
                     "%s[promise_guard] 异步兑现失败 → 静默（无兜底纪律，"
                     "不补台阶话术）user=%s", log_prefix, user_id_str)
@@ -11804,12 +11804,12 @@ class SkillManager(LoggerMixin):
                 self._context_store.mark_dirty(_sk)
                 self._context_store.flush(_sk)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in SkillManager._fulfill_promised_selfie_async", exc_info=True)
         finally:
             try:
                 self._promise_fulfill_inflight.discard(user_id_str)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in SkillManager._fulfill_promised_selfie_async", exc_info=True)
 
     def _selfie_offer_accept_bridge(
         self, text: str, user_context: Dict[str, Any], scfg: Dict[str, Any],
@@ -11833,7 +11833,7 @@ class SkillManager(LoggerMixin):
                     from src.inbox.image_autosend import record_promise_event
                     record_promise_event("offer_accept")
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in SkillManager._selfie_offer_accept_bridge", exc_info=True)
             return hit
         except Exception:
             return False
@@ -12391,7 +12391,7 @@ class SkillManager(LoggerMixin):
                 if beat_mentioned(reply, _lb_beat):
                     record_beat_used(_lb_ck, _lb_beat)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SkillManager._update_after_reply", exc_info=True)
 
         # B52（实施64 P1-2）：出站自述状态（要睡了/去健身…）记进短期状态 log——
         # A/B 两线都经本方法＝单点捕获；后续轮次/proactive 开场据此衔接不矛盾。
@@ -12399,12 +12399,12 @@ class SkillManager(LoggerMixin):
             from src.companion.self_state import record_self_state
             record_self_state(user_context, reply)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SkillManager._update_after_reply", exc_info=True)
         try:
             from src.inbox.human_outbound_memory import record_ai_self_out
             record_ai_self_out(user_context, reply)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SkillManager._update_after_reply", exc_info=True)
         # J-10 二期（#177/#171）：出站承诺账本——「明天给你打电话 / 下次拍给你看」这类
         # 第一人称跨天承诺记进 _promise_log（bounded、随 ContextStore 持久），档案抽屉
         # 「承诺过」按 open/overdue/done 展示。只记账、不注入 prompt；零阻断。
@@ -12412,7 +12412,7 @@ class SkillManager(LoggerMixin):
             from src.utils.memory_promises import record_promises
             record_promises(user_context, reply, author="ai")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SkillManager._update_after_reply", exc_info=True)
 
         # Fix D: sanitize reply before persisting (any failure must NOT break the pipeline)
         try:
@@ -12429,7 +12429,7 @@ class SkillManager(LoggerMixin):
         try:
             self._push_recent_reply(user_context, _clean_reply)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SkillManager._update_after_reply", exc_info=True)
 
         try:
             _cfg0 = self.config.config if hasattr(self.config, "config") else {}
@@ -12448,7 +12448,7 @@ class SkillManager(LoggerMixin):
                 st["exchange_count"] = int(st.get("exchange_count", 0) or 0) + 1
                 reconcile_stage_after_assistant_reply(st, _comp_cfg)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SkillManager._update_after_reply", exc_info=True)
 
         # Phase ③/④：活动剧情按用户轮次确定性推进 beat（用户回应驱动分支路由），
         # 剧终自动收场并把「共享经历」回写情景记忆——闭环到 ①（被巩固/被 proactive_topic 回访）。
@@ -12864,7 +12864,7 @@ class SkillManager(LoggerMixin):
                       "case.reason.escalation", {"n": int(consecutive)},
                       quote=str(ctx.get("last_message") or ""))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SkillManager._check_escalation", exc_info=True)
 
         sat = profile.get("satisfaction", 0)
         intent = ctx.get("current_intent", "unknown")
@@ -12885,7 +12885,7 @@ class SkillManager(LoggerMixin):
                     user_id, chat_id, sat, intent, consecutive, last_msg, chat_title
                 ))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SkillManager._check_escalation", exc_info=True)
 
     async def _fire_escalation_webhook(self, user_id, chat_id, sat,
                                         intent, consecutive, last_msg, chat_title):
@@ -12949,7 +12949,7 @@ class SkillManager(LoggerMixin):
                               "case.reason.crisis",
                               quote=str(user_context.get("last_message") or ""))
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in SkillManager._maybe_escalate_crisis", exc_info=True)
             # safety_override 是上一步(_apply_crisis_safety_net)的本轮信号，读后清零
             safety_override = bool(user_context.pop("_wellbeing_safety_override", False))
 
@@ -13069,7 +13069,7 @@ class SkillManager(LoggerMixin):
             try:
                 self._episodic_store.close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in SkillManager.cleanup", exc_info=True)
         self.logger.info("...")
 # ==================== Generic Skills ====================
 # Skill base class is imported from src.skills.base

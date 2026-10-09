@@ -16,6 +16,7 @@ P1 期钉子是纯字符串列表；本模块升级为**双形态兼容**的单�
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -97,6 +98,7 @@ def entry_age_days(entry: Dict[str, Any], now: Optional[float] = None) -> Option
         today = _dt.date.fromtimestamp(now if now is not None else time.time())
         return max(0, (today - d).days)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in entry_age_days", exc_info=True)
         return None
 
 
@@ -147,6 +149,7 @@ def retired_conflicts(persona: Any) -> List[Dict[str, Any]]:
         try:
             hits = scan_profile_fields(persona, term)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in retired_conflicts", exc_info=True)
             continue
         for h in hits:
             path = str(h.get("path") or "")

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import re
 import threading
@@ -134,6 +135,7 @@ def _parse_current(data: dict, place_slug: str, fetched_at: float, stale: bool) 
             bucket=bucket,
         )
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _parse_current", exc_info=True)
         return None
 
 
@@ -363,6 +365,7 @@ def weather_proactive_hook(snap: Optional[WeatherSnapshot], lang: str = "zh") ->
             return f"今天这边{reason}，想自然跟对方提一句天气/出门的事（别像播报）。"
         return f"It's {reason} here — naturally mention weather/going out if it fits."
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in weather_proactive_hook", exc_info=True)
         return None
 
 
@@ -424,6 +427,7 @@ def snap_for_persona(
             max_stale_sec=int(wc.get("max_stale_sec") or 10800),
         )
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in snap_for_persona", exc_info=True)
         return None
 
 

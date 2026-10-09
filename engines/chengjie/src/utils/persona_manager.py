@@ -837,7 +837,7 @@ class PersonaManager:
             if isinstance(c, dict) and "stage_lock" in c:
                 return _cfg_truthy(c.get("stage_lock"), default=True)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager._stage_locked", exc_info=True)
         return True
 
     def count_speaking_overrides(self) -> Dict[str, int]:
@@ -1101,7 +1101,7 @@ class PersonaManager:
                     filter_constraints_for_honesty)
                 constraints = filter_constraints_for_honesty(constraints, True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager._build_constraints_text", exc_info=True)
         return self._assemble_constraints(constraints, platform=platform)
 
     def preview_constraints_text(self, rules_data: Dict[str, Any], platform: str = "") -> str:
@@ -1499,7 +1499,7 @@ class PersonaManager:
         try:
             self.maybe_reload_runtime_profiles()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager.get_persona_by_id", exc_info=True)
         return self._profile_personas.get(str(profile_id))
 
     @staticmethod
@@ -1614,7 +1614,7 @@ class PersonaManager:
                 from src.utils.persona_completeness import persona_completeness
                 entry["completeness"] = int(persona_completeness(p)["score"])
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager.list_profiles_summary", exc_info=True)
             result.append(entry)
         return result
 
@@ -1837,7 +1837,7 @@ class PersonaManager:
         try:
             self.maybe_reload_runtime_profiles()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager.get_persona_with_tier", exc_info=True)
         if conversation_key:
             _conv_ref = self._chat_bindings.get(str(conversation_key))
             if _conv_ref:
@@ -1909,7 +1909,7 @@ class PersonaManager:
                 from src.utils.persona_usage import record as _usage_record
                 _usage_record(_upid)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager.format_persona_block", exc_info=True)
         # B75（实施67 P1-11a，`_352`/1.054 报障）：用户**显式绑定**的人设（会话覆写/
         # 会话绑定/账号人设三个 tier）＝用户意志——档案就是拿来用的。compact 档只
         # 编译约 1/3 字段（背景故事/家人职业/英文名/好恶/专属记忆/外貌/作息全部
@@ -2096,7 +2096,7 @@ class PersonaManager:
                     persona_identity_for_prompt)
                 identity = persona_identity_for_prompt(identity, True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager._format_persona_compact", exc_info=True)
         if identity.get("deny_ai"):
             reply = identity.get("deny_ai_reply", f"我是{name}")
             lines.append(
@@ -2161,7 +2161,7 @@ class PersonaManager:
             if _ab:
                 lines.append(_ab)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager._format_persona_compact", exc_info=True)
         # 尺度锁关（companion.stage_lock=false，2026-09-19）：compact 也带一行脾气 / 口头脏话——
         # 生产主用 compact 之前整段缺失，长会话被裁剪后人设立刻回到「客气客服」。full 仍是完整段，
         # 这里只给一句紧凑版；stage_lock 开着时维持旧行为（compact 不带，与之前一致）。
@@ -2616,7 +2616,7 @@ class PersonaManager:
                     persona_identity_for_prompt)
                 identity = persona_identity_for_prompt(identity, True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager._format_persona_instructions", exc_info=True)
         if identity.get("deny_ai"):
             reply = identity.get("deny_ai_reply", f"我是{name}")
             # P1-2：身份硬锁 — 旧版只说"当用户问 AI 时回答 X"，模型仍可能在
@@ -2709,7 +2709,7 @@ class PersonaManager:
             if _ab:
                 lines.append(_ab)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager._format_persona_instructions", exc_info=True)
 
         # Emotion handling
         e = persona.get("emotion", {})
@@ -2771,7 +2771,7 @@ class PersonaManager:
             try:
                 path.with_suffix(".yaml.tmp").unlink(missing_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager.save_persona_file", exc_info=True)
             return False
 
     def export_chat_bindings(self) -> Dict[str, Any]:

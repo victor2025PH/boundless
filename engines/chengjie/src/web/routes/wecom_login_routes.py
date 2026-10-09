@@ -243,7 +243,7 @@ def register_wecom_login_routes(app: FastAPI, *, user_store: Any, config_manager
         try:
             user_store.mark_login(user["username"], fallback_role=role)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_wecom_login_routes.wecom_login_callback", exc_info=True)
         request.session["user_id"] = user["id"]
         request.session["username"] = user["username"]
         request.session["role"] = role

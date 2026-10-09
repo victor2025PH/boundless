@@ -99,7 +99,7 @@ def detect_tts_lang(text: str, fallback: str = "zh-cn") -> str:
                 return normalized
             return "en"
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in detect_tts_lang", exc_info=True)
 
     return fallback
 

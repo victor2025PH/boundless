@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -113,6 +114,7 @@ def active_self_state(user_context: Dict[str, Any],
         return {"state": state, "phrase": str(last.get("phrase") or ""),
                 "age_min": age / 60.0}
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in active_self_state", exc_info=True)
         return None
 
 

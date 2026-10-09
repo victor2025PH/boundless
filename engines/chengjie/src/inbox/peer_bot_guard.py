@@ -145,7 +145,7 @@ def _webhook_bot_ids() -> "frozenset[str]":
             if head.isdigit():
                 ids.add(head)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _webhook_bot_ids", exc_info=True)
     _OWN_BOT_CACHE.update({"ts": now, "ids": frozenset(ids)})
     return _OWN_BOT_CACHE["ids"]
 
@@ -190,13 +190,13 @@ def never_auto_reply_ids(config: Optional[Dict[str, Any]]) -> Dict[str, "frozens
         accounts |= {str(a).strip() for a in (_bc.get("support_accounts") or set()) if str(a).strip()}
         groups |= {str(g).strip() for g in (_bc.get("groups") or set()) if str(g).strip()}
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in never_auto_reply_ids", exc_info=True)
     try:
         cfg = parse_cfg(config)
         accounts |= set(cfg.get("own_bot_ids") or [])
         accounts |= set(_webhook_bot_ids())
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in never_auto_reply_ids", exc_info=True)
     try:
         from src.integrations.notify_webhooks_store import load as _load_webhooks
         for ch in _load_webhooks() or []:
@@ -206,7 +206,7 @@ def never_auto_reply_ids(config: Optional[Dict[str, Any]]) -> Dict[str, "frozens
             if tgt:
                 groups.add(tgt)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in never_auto_reply_ids", exc_info=True)
     try:
         # 只读已初始化的单例（纯单测 / 无编排器部署时绝不隐式建库——与 business_line 缓存同纪律）
         from src.integrations import account_registry as _ar
@@ -216,7 +216,7 @@ def never_auto_reply_ids(config: Optional[Dict[str, Any]]) -> Dict[str, "frozens
             if aid and aid != "default":
                 accounts.add(aid)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in never_auto_reply_ids", exc_info=True)
     node = (((config or {}).get("inbox") or {}).get("peer_bot_guard") or {}).get("never_auto_reply")
     accounts |= _never_auto_extra(node, "accounts")
     groups |= _never_auto_extra(node, "groups")
@@ -656,7 +656,7 @@ def evaluate(
                 from src.ops.outbound_policy import record_unlimited_bypass
                 record_unlimited_bypass("peer_daily_budget")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in evaluate", exc_info=True)
     if budget > 0 and not budget_relieved:
         # 分子优先走台账口径（auto_out_today＝自动链轮次，由调用方从
         # peer_reply_ledger 取）；台账不可用（旧 store / 纯函数测试）回落
@@ -676,7 +676,7 @@ def evaluate(
                 record_block("business" if soft else "safety",
                              "peer_daily_budget")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in evaluate", exc_info=True)
             return Verdict(True, "daily_budget", "",
                            f"今日自动回复{sent}轮 ≥ 预算{budget}"
                            + ("（软停·转人审）" if soft else "（硬停）"),
@@ -1244,7 +1244,7 @@ def guard_a_line_should_skip(
                         config=config,
                     ))
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in guard_a_line_should_skip", exc_info=True)
                 _count = allows_direct_autosend(_m)
             except Exception:
                 _count = True

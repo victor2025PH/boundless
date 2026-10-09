@@ -90,7 +90,7 @@ class StrategyTracker:
             if row and row["session_id"]:
                 return row["session_id"]
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in StrategyTracker._resolve_session_id", exc_info=True)
         return uuid.uuid4().hex[:12]
 
     # ── 写入 ──────────────────────────────────────────

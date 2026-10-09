@@ -974,7 +974,7 @@ async def _send_media_streamed(request: Request, meta: Dict[str, str], filename:
             logger.info(
                 "[send-media] 送达成功，已解除 %s 的 dead-peer 标（自动回复恢复）", cid)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _send_media_streamed", exc_info=True)
     logger.info(
         "[send-media] ok platform=%s chat=%s file=%s kind=%s size=%.1fMB recv=%.2fs remux=%.2fs "
         "dispatch=%.2fs total=%.2fs mode=%s",
@@ -1254,7 +1254,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 from src.inbox.outbound_dup_guard import record_dup_check
                 record_dup_check("", forced=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send", exc_info=True)
 
         _send_agent = _session_agent(request)
         _consumed_drafts: list = []   # Q-10 A：本次发送置 consumed 的草稿 id（回给前端免二次 cancel）
@@ -1395,7 +1395,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                         "manual", _bub_sent,
                         partial=_bub_sent < len(_bubble_parts))
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send", exc_info=True)
             else:
                 # origin="manual"（P1 2026-08-12）：坐席人工发送用完整日额度，
                 # 不受 reserve_for_manual 让路口径影响（那是给自动链的）。
@@ -1494,7 +1494,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     "[send] 送达成功，已解除 %s 的 dead-peer 标（自动回复恢复）",
                     _conv_id(platform, account_id, chat_key))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send", exc_info=True)
         # P1：发生发送前翻译时，旁路记录「实发译文 → 中文原文/质量」，供 /thread 富集出向双行
         # （跨刷新/重启/设备持久；不触碰 messages 去重）。best-effort，失败不影响发送。
         # 分条发送时只给**首段**挂完整原文（P1-198 问题1实锤：旧逻辑把整段中文原文
@@ -1797,7 +1797,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 from src.ai.voice_outage import get_voice_outage
                 get_voice_outage().record_voice_attempt(ok, "manual", reason)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send_voice._vo_record", exc_info=True)
 
         # P0-4/C3：字符额度用尽且 licensing.enforce 开 → 402 + i18n（明确错误码，
         # 而非让 TTS 深处报一串英文 code）。闸门在 TTSPipeline 内还有兜底。
@@ -2105,11 +2105,11 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                             from src.ai.avatar_voice_stats import get_avatar_voice_stats
                             get_avatar_voice_stats().record_truncation_reject()
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send_voice", exc_info=True)
                         try:
                             os.remove(result.audio_path)
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send_voice", exc_info=True)
                         _vo_record(False, f"truncated:{_why}")
                         _vst.record_failed(_dedup_scope, _client_msg_id,
                                            f"truncated:{_why}")
@@ -2167,7 +2167,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 try:
                     os.remove(result.audio_path)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send_voice", exc_info=True)
                 _dedup.release(_dedup_scope, _client_msg_id)
                 _vo_record(False, "clone_unavailable:system_voice_unconfirmed")
                 _vst.record_failed(_dedup_scope, _client_msg_id,
@@ -2224,7 +2224,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             try:
                 os.remove(audio_path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send_voice", exc_info=True)
 
         _vst.record_stage(_dedup_scope, _client_msg_id, "send")
         _send_agent = _session_agent(request)
@@ -2295,7 +2295,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                     "[send-voice] 送达成功，已解除 %s 的 dead-peer 标（自动回复恢复）",
                     cid)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send_voice", exc_info=True)
         try:
             ibx = _inbox_store(request)
             if ibx is not None:
@@ -2506,7 +2506,7 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 from src.inbox.reply_split import cap_max_parts_for_platform
                 _bubbles_max = cap_max_parts_for_platform(_bubbles_max, plat)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_send_caps", exc_info=True)
             _owns = False
             try:
                 from src.integrations.account_orchestrator import get_orchestrator
@@ -2697,5 +2697,5 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
                 config=(getattr(getattr(request.app.state, "config_manager", None),
                                 "config", None) or {}))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_send_routes.api_unified_inbox_draft_retranslate", exc_info=True)
         return out

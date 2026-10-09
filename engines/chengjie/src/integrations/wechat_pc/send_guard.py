@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -207,6 +208,7 @@ class GuardedSender:
                 if not probe():
                     break
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in GuardedSender._wait_peer_typing", exc_info=True)
                 break
             self._sleep(self.typing_poll_sec)
             waited += self.typing_poll_sec
@@ -331,7 +333,7 @@ class GuardedSender:
                 try:
                     close()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in GuardedSender._send_voice", exc_info=True)
 
     def _record_play_send(self, target_name: str, play: Callable[..., float], before: List[Bubble],
                           expected_sec: Optional[int], t0: float, trace: List[str]) -> SendOutcome:
@@ -346,7 +348,7 @@ class GuardedSender:
             try:
                 warm()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in GuardedSender._record_play_send", exc_info=True)
         # 3. record：进入录音态
         if not self.backend.start_voice_record():
             # 可能点了按钮但没确认到录音态：保险起见尝试取消

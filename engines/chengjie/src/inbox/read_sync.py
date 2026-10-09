@@ -21,6 +21,7 @@ mark-read 路由里——那里有 request/store/config_manager，且 orchestrat
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, Mapping, Optional
 
@@ -44,6 +45,7 @@ def read_sync_cfg(cfg: Optional[Mapping[str, Any]]) -> Any:
         rs = inbox.get("read_sync") or {}
         return rs.get("push_to_platform")
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in read_sync_cfg", exc_info=True)
         return None
 
 

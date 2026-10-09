@@ -155,9 +155,9 @@ def _cleanup_old_previews() -> None:
                 if st.st_size < 512 or st.st_mtime < now - ttl:
                     f.unlink(missing_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in _cleanup_old_previews", exc_info=True)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _cleanup_old_previews", exc_info=True)
 
 
 # ── tts-test 后台 job 模式（channel-center「后台试听」）──────────────────────
@@ -186,7 +186,7 @@ def _cleanup_tts_jobs() -> None:
             if now - float(entry.get("ts") or 0.0) > _TTS_JOB_TTL_SEC:
                 _TTS_JOBS.pop(jid, None)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _cleanup_tts_jobs", exc_info=True)
 
 
 # 「立即渲染」后台进程句柄（防重复拉起；渲染幂等，丢句柄无害）
@@ -231,6 +231,7 @@ def _voice_quality_latest() -> Dict[str, Dict[str, Any]]:
                         "date": str(row.get("date") or ""),
                     }
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in _voice_quality_latest", exc_info=True)
                     continue
     except Exception:
         latest = {}
@@ -470,7 +471,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             try:
                 preview_path.unlink(missing_ok=True)   # type: ignore[call-arg]
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_voice_routes._redispatch_garbled_to_edge", exc_info=True)
             return _fb_speech, _fb_result, _fb_path
         except Exception:
             logger.warning(
@@ -847,7 +848,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 try:
                     preview_path.unlink(missing_ok=True)   # type: ignore[call-arg]
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_voice_routes._run_tts_preview", exc_info=True)
                 _why = f"clone_lang_garbled:{_g_lang or '?'}"
                 logger.warning(
                     "[tts] preview blocked reason=clone_unavailable:%s persona=%s "
@@ -891,7 +892,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
         try:
             _cleanup_old_previews()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_routes._run_tts_preview", exc_info=True)
 
         # 「所听即所发」复用登记（P1 2026-08-05）：sidecar 记文本指纹+音色键+元数据，
         # send-voice 带回 filename 且校验通过时直接复用本音频（省一次合成/额度，
@@ -1658,7 +1659,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             if hosted:
                 return tr(request, "err.voice.hosted_unavailable")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_routes._voice_missing_message", exc_info=True)
         return tr(request, "err.voice.engine_missing")
 
     def _audit(request: Request, action: str, detail: str) -> None:
@@ -1764,6 +1765,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         _contained = True
                         break
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll", exc_info=True)
                     continue
             if not _contained:
                 raise HTTPException(400, tr(request, "err.voice.media_ref_invalid"))
@@ -1821,7 +1823,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 audio_path.with_suffix(".txt").write_text(
                     reference_text, encoding="utf-8")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll", exc_info=True)
 
         raw_full_cfg: Dict[str, Any] = {}
         if config_manager and hasattr(config_manager, "config"):
@@ -1886,7 +1888,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         audio_path.with_suffix(".txt").write_text(
                             av_ref_text, encoding="utf-8")
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll", exc_info=True)
                 from src.ai.voice_enroll import build_avatar_voice_profile
                 vp_av = build_avatar_voice_profile(
                     reference_audio_path=str(audio_path), speaker_id=safe,
@@ -1910,11 +1912,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         try:
                             av_client.register_spk(load_reference_b64(str(audio_path)))
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll._warm", exc_info=True)
 
                     _th.Thread(target=_warm, name="avatar-enroll-warm", daemon=True).start()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll", exc_info=True)
                 _audit(request, "voice_enroll",
                        f"persona={persona_id} mode=avatar_clone name={preferred_name}"
                        f" src={source_ref.get('kind')} consent={owner_consent}"
@@ -2432,7 +2434,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 out["engine_dir"].update(hub_synth_breaker_state(
                     _hf.get("base_url"), _hf.get("tts_engine")))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_avatar_voice_status", exc_info=True)
         # 口语化 LLM 档健康：provider 分布（lan 端点/cloud/fallback 成败）+ 端点
         # 冷却 + 落盘缓存命中——「176 的逻辑有没有真的在被调用」看板可见（2026-08-01）
         try:
@@ -2475,6 +2477,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                             "date": row.get("date"),
                         }
                     except Exception:
+                        logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_avatar_voice_status", exc_info=True)
                         continue
             out["voice_quality"] = latest
         except Exception:
@@ -2529,7 +2532,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         if pid and r:
                             refs[pid] = r
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_avatar_voice_status", exc_info=True)
             if base.is_dir():
                 for pdir in base.iterdir():
                     d = pdir / PRERENDER_DIRNAME

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 from pathlib import Path
@@ -108,6 +109,7 @@ def _accounts(root: Path) -> Optional[List[Tuple[str, str, float, str]]]:
         return [(str(p or ""), str(a or ""), float(c or 0), str(s or ""))
                 for p, a, c, s in rows]
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _accounts", exc_info=True)
         return None
 
 
@@ -215,5 +217,5 @@ def collect_send_gate_today(
             try:
                 sends_con.close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in collect_send_gate_today", exc_info=True)
     return out

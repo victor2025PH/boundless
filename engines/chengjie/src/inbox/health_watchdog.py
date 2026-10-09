@@ -1888,6 +1888,7 @@ class HealthWatchdog:
             cur = inbox.ai_safety_summary(since_ts=now - window)
             prev = inbox.ai_safety_summary(since_ts=now - 2 * window, until_ts=now - window)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_ai_quality", exc_info=True)
             return  # 读失败静默，不改变既有告警/恢复态
         from src.utils.ai_quality_alert import evaluate_ai_quality
         res = evaluate_ai_quality(cur, prev, aq)
@@ -1964,6 +1965,7 @@ class HealthWatchdog:
             stats = get_realtime_voice_stats().dump()
             res = evaluate_realtime_voice_alert(stats, alert_cfg)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_realtime_voice", exc_info=True)
             return
         problems = res.get("problems") or []
         light = res.get("light") or "green"
@@ -2115,6 +2117,7 @@ class HealthWatchdog:
             )
             store = get_inject_health_store()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_inject_health", exc_info=True)
             return
         after_sec = max(60.0, float(sr.get("after_min", 20) or 20) * 60.0)
         interval_sec = max(600.0, float(sr.get("interval_min", 240) or 240) * 60.0)
@@ -2126,6 +2129,7 @@ class HealthWatchdog:
             from src.integrations.shared.event_bus import get_event_bus
             bus = get_event_bus()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_inject_health", exc_info=True)
             return
         for key, rec in due.items():
             status = str(rec.get("status") or "")
@@ -2177,6 +2181,7 @@ class HealthWatchdog:
             ensure_seeded_from_registry()
             store = get_platform_session_health()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_platform_sessions", exc_info=True)
             return
         after_sec = max(60.0, float(sr.get("after_min", 30) or 30) * 60.0)
         interval_sec = max(600.0, float(sr.get("interval_min", 240) or 240) * 60.0)
@@ -2198,6 +2203,7 @@ class HealthWatchdog:
             from src.integrations.shared.event_bus import get_event_bus
             bus = get_event_bus()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_platform_sessions", exc_info=True)
             return
         for key, sess in due.items():
             plat, _, acct = key.partition(":")
@@ -2287,6 +2293,7 @@ class HealthWatchdog:
             w = data.get("worker") if isinstance(data, dict) else None
             return w if isinstance(w, dict) else {}
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._fetch_messenger_worker_snapshot", exc_info=True)
             return None
 
     def _check_messenger_code_stale(self, *, now: Optional[float] = None) -> None:
@@ -2317,6 +2324,7 @@ class HealthWatchdog:
             if not web_enabled(cfg):
                 return
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_messenger_code_stale", exc_info=True)
             return
         ts = float(now if now is not None else time.time())
         after_sec = max(60.0, float(cs.get("after_min", 30) or 30) * 60.0)
@@ -2402,6 +2410,7 @@ class HealthWatchdog:
             from src.integrations.shared.event_bus import get_event_bus
             bus = get_event_bus()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_takeover_overdue", exc_info=True)
             return
         for e in overdue:
             cid = str(e.get("conversation_id") or "")
@@ -2448,6 +2457,7 @@ class HealthWatchdog:
             )
             store = get_platform_session_health()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_inbox_read_stall", exc_info=True)
             return
         after_sec = max(60.0, float(sr.get("after_min", 20) or 20) * 60.0)
         interval_sec = max(600.0, float(sr.get("interval_min", 240) or 240) * 60.0)
@@ -2460,6 +2470,7 @@ class HealthWatchdog:
             from src.integrations.shared.event_bus import get_event_bus
             bus = get_event_bus()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_inbox_read_stall", exc_info=True)
             return
         for key, h in due.items():
             plat, _, acct = key.partition(":")
@@ -2517,6 +2528,7 @@ class HealthWatchdog:
             )
             snap = collect_messenger_readiness(cfg, now=ts)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_messenger_not_restored", exc_info=True)
             return
         # 状态惰性初始化（测试用 __new__ 绕开 __init__ 的既有惯例友好）
         first = getattr(self, "_msgr_missing_first_seen", None)
@@ -2571,7 +2583,7 @@ class HealthWatchdog:
                         "rate_key": f"messenger:{aid}:not_restored:recover",
                     })
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_messenger_not_restored", exc_info=True)
             first.pop(aid, None)
             last_remind.pop(aid, None)
             alerted.discard(aid)
@@ -2596,6 +2608,7 @@ class HealthWatchdog:
                     "rate_key": f"messenger:{aid}:not_restored",
                 })
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_messenger_not_restored", exc_info=True)
                 continue
             last_remind[aid] = ts
             alerted.add(aid)
@@ -2634,6 +2647,7 @@ class HealthWatchdog:
                     continue
                 n += 1
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in HealthWatchdog.human_approved_since", exc_info=True)
                 continue
         return n
 
@@ -2824,6 +2838,7 @@ class HealthWatchdog:
                 created = float(d.get("created_ts") or 0)
                 did = str(d.get("draft_id") or "")
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_stale_enriching", exc_info=True)
                 continue
             if not did or created <= 0 or created >= cutoff:
                 continue
@@ -2859,6 +2874,7 @@ class HealthWatchdog:
 
             mcfg = parse_managed_cfg(cfg)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_proxy_managed", exc_info=True)
             return
         if not mcfg.get("enabled"):
             return
@@ -3734,7 +3750,7 @@ class HealthWatchdog:
             if isinstance(hw, dict) and "surface_in_ui" in hw:
                 return bool(hw.get("surface_in_ui"))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._ui_surface_enabled", exc_info=True)
         # 测试/旧路径经 __new__ 绕过 __init__ 构造 → 缺属性按默认开
         return bool(getattr(self, "_surface_in_ui", True))
 
@@ -4384,6 +4400,7 @@ class HealthWatchdog:
             from src.web.csrf_stats import get_csrf_reject_stats
             d = get_csrf_reject_stats().dump()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_csrf_rejects", exc_info=True)
             return
         ts = float(now if now is not None else time.time())
         window_sec = max(300.0, float(cr.get("window_min", 60) or 60) * 60.0)
@@ -4720,6 +4737,7 @@ class HealthWatchdog:
             from src.web.routes.image_gen_routes import (
                 _comfy_url_from_args, engine_deploy_status, probe_comfy_models)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_image_models", exc_info=True)
             return
         url = _comfy_url_from_args(((scfg.get("provider") or {}).get("command_args")))
         if not url:
@@ -5115,6 +5133,7 @@ class HealthWatchdog:
             snap = get_voice_outage().outage_snapshot(
                 now=ts, window_hours=window_hours)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_voice_outage", exc_info=True)
             return  # 台账不可用=信息不足，宁可漏报不误报
         if not isinstance(snap, dict):
             return
@@ -5381,6 +5400,7 @@ class HealthWatchdog:
             rows = store.list_conversations(
                 limit=self._UNANSWERED_SCAN_LIMIT) or []
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_unanswered_inbound", exc_info=True)
             return
         # 第一遍：便宜过滤（类型/年龄窗），把要做批量查询的候选收窄
         cand: List[Dict[str, Any]] = []
@@ -5413,7 +5433,7 @@ class HealthWatchdog:
                 if proactive_exclude_row(r, cfg if isinstance(cfg, dict) else {}):
                     continue  # bot/接码/业务号：不是真客户在等
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_unanswered_inbound", exc_info=True)
             cand.append(r)
         stale: List[Dict[str, Any]] = []
         if cand:
@@ -5421,6 +5441,7 @@ class HealthWatchdog:
             try:
                 dirs = store.last_message_dirs(cids) or {}
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_unanswered_inbound", exc_info=True)
                 return  # 末条方向查不到＝没法判，宁可漏报不误报
             tags: Dict[str, Any] = {}
             if hasattr(store, "list_conv_tags_map"):
@@ -5738,6 +5759,7 @@ class HealthWatchdog:
             from src.licensing.trial_fulfiller_watch import probe as _probe
             from src.licensing.trial_fulfiller_watch import watch_target
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_trial_fulfiller", exc_info=True)
             return
         target = watch_target(cfg)
         if target is None:
@@ -5824,6 +5846,7 @@ class HealthWatchdog:
         try:
             from src.voicecall.health import probe_call_host
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_native_call", exc_info=True)
             return
         probe = probe_call_host(cfg)
         if probe is None:
@@ -5899,6 +5922,7 @@ class HealthWatchdog:
             from src.ai.voice_colloquial_llm import health_signal
             sig = health_signal()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_colloquial_llm", exc_info=True)
             return
         ts = float(now if now is not None else time.time())
         streak_need = max(1, int(cr.get("fail_streak", 6) or 6))
@@ -6027,6 +6051,7 @@ class HealthWatchdog:
                 write_state,
             )
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_true_probes", exc_info=True)
             return
         specs = build_probe_specs(cfg)
         if not specs:
@@ -6117,6 +6142,7 @@ class HealthWatchdog:
 
             from src.ops.true_probe import stalled_verdict
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_probe_stalled", exc_info=True)
             return
         ts = float(now if now is not None else time.time())
         cfg_dir = _PSPath(str(getattr(self._config_manager, "config_path", "")
@@ -6267,7 +6293,7 @@ class HealthWatchdog:
                     base_url=base_url, fail_count=int(self._apg_fail_count),
                     via="health_watchdog")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_ai_primary_guard", exc_info=True)
             try:
                 from src.integrations.shared.event_bus import get_event_bus
                 get_event_bus().publish("ai_primary_guard_alert", {
@@ -6317,7 +6343,7 @@ class HealthWatchdog:
                 base_url=base_url, fail_count=int(self._apg_fail_count),
                 via="health_watchdog")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_ai_primary_guard", exc_info=True)
         try:
             from src.integrations.shared.event_bus import get_event_bus
             get_event_bus().publish("ai_primary_guard_alert", {
@@ -6589,6 +6615,7 @@ class HealthWatchdog:
             from src.inbox.image_autosend import metrics_snapshot
             snap = metrics_snapshot()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_media_promise", exc_info=True)
             return
         # 坏＝撤回 + 异步兑现失败；好＝同步兑现 + 异步兑现（两条链聚合，口径完整）
         cur_ret = (int(snap.get("promise_retracted") or 0)
@@ -6698,6 +6725,7 @@ class HealthWatchdog:
         try:
             from src.licensing import trial_claim_client as tc
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_trial_claim", exc_info=True)
             return
         cfg = getattr(self._config_manager, "config", None) or {}
         state = tc.load_state(cfg)
@@ -7271,6 +7299,7 @@ class HealthWatchdog:
             calls = int(stats.get("local_fallback_calls") or 0)
             primary_mode = str(stats.get("primary_mode") or "cloud").strip().lower()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_local_fallback_duty", exc_info=True)
             return
         if primary_mode in ("local", "local_only"):
             self._fb_duty_last_calls = calls
@@ -7488,6 +7517,7 @@ class HealthWatchdog:
         try:
             health = sm.episodic_key_health(sample=5)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_memory_key_drift", exc_info=True)
             return
         if not health.get("enabled"):
             return
@@ -7580,7 +7610,7 @@ class HealthWatchdog:
             try:
                 pm.maybe_reload_runtime_profiles()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_persona_retired_conflicts", exc_info=True)
             profiles = dict(getattr(pm, "_profile_personas", {}) or {})
         except Exception:
             logger.debug("撤销设定巡检取档案失败（已忽略）", exc_info=True)
@@ -7590,6 +7620,7 @@ class HealthWatchdog:
             try:
                 hits = retired_conflicts(p)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in HealthWatchdog._check_persona_retired_conflicts", exc_info=True)
                 continue
             if hits:
                 conflicts[str(pid)] = [

@@ -216,7 +216,7 @@ def _cfg_dict(cfg: Any) -> Dict[str, Any]:
             inner = getattr(config_manager, "config", None)
             return inner if isinstance(inner, dict) else {}
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _cfg_dict", exc_info=True)
     return {}
 
 
@@ -281,7 +281,7 @@ def _adult_implied(cfg: Any = None, persona: Any = None) -> List[str]:
         if adult_open(persona, cfg):
             return [c for c in IMPLIED_LOCKED_WHEN_ADULT_OPEN if c in LOCKABLE]
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _adult_implied", exc_info=True)
     return []
 
 
@@ -398,6 +398,7 @@ def resolve_persona(conv: Dict[str, Any], cfg: Any = None) -> Any:
         from src.inbox.adult_grader import resolve_persona as _rp
         return _rp(conv, cfg)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in resolve_persona", exc_info=True)
         return None
 
 
@@ -485,7 +486,7 @@ def grade(text: str, direction: str = "in", persona: Any = None, *,
                 if detect_offer_media(t, lang):
                     _add("offer_media", "offer:media", "low")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in grade", exc_info=True)
             _money_guess = bool(_SP) and len(_SP) > 2 and bool(_hits([_SP[2][0]], t)) \
                 and next((k for k, p in _GUESS_KIND if p.search(t)), "") == "money"
             if "credential_or_payment_request" in rs:

@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import logging
 import json
 import threading
 import time
@@ -115,7 +116,7 @@ def record_iou(chat_key: str, persona_id: str = "",
                     _STATE.pop(old, None)
             _persist(path)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in record_iou", exc_info=True)
 
 
 def pending_iou(chat_key: str, *, ttl_hours: float = DEFAULT_TTL_HOURS,
@@ -156,7 +157,7 @@ def clear_iou(chat_key: str, now: Optional[float] = None, *,
             if _STATE.pop(key, None) is not None:
                 _persist(path)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in clear_iou", exc_info=True)
 
 
 def iou_snapshot(now: Optional[float] = None, *,
@@ -172,6 +173,7 @@ def iou_snapshot(now: Optional[float] = None, *,
                 try:
                     age = ts_now - float(row.get("ts", 0.0) or 0.0)
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in iou_snapshot", exc_info=True)
                     continue
                 if age > oldest:
                     oldest = age

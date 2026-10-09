@@ -635,6 +635,7 @@ def _disk_path() -> Optional[str]:
         d.mkdir(parents=True, exist_ok=True)
         return str(d / _DISK_FILE)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _disk_path", exc_info=True)
         return None
 
 
@@ -794,7 +795,7 @@ def _record_rewrite_cost(ep: Dict[str, Any], usage: Dict[str, Any],
             provider=_provider,
         )
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _record_rewrite_cost", exc_info=True)
 
 
 async def _rewrite_via_endpoint(
@@ -1073,7 +1074,7 @@ async def llm_colloquialize(
         if is_cantonese_text(core, min_markers=2):
             return None
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in llm_colloquialize", exc_info=True)
     _bump("attempts")
     if src_en:
         # 英文全问句：中文疑问词检测失效，改用标点——全是问号、没有陈述就跳过。
@@ -1255,7 +1256,7 @@ def reset_state(*, disk: bool = True) -> None:
             if path and os.path.exists(path):
                 os.unlink(path)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in reset_state", exc_info=True)
 
 
 __all__ = [

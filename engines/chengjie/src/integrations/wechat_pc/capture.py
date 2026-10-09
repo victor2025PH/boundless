@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import logging
 import ctypes
 import os
 from typing import List, Optional, Tuple
@@ -123,7 +124,7 @@ class WindowCapture:
                 _gdi32.DeleteDC(hdc_mem)
                 _user32.ReleaseDC(hwnd, hdc_win)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WindowCapture.grab", exc_info=True)
         return out
 
     def pixel(self, sx: int, sy: int) -> Optional[int]:

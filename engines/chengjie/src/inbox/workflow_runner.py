@@ -200,6 +200,7 @@ class WorkflowRunner:
                                 cid, chain["chain_id"], dedupe_since):
                             continue
                     except Exception:
+                        logging.getLogger(__name__).debug("swallowed in WorkflowRunner.auto_start_chains", exc_info=True)
                         continue
                 self._store.start_chain_execution(
                     chain["chain_id"], cid,
@@ -590,6 +591,7 @@ class WorkflowRunner:
                         if cd.get("level") != "high":
                             continue
                     except Exception:
+                        logging.getLogger(__name__).debug("swallowed in WorkflowRunner._find_chain_candidates", exc_info=True)
                         continue
                 else:
                     continue

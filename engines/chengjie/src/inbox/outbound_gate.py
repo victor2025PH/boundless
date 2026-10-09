@@ -41,6 +41,7 @@ bot / 舰队自嗨护栏（``peer_bot_guard`` / ``proactive_peer_hygiene``，尚
 """
 from __future__ import annotations
 
+import logging
 import threading
 from collections import namedtuple
 from typing import Any, Dict, Mapping, Optional
@@ -243,7 +244,7 @@ def record_suppression(reason: str) -> None:
         with _LOCK:
             _SUPPRESSED[reason] = _SUPPRESSED.get(reason, 0) + 1
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in record_suppression", exc_info=True)
 
 
 def suppression_snapshot() -> Dict[str, int]:

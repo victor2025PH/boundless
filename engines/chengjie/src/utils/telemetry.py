@@ -34,6 +34,7 @@ fail-silent：任何异常都不允许影响业务主路径；emitter 找不到/
 
 from __future__ import annotations
 
+import logging
 import atexit
 import importlib.util
 import os
@@ -95,6 +96,7 @@ def _config_dir():
             return Path(env_dir).expanduser() / "config"
         return _engine_root() / "config"
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _config_dir", exc_info=True)
         return None
 
 
@@ -230,7 +232,7 @@ def add_translated_chars(chars: int, src_lang: str = "", dst_lang: str = "") -> 
         for (src, dst), total in due:
             _emit_chars(src, dst, total)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in add_translated_chars", exc_info=True)
 
 
 def flush_translated_chars() -> None:
@@ -242,7 +244,7 @@ def flush_translated_chars() -> None:
         for (src, dst), total in due:
             _emit_chars(src, dst, total)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in flush_translated_chars", exc_info=True)
 
 
 def _emit_chars(src: str, dst: str, total: int) -> None:
@@ -268,7 +270,7 @@ def _reset_for_test(emitter_path_override=None) -> None:
 try:
     atexit.register(flush_translated_chars)   # 进程退出前把未满窗的增量落盘
 except Exception:
-    pass
+    logging.getLogger(__name__).debug("swallowed in module", exc_info=True)
 
 
 # ── 自测 ────────────────────────────────────────────────────────────────────

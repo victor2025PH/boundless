@@ -182,6 +182,7 @@ def vote_language(
         try:
             lang = normalize_target(detect(core))
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in vote_language", exc_info=True)
             continue
         if not lang:
             continue
@@ -195,7 +196,7 @@ def vote_language(
                 if latin_mixed_zh(core):
                     lang = "zh"
             except Exception:  # pragma: no cover - 极端导入失败保持旧行为
-                pass
+                logging.getLogger(__name__).debug("swallowed in vote_language", exc_info=True)
         # 新近度权重（越靠后越大）× 长度权重（越长越可信，封顶避免长文一票独大）
         recency = 1.0 + idx / max(1, n - 1)
         length_w = min(4.0, len(core) / 20.0 + 0.5)
@@ -569,6 +570,7 @@ def peek_conv_lang_plan(conversation_id: str, store: Any = None) -> Optional[Dic
         if rec:
             return dict(rec[0])
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in peek_conv_lang_plan", exc_info=True)
         return None
     if store is None or not cid or not hasattr(store, "get_app_setting"):
         return None
@@ -579,7 +581,7 @@ def peek_conv_lang_plan(conversation_id: str, store: Any = None) -> Optional[Dic
             d = _json.loads(raw)
             return dict(d) if isinstance(d, dict) and d else None
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in peek_conv_lang_plan", exc_info=True)
     return None
 
 
@@ -633,7 +635,7 @@ def build_conv_lang_plan(
             if req:
                 lang, by = req, "request"
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in build_conv_lang_plan", exc_info=True)
     if not lang:
         try:
             from src.ai.lang_prior import initial_lang_hint
@@ -643,7 +645,7 @@ def build_conv_lang_plan(
             if prior:
                 lang, by = prior, "account_prior"
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in build_conv_lang_plan", exc_info=True)
     via = by or "unknown"
     by = "message" if via == "message_script" else via   # 文字系统兜底仍是「客户消息证据」
     plan = ConvLangPlan(
@@ -823,7 +825,7 @@ def _mark_hold(item: Dict[str, Any], reason: str, *, target: str = "",
             rec["attempts"] = int(attempts)   # 只在真重试过时带（M-1 B 三键契约不动）
         item["_xlate_hold"] = rec
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _mark_hold", exc_info=True)
 
 
 # ── Q-39 B（#326 THBSHN，2026-09-15）：空串 / 超时可恢复重试 + 目标语重起草 ─────────
@@ -932,7 +934,7 @@ def _conv_is_auto(store: Any, cid: str) -> bool:
         if store is not None and cid and hasattr(store, "get_automation_mode"):
             return str(store.get_automation_mode(cid) or "") == "auto_ai"
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _conv_is_auto", exc_info=True)
     return False
 
 
@@ -974,7 +976,7 @@ def _note_target(item: Dict[str, Any], target: str, action: str = "") -> None:
         if action:
             item["_xlate_action"] = str(action)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _note_target", exc_info=True)
 
 
 async def translate_outbound_text(
@@ -1220,7 +1222,7 @@ async def _translate_outbound_core(
                     try:
                         await _aio.sleep(float(_rt["gap_sec"]))
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in _translate_outbound_core", exc_info=True)
                 _attempts += 1
                 try:
                     _r = await translation_service.retry_once(
@@ -1265,7 +1267,7 @@ async def _translate_outbound_core(
                 try:
                     item["_xlate_redraft"] = {"reason": _why, "target": target}
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in _translate_outbound_core", exc_info=True)
                 _hold_marker_clear(store, cid)
                 return _new
             if _new:

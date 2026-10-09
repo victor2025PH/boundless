@@ -269,7 +269,7 @@ def atempo_wav(wav_bytes: bytes, factor: float, sr: int) -> bytes:
         if p.returncode == 0 and p.stdout[:4] == b"RIFF":
             return p.stdout
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in atempo_wav", exc_info=True)
     return wav_bytes
 
 
@@ -429,6 +429,7 @@ def load_breath_for_profile(base_url: str, profile: str, cache_dir: Path,
         x, _sr = wav_to_float(cache.read_bytes())
         return extract_breath(x, sr)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in load_breath_for_profile", exc_info=True)
         return None
 
 

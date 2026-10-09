@@ -211,7 +211,7 @@ async def describe_wa_media(
             try:
                 os.remove(tmp_path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in describe_wa_media", exc_info=True)
 
 
 # ── Placeholder 生成 ─────────────────────────────────────────────────────────

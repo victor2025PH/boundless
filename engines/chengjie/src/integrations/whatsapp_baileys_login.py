@@ -202,7 +202,7 @@ def make_provider(config: Dict[str, Any]):
                         ensure_account_default_persona(
                             get_account_registry(), "whatsapp", aid, config)
                     except Exception:  # noqa: BLE001
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in make_provider._provider._poll", exc_info=True)
                 except Exception:  # noqa: BLE001
                     logger.debug("[wa_baileys] 注册表写入失败", exc_info=True)
                 # P4 身份化：Baileys 微服务若在 status 里回传 pushname/name → 富集自身昵称

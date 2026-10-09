@@ -314,7 +314,7 @@ def reachability_over_union(
         try:
             conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in reachability_over_union", exc_info=True)
 
 
 def reachability_rule() -> Dict[str, Any]:
@@ -639,7 +639,7 @@ def conversation_identity_map(
         try:
             conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in conversation_identity_map", exc_info=True)
     return out
 
 
@@ -701,6 +701,7 @@ def _resolve_media_file(media_ref: str) -> Optional[str]:
     try:
         path = static_media_ref_to_path(media_ref)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _resolve_media_file", exc_info=True)
         return None
     if not path:
         return None

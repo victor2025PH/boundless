@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import logging
 import asyncio
 import time
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Tuple
@@ -43,7 +44,7 @@ async def _tcp_connect_ok(host: str, port: int, timeout: float) -> bool:
             writer.close()
             await writer.wait_closed()
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).debug("swallowed in _tcp_connect_ok", exc_info=True)
         return True
     except Exception:  # noqa: BLE001
         return False
@@ -86,6 +87,7 @@ async def probe_telegram_reachable(
                         latency_ms = int((time.time() - t0) * 1000)
                         break
                 except Exception:  # noqa: BLE001
+                    logging.getLogger(__name__).debug("swallowed in probe_telegram_reachable", exc_info=True)
                     continue
         except (asyncio.TimeoutError, TimeoutError):
             pass

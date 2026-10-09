@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
@@ -168,7 +169,7 @@ def format_recent_context(
                 from src.inbox.image_observation import format_inbound_media_line
                 t = format_inbound_media_line(t, max_chars=max(20, int(max_line_chars) - 18))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in format_recent_context", exc_info=True)
         t = t.replace("\n", " ")
         if not t:
             continue

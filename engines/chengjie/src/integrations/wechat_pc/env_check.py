@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -246,7 +247,7 @@ def check_environment() -> Dict[str, Any]:
         out["version"] = _file_version(path)
         out["version_ok"] = version_ok(out["version"])
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in check_environment", exc_info=True)
     # 主窗与登录窗都不可见但进程在：多半是最小化到托盘或正在启动
     return out
 
@@ -309,7 +310,7 @@ def find_wechat_exe() -> str:  # pragma: no cover - 平台相关
             except OSError:
                 continue
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in find_wechat_exe", exc_info=True)
     for p in _default_exe_candidates():
         if os.path.exists(p):
             return p
@@ -350,7 +351,7 @@ def voice_environment(*, selftest: bool = False, version: str = "") -> Dict[str,
             out["version"] = str(check_environment().get("version") or "")
         out["voice_version_ok"] = voice_version_ok(out["version"])
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in voice_environment", exc_info=True)
     try:
         from src.integrations.wechat_pc import audio_cable
         out["audio_libs"] = audio_cable.available()
@@ -429,7 +430,7 @@ def bring_wechat_to_front() -> Dict[str, Any]:  # pragma: no cover - 平台相�
             user32.keybd_event(VK_MENU, 0, 0, 0)
             user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in bring_wechat_to_front", exc_info=True)
         user32.SetForegroundWindow(target.hwnd)
         user32.BringWindowToTop(target.hwnd)
         foreground = int(user32.GetForegroundWindow() or 0) == int(target.hwnd)
@@ -450,7 +451,7 @@ def bring_wechat_to_front() -> Dict[str, Any]:  # pragma: no cover - 平台相�
                         user32.AttachThreadInput(cur_tid, fg_tid, False)
                 foreground = int(user32.GetForegroundWindow() or 0) == int(target.hwnd)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in bring_wechat_to_front", exc_info=True)
         visible = bool(user32.IsWindowVisible(target.hwnd))
         return {"ok": visible, "window": kind, "visible": visible, "foreground": foreground, "via": via}
     except Exception:
@@ -473,6 +474,7 @@ def accessibility_tree_empty(hwnd: int) -> Optional[bool]:  # pragma: no cover -
             return True
         return not any((k.ClassName or "") != "MMUIRenderSubWindowHW" for k in kids)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in accessibility_tree_empty", exc_info=True)
         return None
 
 

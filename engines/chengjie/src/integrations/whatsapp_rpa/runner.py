@@ -762,7 +762,7 @@ class WhatsAppRpaRunner:
                 self._back()
                 await asyncio.sleep(0.4)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._sweep_recent_chat_for_unanswered", exc_info=True)
         return None
 
     async def _process_open_thread_message(
@@ -878,7 +878,7 @@ class WhatsAppRpaRunner:
             if r.returncode == 0:
                 return True
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._clear_focused_input", exc_info=True)
         try:
             adb.input_keyevent(serial, "123")
             for _ in range(96):
@@ -931,9 +931,9 @@ class WhatsAppRpaRunner:
             try:
                 _dev.stop_uiautomator()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._send_text", exc_info=True)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._send_text", exc_info=True)
 
         if not _u2_used:
             # fallback: adb keyboard broadcast or clipboard_paste
@@ -979,7 +979,7 @@ class WhatsAppRpaRunner:
                 try:
                     adb.run_adb(["shell", "ime", "set", _orig_ime], serial=serial, timeout=6.0)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._send_text", exc_info=True)
 
         return {"ok": True}
 
@@ -1146,7 +1146,7 @@ class WhatsAppRpaRunner:
                         from src.monitoring.metrics_store import get_metrics_store
                         get_metrics_store().record_lang_event("voice_lang_retry")
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._try_transcribe_voice", exc_info=True)
                     tr2 = await ap.transcribe_file(vf.local_path, language_hint=_retry_hint)
                     if tr2.ok and tr2.text.strip():
                         tr = tr2
@@ -1469,7 +1469,7 @@ class WhatsAppRpaRunner:
                         if rv.audio_path and _os.path.isfile(rv.audio_path):
                             _os.remove(rv.audio_path)
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._maybe_prepare_tts_reply", exc_info=True)
                     return
                 result["tts_audio_path"] = rv.audio_path
                 result["tts_voice"] = rv.voice
@@ -1552,7 +1552,7 @@ class WhatsAppRpaRunner:
                 logger.warning("[wa_rpa][kill-switch] 冻结发送，跳过（scope=%s）", _ks_scope)
                 return {"ok": False, "error": "kill_switch", "scope": _ks_scope, "parts": []}
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._pace_and_send", exc_info=True)
         pacing = self._pacing
         if pacing.enabled:
             await asyncio.sleep(jitter_ms(pacing.read_pause_ms_lo, pacing.read_pause_ms_hi))
@@ -1610,7 +1610,7 @@ class WhatsAppRpaRunner:
                     )
                     _rbg_rpa("rpa", "whatsapp", _gap)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._pace_and_send", exc_info=True)
                 await asyncio.sleep(_gap)
 
         out: Dict[str, Any] = {"ok": overall_ok, "parts": results, "parts_count": len(parts)}
@@ -2224,7 +2224,7 @@ class WhatsAppRpaRunner:
                                 _tpl_info.get("category"), _tpl_info.get("idx"), chat_key
                             )
                 except Exception:
-                    pass  # 静默失败，不影响主流程
+                    logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._run_screencap_fallback", exc_info=True)
 
                 self._state_store.upsert_chat_state(
                     chat_key,
@@ -2253,6 +2253,7 @@ class WhatsAppRpaRunner:
         try:
             root = _ET.fromstring(xml_bytes)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._find_context_menu_reply", exc_info=True)
             return None
         for el in root.iter():
             text = (el.get("text") or "").strip()
@@ -2307,6 +2308,7 @@ class WhatsAppRpaRunner:
             try:
                 _xml = await asyncio.to_thread(adb.dump_ui, self._serial)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._scroll_find_quote_targets", exc_info=True)
                 break
             if not _xml:
                 break
@@ -2541,14 +2543,14 @@ class WhatsAppRpaRunner:
                     )
                     _sent = True
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._send_text_coord_fallback", exc_info=True)
             if not _sent:
                 # 剪贴板粘贴 fallback
                 try:
                     await asyncio.to_thread(adb.clipboard_paste, serial, text)
                     _sent = True
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._send_text_coord_fallback", exc_info=True)
             if not _sent:
                 return {"ok": False, "error": "text_inject_fail"}
             await asyncio.sleep(0.5)
@@ -2610,7 +2612,7 @@ class WhatsAppRpaRunner:
                     try:
                         _has_queued = self._state_store.has_pending_send()
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._run_once_inner", exc_info=True)
                 _now_t = time.time()
                 _force_badge_scan = (
                     (_now_t - self._last_wa_full_check_ts) >= float(
@@ -2834,7 +2836,7 @@ class WhatsAppRpaRunner:
                     if _new_xml2:
                         xml_bytes = _new_xml2
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._run_once_inner", exc_info=True)
 
         # 4) 扫描未读行
         unread_rows = ui.scan_unread_chat_rows(xml_bytes, wa_pkg=self._wa_pkg)
@@ -2887,7 +2889,7 @@ class WhatsAppRpaRunner:
                                 [(c.get("text", ""), c.get("content-desc", "")) for c in _badge_children],
                             )
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._run_once_inner", exc_info=True)
 
             # ═════════════════════════════════════════════════════════════════
             # P15: 已打开对话新消息检测（核心修复）
@@ -3050,7 +3052,7 @@ class WhatsAppRpaRunner:
                 from src.monitoring.metrics_store import get_metrics_store
                 get_metrics_store().record_lang_event("voice_suspect")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._run_once_inner", exc_info=True)
         _lang_decision = _lang_resolve(
             "" if _voice_suspect else _peer_stripped,
             None,  # RPA 无结构化历史，粘滞语义由 detected_lang 缓存承担
@@ -3209,7 +3211,7 @@ class WhatsAppRpaRunner:
                             if _block:
                                 ctx["_contact_portrait_block"] = _block
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._run_once_inner", exc_info=True)
             except Exception:
                 logger.debug("[wa_rpa] portrait inject 异常", exc_info=True)
         # 9) 多条消息引用回复（ctx 已完整构建，此处是正确插入点）
@@ -3629,7 +3631,7 @@ class WhatsAppRpaRunner:
                     serial=self._serial, timeout=5.0,
                 )
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._async_go_home", exc_info=True)
             self._wa_launched = False
 
     def _finish(self, result: Dict[str, Any], t0: float) -> Dict[str, Any]:
@@ -3647,7 +3649,7 @@ class WhatsAppRpaRunner:
                     error=str(result.get("error", ""))[:200],
                 )
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WhatsAppRpaRunner._finish", exc_info=True)
         # no_adb_device 是无设备时的已知稳态，每个轮询周期都触发；连续相同则降到
         # DEBUG，避免刷屏（首次出现/设备恢复后第一条仍按 WARNING 记，便于排障）。
         _step = result.get("step")
