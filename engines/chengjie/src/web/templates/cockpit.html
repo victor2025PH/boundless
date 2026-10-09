@@ -355,7 +355,7 @@
   }
   function notify(msg, ok){
     if(typeof window.wsToast==='function'){ window.wsToast(msg, ok?'check':'alert'); }
-    else{ alert(msg); }
+    else{ AITRNotify.alert(msg); }
   }
   /* cid → 尾号（displayName / 字母头像共用） */
   function cidTail(cid){
