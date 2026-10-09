@@ -73,7 +73,7 @@ jobs:
 
       - name: Run regression (parallel, file-level isolation)
         # -m 会盖掉 pytest.ini 的 addopts，所以 benchmark 排除要写回来。
-        # packaging 只在下面的打包检查作业里跑（要先装边车和 Chromium）。
+        # packaging 只在下面的打包检查作业里跑（要先装边车和 Chromium）。本作业不下载浏览器。
         run: python -m pytest tests/ -n auto -q --tb=line --timeout=90 --timeout-method=thread -m "not benchmark and not packaging"
 
   packaging:
