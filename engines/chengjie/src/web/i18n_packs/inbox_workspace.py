@@ -577,6 +577,7 @@ ZH = {
     "inbox.cdraft.dismiss": "忽略",
     "inbox.cdraft.dismiss_t": "本会话内忽略这条草稿",
     "inbox.cdraft.expand": "查看",
+    "inbox.cdraft.sticky_t": "停联或要钱，不折进查看",
     "inbox.cdraft.n": "共 {n} 条",
     "inbox.cdraft.overwrite_confirm": "输入框已有内容，用 AI 草稿覆盖？",
     # ── K-3 B（#183 #177，J-10 交办）：草稿旁「本轮用了 N 条记忆」chips ──
@@ -3875,6 +3876,7 @@ EN = {
     "inbox.cdraft.dismiss": "Dismiss",
     "inbox.cdraft.dismiss_t": "Hide this draft for the current conversation",
     "inbox.cdraft.expand": "View",
+    "inbox.cdraft.sticky_t": "Stop-contact or a money ask stays out of View",
     "inbox.cdraft.n": "{n} total",
     "inbox.cdraft.overwrite_confirm": "The composer already has text. Replace it with the AI draft?",
     # ── K-3 B (#183 #177): "memories used this turn" chips next to the draft ──
@@ -6570,6 +6572,7 @@ EN = {
 
 # 本批新增确认框标题/按钮（尚未 regen 进 zh_hant_auto；不覆盖已有 confirm_unr/confirm_safety 以免与生成物撞键）
 ZH_HANT = {
+    "inbox.cdraft.sticky_t": "停聯或要錢，不折進檢視",
     "inbox.mp.confirm_unr_hd": "切換到無限制？",
     "inbox.mp.confirm_unr_ok": "切換",
     "inbox.mp.confirm_safety_hd": "關閉安全剎車？",

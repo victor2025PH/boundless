@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from pathlib import Path
 
+from src.ai.translation_service import TranslationService
 from src.web.routes.unified_inbox_routes import register_unified_inbox_routes
 
 
@@ -102,6 +103,9 @@ def _client():
     app.state.messenger_rpa_service = MessengerSvc()
     app.state.telegram_client = TelegramClient()
     app.state.ai_client = FakeAI()
+    # 这组夹具注入的是付费 AI，用来锁路由。免费档默认不走它。
+    app.state.translation_service = TranslationService(
+        ai_client=app.state.ai_client, free_tier_zero_cost=False)
     return TestClient(app)
 
 

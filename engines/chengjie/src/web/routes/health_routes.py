@@ -10,8 +10,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import Depends, Request
+
+logger = logging.getLogger(__name__)
 
 
 def register_health_routes(app, ctx) -> None:
@@ -50,7 +53,7 @@ def register_health_routes(app, ctx) -> None:
                         "/workspace", "查看收件箱",
                     )
         except Exception:
-            pass
+            logger.debug("[health] 本地翻译模型巡检失败", exc_info=True)
 
         # 1. 模板配置检查（已迁移至 KB，仅做兼容提示）
         tpl = config_manager.get_dynamic_templates_config() or {}
