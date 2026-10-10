@@ -240,6 +240,74 @@ def test_degraded_count_persists_across_reopen(tmp_path, monkeypatch):
             assert fresh.bump_degraded() == 2
         finally:
             fresh.close()
+        assert not db.with_suffix(".degraded").exists()
+        assert srg.DEFAULTS["script_daily_cap"] == 20
+    finally:
+        srg.reset_for_tests()
+        assert srg.degraded_count() == 0
+
+
+def test_degraded_count_sidecar_when_db_cannot_open(tmp_path, monkeypatch):
+    """限速库打不开时，放行次数写在旁边的整数文件里。丢掉进程内单例再读，次数还在。
+
+    文件里已有的次数先读再加，不会从 1 覆盖。日上限仍是 20，仍然放行。
+    """
+    db = tmp_path / "send_rate_gate.db"
+    db.mkdir()
+    side = db.with_suffix(".degraded")
+    side.write_text("4\n", encoding="utf-8")
+    monkeypatch.setenv("ZHILIAO_SEND_RATE_DB", str(db))
+    srg.reset_for_tests()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("logic")
+
+    monkeypatch.setattr(srg, "classify_origin", boom)
+    try:
+        d = srg.check("telegram", "a1", origin="agent")
+        assert d["allowed"] is True and d["reason"] == "error" and d["degraded"] is True
+        assert d["degraded_count"] == 5
+        assert side.read_text(encoding="utf-8").strip() == "5"
+        path = str(db)
+        with srg._INST_LOCK:
+            inst = srg._INSTANCES.pop(path, None)
+        if inst is not None:
+            inst.close()
+        srg._DEGRADED_COUNT = 0
+        assert srg.degraded_count() == 5
+        d2 = srg.check("telegram", "a1", origin="agent")
+        assert d2["allowed"] is True and d2["degraded_count"] == 6
+        assert side.read_text(encoding="utf-8").strip() == "6"
+        assert srg.DEFAULTS["script_daily_cap"] == 20
+    finally:
+        srg.reset_for_tests()
+        assert srg.degraded_count() == 0
+        assert not side.exists()
+        assert not side.with_name(side.name + ".tmp").exists()
+
+
+def test_degraded_sidecar_write_failure_stays_in_process(tmp_path, monkeypatch):
+    """计数文件也写不了时，仍放行，次数只留在本进程。日上限仍是 20。"""
+    db = tmp_path / "send_rate_gate.db"
+    db.mkdir()
+    monkeypatch.setenv("ZHILIAO_SEND_RATE_DB", str(db))
+    srg.reset_for_tests()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("logic")
+
+    def no_write(*_a, **_k):
+        raise OSError("ro")
+
+    monkeypatch.setattr(srg, "classify_origin", boom)
+    monkeypatch.setattr(srg, "_write_degraded_sidecar", no_write)
+    try:
+        d = srg.check("telegram", "a1", origin="agent")
+        assert d["allowed"] is True and d["degraded"] is True and d["degraded_count"] == 1
+        d2 = srg.check("telegram", "a1", origin="agent")
+        assert d2["allowed"] is True and d2["degraded_count"] == 2
+        assert srg.degraded_count() == 2
+        assert not db.with_suffix(".degraded").exists()
         assert srg.DEFAULTS["script_daily_cap"] == 20
     finally:
         srg.reset_for_tests()
