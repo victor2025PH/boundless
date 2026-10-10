@@ -22,11 +22,14 @@ on:
     paths:
       - 'engines/chengjie/**'
       - '.github/workflows/chengjie-tests.yml'
+      # 忽略清单在仓库根。只改它时也要跑，否则行号漂移修完却没有密钥作业验收。
+      - '.gitleaksignore'
   pull_request:
     branches: [main]
     paths:
       - 'engines/chengjie/**'
       - '.github/workflows/chengjie-tests.yml'
+      - '.gitleaksignore'
 
 # 同一分支新推送时取消进行中的旧跑，省 runner、加快反馈。
 concurrency:
