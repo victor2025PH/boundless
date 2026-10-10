@@ -39,6 +39,8 @@ export const ROUTE_VISIBILITY: Record<string, Visibility> = {
   "/face": "gated",
   "/matrix": "gated",
   "/matrix/download": "gated",
+  // 智拓：机房真机多账号运营，属"客户画像风险"，与 /matrix 对齐（noindex + robots disallow，页面/导航保留、直达可访问）。
+  "/download/zhituo": "gated",
 };
 
 /** gated slug 列表（由 ROUTE_VISIBILITY 派生，勿手工另行维护）。 */
