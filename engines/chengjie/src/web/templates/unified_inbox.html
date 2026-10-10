@@ -655,6 +655,8 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
     <div class="buried-hint" id="buried-hint" style="display:none;" role="button" tabindex="0"
          onclick="_gotoBuriedArchive()"
          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();_gotoBuriedArchive();}"></div>
+    {# 会话语言仍未知的存量。计数来自全库，不靠当前列表窗口。不在这里执行回填。 #}
+    <div class="buried-hint" id="lang-unknown-hint" style="display:none;" role="status"></div>
     {# #222（M-4 A）群/频道视图说明条：AutoDraft skip_group_chats 开着时，群/频道只收不回、
        未读天然堆积且不计入账号角标——说清楚，坐席才不会把它当成幽灵未读。内容由 _renderScopeNote 填充。 #}
     <div class="buried-hint scope-note" id="scope-note" style="display:none;" aria-live="polite"></div>
@@ -5876,6 +5878,37 @@ function _renderScopeNote(){
     el.style.display='';
   }catch(_){ el.style.display='none'; }
 }
+var _langUnknownOnly=false;
+var _sessionLangUnknownN=0;
+function _isUnknownSessionLang(c){
+  if(!c || !Object.prototype.hasOwnProperty.call(c,'session_language')) return false;
+  const s=String(c.session_language||'').trim().toLowerCase();
+  return !s || s==='unknown' || s==='auto';
+}
+function _renderLangUnknownHint(){
+  const el=document.getElementById('lang-unknown-hint');
+  if(!el) return;
+  const n=Math.max(0, Number(_sessionLangUnknownN)||0);
+  if(!n || _histView){
+    if(_histView) _langUnknownOnly=false;
+    el.style.display='none'; el.innerHTML=''; return;
+  }
+  const shown=(allChats||[]).filter(_isUnknownSessionLang).length;
+  let txt=window.Tf('inbox.langunk.banner',{n:n});
+  if(shown<n) txt+=' · '+window.Tf('inbox.langunk.window',{shown:shown,n:n});
+  const btn=window.T(_langUnknownOnly?'inbox.langunk.view_off':'inbox.langunk.view');
+  el.innerHTML='<span class="bh-txt">'+esc(txt)+'</span>'
+    +'<button type="button" class="bh-unarch" data-langunk="1">'+esc(btn)+'</button>';
+  el.title=window.T('inbox.langunk.banner_t');
+  el.style.display='';
+  const b=el.querySelector('[data-langunk]');
+  if(b) b.addEventListener('click', function(ev){
+    ev.preventDefault(); ev.stopPropagation();
+    _langUnknownOnly=!_langUnknownOnly;
+    try{ applyFilters(); }catch(_){}
+    _renderLangUnknownHint();
+  });
+}
 function _renderBuriedHint(st){
   _renderScopeNote();
   const el=document.getElementById('buried-hint');
@@ -6412,6 +6445,7 @@ function applyFilters(){
     // 账号历史只读视角（2026-08-17）：该账号全量历史直判（含已退出/已移除/归档），
     // 绕过下方所有隐藏规则——只读语义由行级 read_only 锁 + 顶部横幅承担；
     // 搜索仍可用（在历史里找人是本视角的高频动作）。
+    if(_langUnknownOnly && !_isUnknownSessionLang(c)) return false;
     if(_histView){
       if(c.platform!==_histView.pl) return false;
       if((c.account_id||'default')!==_histView.aid) return false;
@@ -8127,6 +8161,10 @@ async function _loadChatsBody(){
     _dpMeta=d.deliver_paused_meta||null;
     try{ _renderDpGlobalBanner(); }catch(_){}
     allChats=(d.chats||[]).filter(c=>c.account_status!=='offline');
+    if(typeof d.session_lang_unknown==='number'){
+      _sessionLangUnknownN=d.session_lang_unknown;
+      try{ _renderLangUnknownHint(); }catch(_){}
+    }
     // 未读可信化 v2：**精确**本地保 0——只压「服务端快照不比本地已读标记新」的行
     // （行没新动静 last_ts<=mark.lastTs，或就是当前打开的会话）；真新入站
     // （last_ts 前进）立刻放行显示。替换旧「凡 unread===0 一律永久保 0」盲目集合：

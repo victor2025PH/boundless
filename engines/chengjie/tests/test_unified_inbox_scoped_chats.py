@@ -174,6 +174,7 @@ def test_scoped_shape_vs_unscoped_shape(tmp_path):
         "unread_breakdown_by_account",              # #222 四桶明细
         "ai_skip_groups",                           # #222 群/频道是否跳过 AutoDraft
         "accounts_summary",                         # P0 账号真相单源（2026-08-17）
+        "session_lang_unknown",                     # 全库未知会话语言存量
         "deliver_paused", "deliver_paused_meta",    # #12 / #142 真发暂停
     }
     assert isinstance(plain["unread_by_platform"], dict)
@@ -264,5 +265,6 @@ def test_scoped_without_store_falls_back_to_full_path():
         "archived_unread_by_account", "attn_by_account",
         "ai_skip_groups",
         "accounts_summary",   # P0 账号真相单源（2026-08-17）
+        "session_lang_unknown",
         "deliver_paused", "deliver_paused_meta",
     }

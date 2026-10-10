@@ -542,6 +542,9 @@ def store_row_to_chat(
         # 折叠到底部、不计未读；自动化排除在 ingest 侧（同一 is_self_chat 判据）。
         "self_chat": _self_chat,
         "language": language,
+        # 库里记下的会话语言（投票/回填的那一列）。``language`` 仍是末条现场检测，
+        # 两者可以不同：末条是表情时现场是 unknown，库里可能已经有 tl。
+        "session_language": str(row.get("language") or "unknown"),
         "last_message": last_msg_obj,
         "messages": [last_msg_obj] if last_msg_obj else [],
         "message_count": int(message_count or 0),

@@ -274,3 +274,23 @@ def test_backfill_opens_db_read_only(store, tmp_path):
     build_body = src.split("def build_plan", 1)[1].split("def apply_unknown_fills", 1)[0]
     assert "_open_ro" in build_body and "commit(" not in build_body
     assert "--apply" in src and "tl_upgrade_suggestions" in src
+
+
+def test_unknown_session_language_is_counted_and_kept_apart_from_last_line(store):
+    """列表上的 language 仍是末条现场检测；session_language 才是库里的会话语言。"""
+    from src.inbox.normalizer import store_row_to_chat
+
+    store.upsert_conversation(_conv("whatsapp:a:u1", "unknown"))
+    store.upsert_conversation(_conv("whatsapp:a:u2", ""))
+    store.upsert_conversation(_conv("whatsapp:a:known", "tl"))
+    assert store.count_unknown_session_language() == 2
+
+    row = store.get_conversation("whatsapp:a:u1")
+    row["last_text"] = "Pwede po ba COD?"
+    chat = store_row_to_chat(row)
+    assert chat["session_language"] == "unknown"
+    assert chat["language"] == "tl"
+
+    tpl = (ENGINE / "src/web/templates/unified_inbox.html").read_text(encoding="utf-8")
+    assert 'id="lang-unknown-hint"' in tpl and "session_lang_unknown" in tpl
+    assert "--apply" not in tpl.split('id="lang-unknown-hint"', 1)[0][-400:]

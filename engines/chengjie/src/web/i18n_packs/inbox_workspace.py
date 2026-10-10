@@ -1646,6 +1646,11 @@ ZH = {
     # #170（L-3 B）：被埋横幅挪出可折叠筛选头、常驻直到归零；文案带「最久多少小时」
     "inbox.buried.banner": "有 {n} 条未读在已归档会话里（最久 {h} 小时）",
     "inbox.buried.banner_nohours": "有 {n} 条未读在已归档会话里",
+    "inbox.langunk.banner": "有 {n} 个会话还不知道对方语言",
+    "inbox.langunk.banner_t": "这是库里记下的会话语言，不是最后一条的猜测。回填脚本默认只预览，--apply 只补 unknown，不会改已经判出来的语言。",
+    "inbox.langunk.view": "只看当前列表里的",
+    "inbox.langunk.view_off": "返回全部",
+    "inbox.langunk.window": "当前列表里能看到 {shown} 个，库里一共 {n} 个",
     "inbox.buried.view_each": "逐条查看",
     "inbox.acct.unread_pop_hint": "角标数字就是下面这几条：点开任一条，或点「全部标已读」即可清零。归档会话里的未读不计入角标，看列表上方的琥珀横幅。",
     # #170 一键取消归档被埋会话（当前平台/账号视角下全部；可撤回）
@@ -4923,6 +4928,11 @@ EN = {
     # #170 (L-3 B): buried banner moved out of the collapsible filter header; persistent until zero; carries "oldest N hours"
     "inbox.buried.banner": "{n} unread message(s) sit in archived conversations (oldest {h} h)",
     "inbox.buried.banner_nohours": "{n} unread message(s) sit in archived conversations",
+    "inbox.langunk.banner": "{n} conversations still have an unknown language",
+    "inbox.langunk.banner_t": "This is the language stored on the conversation, not a guess from the latest line. The backfill script previews by default; --apply only fills unknown and does not overwrite a language already decided.",
+    "inbox.langunk.view": "Show the ones in this list",
+    "inbox.langunk.view_off": "Show all",
+    "inbox.langunk.window": "{shown} of them are in this list; {n} are in the library",
     "inbox.buried.view_each": "View one by one",
     "inbox.acct.unread_pop_hint": "The badge number is exactly these conversations: open any of them or click \"Mark all read\" to clear it. Unread in archived conversations is not counted here — see the amber banner above the list.",
     "inbox.buried.unarch": "Unarchive these {n}",
