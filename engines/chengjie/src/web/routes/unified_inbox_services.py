@@ -122,6 +122,52 @@ def _resolve_conv_engine(request: Request, platform: str, account_id: str, chat_
         return ""
 
 
+def _resolve_conv_translation_tier(
+    request: Request, platform: str, account_id: str, chat_key: str,
+) -> str:
+    """会话翻译档（conversations.pref_tier）。空 / 读不到 = 标准档。"""
+    ibx = _inbox_store(request)
+    if ibx is None or not str(chat_key or "").strip():
+        return ""
+    try:
+        conv = ibx.get_conversation(_conv_id(platform, account_id, chat_key))
+        return str((conv or {}).get("pref_tier") or "").strip().lower()
+    except Exception:
+        logger.debug("[translate] 读取会话翻译档失败（忽略）", exc_info=True)
+        return ""
+
+
+def _remember_conv_translation_tier(
+    request: Request, platform: str, account_id: str, chat_key: str, tier: str,
+) -> None:
+    """显式传入的档位落会话。空串不写，避免省略 tier 的旧客户端把专业档清掉。"""
+    raw = str(tier or "").strip().lower()
+    if not raw or not str(chat_key or "").strip():
+        return
+    ibx = _inbox_store(request)
+    if ibx is None:
+        return
+    try:
+        ibx.set_conversation_pref_tier(
+            _conv_id(platform, account_id, chat_key), raw)
+    except Exception:
+        logger.debug("[translate] 记住会话翻译档失败（忽略）", exc_info=True)
+
+
+def _effective_conv_translation_tier(
+    request: Request, platform: str, account_id: str, chat_key: str,
+    explicit: str,
+) -> str:
+    """请求里写了档就用它并记住；没写就读会话上的档。都没有 = 标准档。"""
+    raw = str(explicit or "").strip().lower()
+    if raw:
+        _remember_conv_translation_tier(
+            request, platform, account_id, chat_key, raw)
+        return raw
+    return _resolve_conv_translation_tier(
+        request, platform, account_id, chat_key)
+
+
 # P3：默认译文显示语言 KV 键前缀（运营级，区别于会话级 conversations.pref_engine）。
 _DEFAULT_LANG_KEY = "inbox.default_lang"
 # P4-C：默认「回复语言」KV 键前缀（出站轴：把坐席草稿译成客户语言；区别于上面的入站显示语言）。

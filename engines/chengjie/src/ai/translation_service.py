@@ -251,20 +251,33 @@ class TranslationService:
             blocked = True
         return blocked, blocked
 
-    def engine_matrix(self, target_lang: str = "") -> Dict[str, Any]:
-        """指定目标语的引擎能力矩阵（供前端提前提示主引擎是否兜底）。
+    def engine_matrix(self, target_lang: str = "", tier: str = "") -> Dict[str, Any]:
+        """指定目标语、指定翻译档的引擎能力矩阵。
+
+        ``tier`` 空 / std / free 且免费档守卫开着时，本地模型没配好才标
+        ``local_mt_gap``。pro / certified 不标这个缺口：它们本来就走付费引擎。
+        缺省 ``tier=""`` 仍是标准档，健康巡检不用改。
 
         P1-XM（2026-08-16）：行内附带进程期实测 ``avg_ms``/``ok_rate``
         （translation_engine_stats 同源，引擎 chips 的健康 tooltip 消费）；
         无流量的引擎不带这两键（前端不渲染），统计层异常绝不影响矩阵本身。
         """
+        from src.ai.translation_engines import is_free_tier
+
         target = normalize_lang(target_lang) or self.default_target_lang
+        tier_norm = str(tier or "").strip().lower()
+        apply_free = bool(self.free_tier_zero_cost) and is_free_tier(tier_norm)
         try:
-            matrix = self._router.describe(
-                target, free_tier=bool(self.free_tier_zero_cost))
+            matrix = self._router.describe(target, free_tier=apply_free)
         except Exception:
-            return {"target_lang": target, "primary": "none",
-                    "effective": "none", "engines": []}
+            return {
+                "target_lang": target, "primary": "none",
+                "effective": "none", "engines": [],
+                "tier": tier_norm or "std",
+                "free_tier_enforce": bool(self.free_tier_zero_cost),
+                "local_mt_ready": not apply_free,
+                "local_mt_gap": "",
+            }
         try:
             from src.ai.translation_engine_stats import get_translation_engine_stats
             stats = {r["engine"]: r
@@ -276,15 +289,20 @@ class TranslationService:
                     row["ok_rate"] = st.get("success_rate")
         except Exception:
             pass
+        matrix["tier"] = tier_norm or "std"
         matrix["free_tier_enforce"] = bool(self.free_tier_zero_cost)
         local_ready = any(
             r.get("available") and r.get("supports") and not r.get("free_tier_blocked")
             and r.get("engine") in ("ollama_mt", "opencc")
             for r in matrix.get("engines") or []
         )
-        matrix["local_mt_ready"] = bool(local_ready) or not self.free_tier_zero_cost
-        matrix["local_mt_gap"] = (
-            "" if matrix["local_mt_ready"] else "local_mt_unconfigured")
+        if apply_free:
+            matrix["local_mt_ready"] = bool(local_ready)
+            matrix["local_mt_gap"] = (
+                "" if local_ready else "local_mt_unconfigured")
+        else:
+            matrix["local_mt_ready"] = True
+            matrix["local_mt_gap"] = ""
         return matrix
 
     async def compare_translations(

@@ -820,6 +820,9 @@ _MIGRATIONS = [
     "ALTER TABLE ops_incidents ADD COLUMN kind TEXT NOT NULL DEFAULT 'health'",
     # F+：会话级首选翻译引擎（坐席多线路对照择优后持久化，跨刷新/重启生效）
     "ALTER TABLE conversations ADD COLUMN pref_engine TEXT NOT NULL DEFAULT ''",
+    # 会话翻译档（std/free/pro/certified）。空＝标准档。引擎提示按这条读，
+    # 不把「本地模型没配好」盖到整箱。
+    "ALTER TABLE conversations ADD COLUMN pref_tier TEXT NOT NULL DEFAULT ''",
     # P3（译文默认语言运营化）：通用 KV 配置表。供「默认译文显示语言」按
     # 全局/平台/账号维度持久化（key 形如 inbox.default_lang[.platform.<p>][.account.<p>.<a>]），
     # 换机/换坐席不丢，区别于 conversations.pref_engine（会话级）。值空＝未配置。
@@ -9518,6 +9521,27 @@ class InboxStore:
                 "UPDATE conversations SET pref_engine = ?, updated_at = ? "
                 "WHERE conversation_id = ?",
                 (eng, now, cid),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def set_conversation_pref_tier(self, conversation_id: str, tier: str) -> bool:
+        """会话翻译档。空串＝标准档。只接受 std/free/pro/certified。
+
+        会话行不存在 → False。非法档名不落库，避免把提示和计费钉到陌生档。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return False
+        raw = str(tier or "").strip().lower()
+        if raw not in ("", "std", "free", "pro", "certified"):
+            return False
+        now = self._now()
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE conversations SET pref_tier = ?, updated_at = ? "
+                "WHERE conversation_id = ?",
+                (raw, now, cid),
             )
             self._conn.commit()
             return cur.rowcount > 0

@@ -24514,28 +24514,45 @@ async function _rememberConvEngine(engine){
   }catch(e){ /* 记住失败不影响填入，忽略 */ }
 }
 // C-1：切换目标语时提前查引擎能力矩阵，提示主引擎是否会被兜底（坐席对译文质量有预期）
-const _engineMatrixCache=new Map();   // target_lang -> matrix（引擎配置启动时固定，可缓存）
+// 缓存键含会话：免费档缺口只属于这一条会话的翻译档，不按目标语盖整箱。
+const _engineMatrixCache=new Map();
 async function _updateEngineHint(){
   const el=document.getElementById('xlate-engine');
   if(!el) return;
+  const conv=selectedChat;
+  if(!conv){
+    el.innerHTML='<span class="dot"></span>'+window.T('inbox.xl.eng_ai');
+    el.title='';
+    _syncEngineSel(null);
+    try{ _syncTopXlate(); }catch(_){}
+    return;
+  }
   let target=_xlateOut||_xlateIn||'';
   if(target==='auto'){
-    const _cl=String((selectedChat&&selectedChat.language)||'').trim();
+    const _cl=String((conv.language)||'').trim();
     target=(_cl&&_cl!=='unknown')?_cl:'';
   }
-  if(!target){ el.innerHTML='<span class="dot"></span>'+window.T('inbox.xl.eng_ai')+_prefEngineBadge(null); el.title=''; _syncEngineSel(null); return; }
+  if(!target){ el.innerHTML='<span class="dot"></span>'+window.T('inbox.xl.eng_ai')+_prefEngineBadge(null); el.title=''; _syncEngineSel(null); try{ _syncTopXlate(); }catch(_){} return; }
+  const cacheKey=[conv.platform||'', conv.account_id||'default', conv.chat_key||'', target].join('\u0001');
   try{
-    let m=_engineMatrixCache.get(target);
+    let m=_engineMatrixCache.get(cacheKey);
     if(!m){
-      const r=await apiFetch('/api/unified-inbox/translation-engines?target_lang='+encodeURIComponent(target));
+      const qs='target_lang='+encodeURIComponent(target)
+        +'&platform='+encodeURIComponent(conv.platform||'')
+        +'&account_id='+encodeURIComponent(conv.account_id||'default')
+        +'&chat_key='+encodeURIComponent(conv.chat_key||'');
+      const r=await apiFetch('/api/unified-inbox/translation-engines?'+qs);
       const d=await r.json();
+      if(selectedChat!==conv) return;
       if(!d||!d.ok||!d.matrix){ _syncEngineSel(null); return; }
-      m=d.matrix; _engineMatrixCache.set(target,m);
+      m=d.matrix; _engineMatrixCache.set(cacheKey,m);
     }
+    if(selectedChat!==conv) return;
     if(m.local_mt_gap){
       el.innerHTML='<span class="dot" style="background:var(--th-bg-amber5,#f59e0b);"></span>'+window.T('inbox.xl.local_mt_gap')+_prefEngineBadge(m);
       el.title=window.T('inbox.xl.local_mt_gap_t');
       _syncEngineSel(m);
+      try{ _syncTopXlate(); }catch(_){}
       return;
     }
     _syncEngineSel(m);   // P1：下拉值/灰显与徽标同步刷新
@@ -24555,6 +24572,7 @@ async function _updateEngineHint(){
       el.innerHTML='<span class="dot"></span>'+esc(effLabel)+_prefEngineBadge(m);
       el.title=window.Tf('inbox.xl.eng_plain_t',{tgt:target,eff:effLabel});
     }
+    try{ _syncTopXlate(); }catch(_){}
   }catch(_){}
 }
 /* F+2：会话首选引擎徽标。在引擎提示后追加「📌 <引擎>」；该引擎对当前目标语不可用→红色离线警示。
