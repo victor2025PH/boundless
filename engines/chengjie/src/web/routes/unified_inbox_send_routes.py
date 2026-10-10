@@ -1914,8 +1914,13 @@ def register_send_routes(app, *, api_auth, page_auth) -> None:
             # 试听=发送同入参 ⇒ 同 spoken 文本；翻译服务缓存让二次调用零成本）。
             if _vt_target:
                 from src.ai.voice_outbound_xlate import resolve_spoken_text
+                _voice_tier = _effective_conv_translation_tier(
+                    request, platform, account_id, chat_key,
+                    str(body.get("tier") or ""),
+                )
                 spoken_text, _vxl = await resolve_spoken_text(
-                    text, _vt_target, _get_translation_service(request))
+                    text, _vt_target, _get_translation_service(request),
+                    tier=_voice_tier)
                 if _vxl.get("translated"):
                     # 译声=顺带消费一次翻译，按源文本长度记（与文本出站同口径）
                     record_request_chars(request, "translation", len(text))

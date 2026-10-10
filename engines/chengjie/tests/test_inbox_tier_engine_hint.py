@@ -112,3 +112,86 @@ def test_engines_endpoint_follows_conversation_tier(tmp_path):
     gap = whole.json()["matrix"]
     assert gap["tier"] == "std"
     assert gap["local_mt_gap"] == "local_mt_unconfigured"
+
+
+def test_unknown_tier_does_not_replace_pinned_paid(tmp_path):
+    from src.web.routes.unified_inbox_services import (
+        _effective_conv_translation_tier,
+    )
+
+    store, _cid = _store(tmp_path)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(inbox_store=store)))
+    assert _effective_conv_translation_tier(
+        request, "line", "default", "line:user:U1", "pro") == "pro"
+    assert _effective_conv_translation_tier(
+        request, "line", "default", "line:user:U1", "nope") == "pro"
+    assert store.get_conversation(_cid)["pref_tier"] == "pro"
+    assert _effective_conv_translation_tier(
+        request, "line", "default", "line:user:U1", "") == "pro"
+
+
+def test_outbound_and_batch_read_stored_tier(tmp_path):
+    import asyncio
+
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+
+    from src.ai.translation_service import TranslationResult, TranslationService
+    from src.inbox.outbound_translate import translate_outbound_text
+    from src.web.routes.unified_inbox_translate_routes import register_translate_routes
+
+    store, cid = _store(tmp_path)
+    store.set_conversation_pref_tier(cid, "pro")
+
+    class _Spy(TranslationService):
+        def __init__(self):
+            super().__init__(free_tier_zero_cost=True)
+            self.tiers = []
+
+        async def translate(self, text, **kw):
+            self.tiers.append(kw.get("tier", ""))
+            return TranslationResult(text, "hello", "zh", "en", True, provider="deepl")
+
+        def detect_language(self, text):
+            return "zh"
+
+    spy = _Spy()
+
+    class _Store:
+        def get_outbound_lang_if_set(self, _cid):
+            return "en"
+
+        def get_conversation(self, _cid):
+            return store.get_conversation(_cid)
+
+        def record_outbound_translation(self, *args, **kwargs):
+            return None
+
+    out = asyncio.run(translate_outbound_text(
+        {"conversation_id": cid, "text": "你好"},
+        translation_service=spy, store=_Store(),
+    ))
+    assert out == "hello"
+    assert spy.tiers == ["pro"]
+
+    app = FastAPI()
+
+    def api_auth(request: Request):
+        return True
+
+    register_translate_routes(app, api_auth=api_auth)
+    app.state.inbox_store = store
+    batch_spy = _Spy()
+    app.state.translation_service = batch_spy
+    client = TestClient(app)
+    resp = client.post("/api/unified-inbox/translate-batch", json={
+        "items": [{"id": "1", "text": "你好"}],
+        "target_lang": "en",
+        "platform": "line",
+        "account_id": "default",
+        "chat_key": "line:user:U1",
+    })
+    assert resp.status_code == 200
+    assert batch_spy.tiers == ["pro"]
+    assert store.get_conversation(cid)["pref_tier"] == "pro"
