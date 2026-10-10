@@ -1,4 +1,4 @@
-"""人设回复质量回归 · 真模型跑分（可选，只在 117 手动跑；CI 不跑）。
+"""人设回复质量回归 · 真模型跑分（可选，手动跑；CI 不跑，也不做定时作业）。
 
 用 DeepSeek（OpenAI 兼容 /chat/completions）对 tests/fixtures/persona_quality 的 60 条用例逐条生成回复，
 再用 src.eval.persona_quality_eval.check_reply 打分（两条红线 + 身份如实）。

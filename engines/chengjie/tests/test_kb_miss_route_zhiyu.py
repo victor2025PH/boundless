@@ -193,6 +193,19 @@ def test_weak_hit_cannot_go_direct():
     assert 'if _top_reply_mode == "direct" and not _hit_q:' in src
 
 
+def test_f1_low_score_logs_are_readable():
+    """F1 低分日志必须是可读中文。文件其余历史替换符不在这次范围内。"""
+    hits = [
+        line for line in _sm_src().splitlines()
+        if "[F1] 无KB命中低分" in line or "[F1] 有KB但低分" in line
+    ]
+    assert hits == [
+        '                    self.logger.info("[F1] 无KB命中低分 -> miss_log: \'%s\'", user_msg[:50])',
+        '                self.logger.info("[F1] 有KB但低分 -> 负面反馈: \'%s\'", user_msg[:50])',
+    ]
+    assert all("\ufffd" not in line for line in hits)
+
+
 # ── B 线（收件箱草稿）端到端：弱命中按查无兜底 ─────────────────────────────
 
 _SUPPORT = {"id": "support_zy", "name": "zy", "role": "售后支持专员", "tags": ["客服", "售后"]}
