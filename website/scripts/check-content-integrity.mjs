@@ -280,12 +280,25 @@ function checkPrices() {
 function checkChatxChannelCopy() {
   const problems = [];
   const content = readFileSync(join(websiteRoot, "lib", "chatxContent.ts"), "utf8");
+  const homepage = readFileSync(join(websiteRoot, "lib", "content.ts"), "utf8");
   const download = readFileSync(join(websiteRoot, "components", "ChatxDownloadSection.tsx"), "utf8");
   for (const term of ["抖音企业号", "TikTok", "智拓", "MatrixX", "本地模型", "转人工", "不能在智聊里网页登录"]) {
     if (!content.includes(term)) problems.push(`lib/chatxContent.ts 缺少「${term}」`);
   }
   if (!download.includes("CHATX_CHANNEL_LINES")) {
     problems.push("components/ChatxDownloadSection.tsx 没有渲染 CHATX_CHANNEL_LINES");
+  }
+  // Instagram / Zalo 官方接口已在公开包默认可接，不得再标成陆续接入。
+  for (const name of ["Instagram", "Zalo"]) {
+    if (!homepage.includes(`name: "${name}"`)) {
+      problems.push(`lib/content.ts 在线平台缺少 ${name}`);
+    }
+  }
+  const coming = homepage.match(/platformsComing:\s*\[([^\]]*)\]/g) || [];
+  for (const block of coming) {
+    if (block.includes("Instagram") || block.includes("Zalo")) {
+      problems.push("lib/content.ts 仍把 Instagram 或 Zalo 放在陆续接入");
+    }
   }
   return problems;
 }

@@ -36,6 +36,9 @@ from typing import Any, Dict
 # 条同样是六个图标。也就是说话术在**漏报**两个已交付的平台。事实卡照抄话术就会
 # 把这个漏报固化成「小智也说不支持」，所以这里以代码为准；话术那边属产品/销售
 # 侧决策，已在交付说明里点名。
+# Instagram / Zalo（2026-10-10）：公开包默认 official，注册表 implemented=True，
+# 官方 worker 能收发。个人号网页登录不在默认清单里，要 platform_login.*.web_enabled
+# 才注入。官网首页把它们放在「在线」，不放「陆续接入」。
 SUPPORTED_CHANNELS = ("Telegram", "WhatsApp", "LINE", "Facebook Messenger",
                       "Instagram", "Zalo", "QQ 机器人", "微信客服（企业微信）", "官网网页聊天",
                       "抖音", "TikTok")

@@ -518,6 +518,9 @@ const zh: Dict = {
   },
   trust: {
     platformsLabel: "深度对接的沟通平台",
+    // 2026-10-10：Instagram / Zalo 从「陆续接入」挪到在线。公开包默认只接官方接口
+    // （platform_login DEFAULT_PLATFORM_MODES = official，注册表 implemented，
+    // 官方 worker 能收发）。个人号网页登录默认关，要 platform_login.*.web_enabled 才出现。
     platformsLive: [
       { name: "Telegram", note: "协议级接入 · 消息 / 语音 / 媒体全能力" },
       { name: "WhatsApp", note: "双向收发 · 语音 · 媒体" },
@@ -527,9 +530,11 @@ const zh: Dict = {
       { name: "Facebook", note: "个人主页获客是智拓，不是智聊收件箱" },
       { name: "抖音", note: "企业号小程序私信 · 客户先开口 · 不能网页登录个人号" },
       { name: "TikTok", note: "官方客服 · 不能网页登录个人号" },
+      { name: "Instagram", note: "官方 Messaging API · 公开包默认不网页登录个人号" },
+      { name: "Zalo", note: "官方 OA · 7 天互动窗 · 只发文字 · 个人号网页登录默认关" },
     ],
     platformsComingLabel: "更多平台 · 陆续接入",
-    platformsComing: ["Instagram", "X", "Discord", "WeChat", "Zalo", "Viber", "KakaoTalk", "Signal"],
+    platformsComing: ["X", "Discord", "WeChat", "Viber", "KakaoTalk", "Signal"],
     statsTitle: "用工程事实说话",
     statsSubtitle: "每个数字都有仓内实测记录与运行台账背书——可举证、可复现，拒绝形容词式吹牛。",
     stats: [
@@ -1147,9 +1152,11 @@ const en: Dict = {
       { name: "Facebook", note: "Personal-page outreach is ReachX, not the ChatX inbox" },
       { name: "Douyin", note: "Enterprise mini-program DMs · customer speaks first · no personal web login" },
       { name: "TikTok", note: "Official customer service · no personal web login" },
+      { name: "Instagram", note: "Official Messaging API · public build does not web-login personal accounts by default" },
+      { name: "Zalo", note: "Official OA · 7-day window · text only · personal web login off by default" },
     ],
     platformsComingLabel: "More platforms · coming",
-    platformsComing: ["Instagram", "X", "Discord", "WeChat", "Zalo", "Viber", "KakaoTalk", "Signal"],
+    platformsComing: ["X", "Discord", "WeChat", "Viber", "KakaoTalk", "Signal"],
     statsTitle: "Engineering facts, not adjectives",
     statsSubtitle: "Every number is backed by in-repo measurements and production records — verifiable and reproducible.",
     stats: [
