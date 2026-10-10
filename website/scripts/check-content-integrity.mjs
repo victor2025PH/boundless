@@ -95,6 +95,9 @@ const BANNED_TARGET_FILES = [
   "app/en/chatx/tutorials/page.tsx",
   "app/order/page.tsx",
   "app/en/order/page.tsx",
+  // 报价注释与生成事实源（2026-10-10）：标准档句子跟 product.yaml
+  "lib/pricing.ts",
+  "lib/generated/product-facts.json",
 ];
 
 // ---------------------------------------------------------------------------

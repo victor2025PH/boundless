@@ -3,7 +3,8 @@
 定位
 ====
 2026-08-19 定价决议把「字符额度」升级为跨产品统一的 **Token**（AI 回复 / 专业翻译 /
-克隆语音 / AI 配图 / ASR 共用一个钱包；标准翻译永久免费不计量）。本模块是引擎侧
+克隆语音 / AI 配图 / ASR 共用一个钱包；标准翻译走本部署本地模型，0 Token，
+不调用付费接口，没配好时转人工）。本模块是引擎侧
 单一账本，风格与语义**完全对齐** ``quota_store``（那套字符额度已在生产验证）：
 
 - **check → do → record**：动作前 ``check_token_balance`` 闸门、成功后
@@ -13,8 +14,8 @@
 - **默认关**：``licensing.token_ledger.enabled``（config 缺省 False）——本模块当前
   **未接线**（P2 地基先落库和门禁，P3 才挂翻译/TTS/LLM 消费点），生产零行为变化。
 - **本地路由零计费**是调用方契约：标准翻译（ollama_mt/内置引擎）、预渲染语音命中、
-  缓存命中、本地 LLM 兜底 → 不调用 record（对齐官网「用尽自动降级永不断线」承诺，
-  降级路径本来就该是免费路径）。
+  缓存命中、本地 LLM 兜底 → 不调用 record（标准翻译与本地兜底按 0 Token；
+  不把「用尽自动降级且永不断线」写成对外承诺）。
 
 与字符额度的关系（迁移期并存）
 ==============================
@@ -55,7 +56,7 @@ TOKEN_EXHAUSTED_ERROR = "token_balance_exhausted"
 # ── 计价表（单位动作 → Token）。与官网 chatx-pricing.ts 同批改，勿单边动。────────
 # unit_size 语义：per=每 unit_size 个计量单位收 tokens 个 Token（不足一档向上取整）。
 TOKEN_RATES: Dict[str, Dict[str, Any]] = {
-    # 标准翻译：永久免费（列进表=对外口径完整；record 对 0 费率天然零 IO）
+    # 标准翻译：0 Token（本部署本地模型，不调用付费接口；没配好转人工）
     "std_translate":   {"tokens": 0,  "unit": "chars",   "unit_size": 1000},
     "ai_reply":        {"tokens": 10, "unit": "message", "unit_size": 1},
     "pro_translate":   {"tokens": 10, "unit": "chars",   "unit_size": 1000},
@@ -403,8 +404,8 @@ _WARNED_LIC_IDS: set = set()
 # （local_trial 同款模块级开关范式；配置热重载不重跑 bootstrap → 改开关需重启）。
 _ENABLED = False
 # enforce 闸（P6，licensing.token_ledger.enforce 默认关）：开=钱包耗尽时付费动作
-# **降级到免费路径**（AI 回复→本地模型 / 专业翻译→标准档 / 克隆声→edge 兜底），
-# 绝不阻断消息/翻译/语音本身——「永不断线」是比计费更高优先级的产品承诺。
+# 改走免费路径（AI 回复→本地模型 / 专业翻译→标准档 / 克隆声→edge 兜底）。
+# 标准档不调用付费翻译接口；本地模型没配好时转人工。本闸只建议降级，不在这里阻断发送。
 _ENFORCE = False
 
 # ── P5b 影子计数器（进程内观测，重启清零；权威计费口径是账本 token_spend）────────
@@ -519,8 +520,9 @@ def check_token_balance(
     """Token 闸门：{allowed, exhausted, balance, ...}。
 
     - enforce=False（默认）→ 余额耗尽仅 warn 一次/授权，恒放行（调用方走降级路径）；
-    - enforce=True → 余额 <=0 时 allowed=False（调用方以 TOKEN_EXHAUSTED_ERROR
-      切换免费引擎——**永不断线**是对外承诺，阻断的是付费动作不是消息本身）；
+    - enforce=True → 余额 <=0 时 allowed=False（调用方改走免费路径。标准翻译用本部署
+      本地模型，不调用付费接口；本地模型没配好时转人工。AI 回复与克隆语音若本地兜底
+      没有结果，现行调用方仍回落付费路径并计费）；
     - 自身任何异常 → 放行。
     """
     out: Dict[str, Any] = {"allowed": True, "exhausted": False, "balance": 0,
@@ -717,9 +719,9 @@ def should_degrade_action(action: str, *, lic_status: Any = None,
       防 enforce 一开就把存量/dogfood 部署全体打降级）+ 余额 <= 0。
     命中记影子计数 ``enforce_degrade_<action>``。自身异常一律 False（fail-open）。
 
-    ⚠ 本函数只建议「降级」，绝不建议「阻断」——调用方的降级目标必须是能出结果的
-    免费路径（本地 LLM / 标准翻译 / edge 兜底声）；无免费路径可去时调用方应照走
-    付费路径（永不断线 > 计费）。
+    ⚠ 本函数只建议「降级」，绝不建议「阻断」。标准翻译走本部署本地模型、不调用
+    付费接口；没配好时由翻译服务转人工。AI 回复与克隆语音若本地兜底没有结果，
+    现行调用方仍回落付费路径并计费（ai_client / tts_pipeline）。
     """
     try:
         if not _ENABLED or not _ENFORCE:
