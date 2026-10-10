@@ -1,5 +1,5 @@
 {
-  "generated": "2026-08-21",
+  "generated": "2026-10-10",
   "source": "products/*/product.yaml",
   "note": "Single source of SKUs for website pricing + license gating + order. Regenerate via platform/licensing/build_sku_registry.py.",
   "summary": {
@@ -290,7 +290,7 @@
           "unit": "month",
           "price": "0",
           "currency": "USD",
-          "note": "非卖品条目/下载即用/1,000 Token 每月/标准翻译免费不限量/1 账号防薅护栏/注册送 10,000"
+          "note": "非卖品条目/下载即用/1,000 Token 每月/标准翻译走本部署本地模型，没配好转人工/1 账号防薅护栏/注册送 10,000"
         },
         {
           "sku_id": "recharge-50",
@@ -762,7 +762,7 @@
       "unit": "month",
       "price": "0",
       "currency": "USD",
-      "note": "非卖品条目/下载即用/1,000 Token 每月/标准翻译免费不限量/1 账号防薅护栏/注册送 10,000"
+      "note": "非卖品条目/下载即用/1,000 Token 每月/标准翻译走本部署本地模型，没配好转人工/1 账号防薅护栏/注册送 10,000"
     },
     {
       "product": "zhiliao",

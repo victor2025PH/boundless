@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-10-10 17:51:54 · OpenCC s2twp + 術語釘 · 18305 鍵（源 zh 全量 18990）
+生成: 2026-10-10 19:10:47 · OpenCC s2twp + 術語釘 · 18305 鍵（源 zh 全量 18990）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -2187,7 +2187,7 @@ ZH_HANT = {
     'base.pill.quota_tip_expired': '體驗檔已到期：翻譯與 AI 草稿會暫停；註冊可領免費 100 萬字元',
     'base.pill.quota_tip_hours': '體驗檔還剩 {h} 小時',
     'base.pill.quota_tip_out': '額度已用盡：翻譯與 AI 草稿會暫停，收件箱與手動傳送不受影響',
-    'base.pill.quota_tip_token': 'Token 餘額已用完：AI 回覆走省耗模式、專業翻譯降級標準翻譯；充值後立即恢復',
+    'base.pill.quota_tip_token': 'Token 餘額已用完：AI 回覆走本地模型、專業翻譯降為標準檔（本地模型，沒配好轉人工）；充值後恢復',
     'base.pill.quota_tokens': 'Token',
     'base.pill.quota_trial': '體驗檔',
     'base.pill.sla_normal': '待處理',
@@ -13834,7 +13834,7 @@ ZH_HANT = {
     # ── mb_poster_headline ──
     'mb_poster_headline': '送你 {b} 字元免費 AI 額度',
     # ── mb_poster_note ──
-    'mb_poster_note': '註冊再送 10,000 體驗 Token · 標準翻譯永久免費',
+    'mb_poster_note': '註冊再送 10,000 體驗 Token · 標準翻譯走本地模型，沒配好轉人工',
     # ── mb_poster_steps ──
     'mb_poster_steps': '① 下載智聊 ChatX\u3000② 首啟嚮導填入邀請碼\u3000③ 雙方獎勵自動到賬',
     # ── mb_quota ──
@@ -13910,7 +13910,7 @@ ZH_HANT = {
     # ── mb_tok_by_action ──
     'mb_tok_by_action': '消耗構成（累計）',
     # ── mb_tok_degrade_note ──
-    'mb_tok_degrade_note': '餘額用盡不會斷線：AI 回覆自動切換免費本地模型、專業翻譯降級標準翻譯（免費不限量），補充 Token 包立即恢復。',
+    'mb_tok_degrade_note': '餘額用盡後，專業翻譯降為標準檔（本部署本地模型，不呼叫付費介面；沒配好轉人工），AI 回覆改走本地模型。補充 Token 後恢復。',
     # ── mb_tok_enforce_off ──
     'mb_tok_enforce_off': '當前僅觀測記賬（不扣減服務）',
     # ── mb_tok_enforce_on ──
@@ -30040,7 +30040,7 @@ ZH_HANT = {
     'ws.quotawall.agent_hint': '請聯絡你的管理員處理額度；恢復前翻譯與 AI 擬稿會暫停。',
     'ws.quotawall.body': '翻譯與 AI 擬稿已暫停；收件箱與手動傳送不受影響。馬上恢復：',
     'ws.quotawall.body_agent': '已用 {used} / 上限 {quota}，月初自動重置。請聯絡管理員調整你的月度額度；期間翻譯與 AI 擬稿暫停，收件箱與手動傳送不受影響。',
-    'ws.quotawall.body_token': '為保證不斷線，AI 回覆已切換免費本地模型、專業翻譯已降級為標準翻譯（免費不限量）；收件箱與手動傳送一切照常。充值後立即恢復滿血：',
+    'ws.quotawall.body_token': 'Token 餘額已用完：專業翻譯已降為標準檔（本部署本地模型，沒配好轉人工），AI 回覆改走本地模型；收件箱與手動傳送照常。充值後恢復：',
     'ws.quotawall.body_trial': '免費體驗額度已用完：翻譯與 AI 擬稿暫停，收件箱與手動傳送不受影響。註冊即可免費領 100 萬字元繼續用：',
     'ws.quotawall.buy': '🚀 購買 / 升級',
     'ws.quotawall.claim': '🎁 註冊領 100 萬字元（免費）',

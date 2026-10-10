@@ -139,8 +139,9 @@ export const tokenPackOffers: PriceOffer[] = chatxSchemaOffers()
     description: o.description,
   }));
 
-/** 通译 LingoX（2026-08-19 翻译免费化决议）：标准翻译永久免费不限量（不产生 offer，
- *  公平使用 200 万字符/日/授权）；专业翻译按 Token 计量（10/千字符，DeepL 认证 40/千字符，
+/** 通译 LingoX（2026-08-19 翻译免费化决议，2026-10-10 口径）：标准翻译走本部署
+ *  本地模型，不调用付费接口；没配好转人工（不产生 offer；公平使用 200 万字符/日/授权
+ *  只提醒不拦截）。专业翻译按 Token 计量（10/千字符，DeepL 认证 40/千字符，
  *  无订阅 SKU）；唯一订阅挂牌 = 翻译工作台（每坐席/月，纯翻译团队）。
  *  旧 charpack(59)/team(99)/pro(198) 停售 → legacyTranslateOffers 台账反查；
  *  charpack 未用完字符按 1.5M = 60,000 Token 等值换发。 */
@@ -153,7 +154,7 @@ export const translateOffers: PriceOffer[] = [
     currency: "USD",
     unit: "month",
     description:
-      "Per month per seat; translation-only teams: multi-seat unified inbox, customer journey, funnel counter. Standard translation is free & unlimited in every plan.",
+      "Per month per seat; translation-only teams: multi-seat unified inbox, customer journey, funnel counter. Standard translation uses this deployment's local model and does not call a paid API; a person takes the line if it is unset.",
   },
 ];
 
