@@ -289,6 +289,29 @@ export default function Navbar() {
                     <Download className="h-3.5 w-3.5 shrink-0 text-slate-600 transition group-hover/dl:text-neon-cyan" />
                   </a>
                 ))}
+                {/* 2026-10-11：智拓安装包（静态下载页 /downloads/zhituo/，仅中文，不走 localePath） */}
+                <a
+                  href="/downloads/zhituo/"
+                  onClick={() => {
+                    setDlOpen(false);
+                    track("download_menu_click", { client: "zhituo" });
+                  }}
+                  className="group/dl flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition hover:bg-white/5"
+                >
+                  <ProductIcon
+                    product="reachx"
+                    size={28}
+                    alt=""
+                    className="h-7 w-7 shrink-0 object-contain opacity-90 transition group-hover/dl:opacity-100"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm text-slate-200 group-hover/dl:text-white">{lang === "zh" ? "智拓 ReachX" : "ReachX"}</span>
+                    <span className="block truncate text-[11px] text-slate-500">
+                      {lang === "zh" ? "机房电脑一体安装包：手机矩阵内容发布与群控" : "Room PC all-in-one installer: phone-matrix publishing & control"}
+                    </span>
+                  </span>
+                  <Download className="h-3.5 w-3.5 shrink-0 text-slate-600 transition group-hover/dl:text-neon-cyan" />
+                </a>
                 <div className="mt-1 grid grid-cols-2 border-t border-white/5 pt-1">
                   <a
                     href={localePath(lang, "/download")}
@@ -433,6 +456,18 @@ export default function Navbar() {
                   <Download className="h-3.5 w-3.5 shrink-0 text-slate-600" />
                 </a>
               ))}
+              <a
+                href="/downloads/zhituo/"
+                onClick={() => {
+                  setOpen(false);
+                  track("download_menu_click", { client: "zhituo", where: "mobile" });
+                }}
+                className="flex min-h-[44px] items-center gap-2.5 rounded-lg px-2 py-2 text-sm text-slate-300 transition hover:bg-white/5 hover:text-white"
+              >
+                <ProductIcon product="reachx" size={24} alt="" className="h-6 w-6 shrink-0 object-contain" />
+                <span className="flex-1">{lang === "zh" ? "智拓 ReachX" : "ReachX"}</span>
+                <Download className="h-3.5 w-3.5 shrink-0 text-slate-600" />
+              </a>
               <a
                 href={localePath(lang, "/chatx/tutorials")}
                 onClick={() => {
