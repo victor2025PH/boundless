@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-10-09 01:35:58 · OpenCC s2twp + 術語釘 · 18287 鍵（源 zh 全量 18970）
+生成: 2026-10-10 00:59:34 · OpenCC s2twp + 術語釘 · 18304 鍵（源 zh 全量 18989）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -8226,11 +8226,13 @@ ZH_HANT = {
     'inbox.acct.name_it': '✏️ 起個名字',
     'inbox.acct.named_ok': '已命名為「{label}」',
     'inbox.acct.not_connected': '未接入',
+    'inbox.acct.note_douyin': '官方小程式 IM：填 Client Key / Secret 後用企業號掃碼授權；只能回覆客戶先發來的私信，個人號不是這條通道',
     'inbox.acct.note_instagram': '官方 API 接入：填 Facebook 開發者應用的主頁憑證即可，無需掃碼',
     'inbox.acct.note_line': '真機接入（adb 裝置）或協議掃碼',
     'inbox.acct.note_qq': '用你自己的 QQ 號：手機 QQ 掃碼即接入（智聊內建連線，無需裝其它程式）；可收發文字/圖片/語音/影片，建議用小號',
     'inbox.acct.note_qqbot': '官方 API 接入：填 AppID / AppSecret 即可，無需掃碼；只能被動回覆（單聊每條來話 60 分鐘內 4 條），正式環境需 IP 白名單',
     'inbox.acct.note_telegram': '支援手機掃碼 / API 授權直連，多賬號常駐線上',
+    'inbox.acct.note_tiktok': '官方 Business Messaging：填 App ID / Secret 後按註冊地授權；只能回覆對方先發來的私信，個人號沒有官方介面',
     'inbox.acct.note_wechat_kf': '企業微信官方通道：填自建應用憑證即接通（不掃碼），客戶掃客服二維碼即可諮詢；五步引導頁約 10 分鐘',
     'inbox.acct.note_whatsapp': '手機掃碼關聯登入（需本機連線服務在執行）',
     'inbox.acct.note_zalo': '官方 API 接入：填 Zalo OA access token 即可，無需掃碼；客服訊息限 7 天互動窗',
@@ -8882,6 +8884,7 @@ ZH_HANT = {
     'inbox.connect.hosted_ops_t': '不在伺服器旁？',
     'inbox.connect.hosted_ops_text': '請在執行 messenger-web 服務的伺服器上完成 Messenger 接入：\n1. 伺服器螢幕上已彈出 Facebook 官方登入視窗（若沒有，請讓坐席點「重新開啟登入視窗」）；\n2. 在視窗內用該賬號的郵箱 / 手機號 + 密碼登入，按提示完成兩步驗證；\n3. 登入成功後無需其他操作，工作台會自動確認並保持線上。',
     'inbox.connect.inapp_expired': '登入會話已超時。你的郵箱已記住、安全登入環境也保留著——點「重新開始」再來一次；若剛才已在手機上確認過，這次通常會直接放行。',
+    'inbox.connect.instr_douyin': '抖音企業號走官方小程式 IM：在「接入嚮導」裡填好 Client Key / Client Secret，再用企業號掃碼授權。只能回覆客戶先發來的私信；個人號不是這條通道。',
     'inbox.connect.instr_ig_web': '伺服器上已開啟 Instagram 官方登入視窗，請在該機器上完成登入（賬密 / 2FA）。完成後本視窗會自動確認——本方式不使用二維碼，無需用手機掃描。',
     'inbox.connect.instr_instagram': 'Instagram 走官方 API 接入：在「接入嚮導」裡填好 Meta 憑證即自動上線，無需掃碼。',
     'inbox.connect.instr_line': '在已連線的裝置 / 投屏端開啟 LINE 登入頁並用手機掃碼；登入成功後本視窗會自動確認。',
@@ -8897,6 +8900,7 @@ ZH_HANT = {
     'inbox.connect.instr_tg_phone': '輸入帶國際區號的手機號（大陸 11 位可自動補 +86），我們會把驗證碼發到 Telegram App 或簡訊。',
     'inbox.connect.instr_tg_phone_code': '驗證碼已發到你的 Telegram App / 簡訊，請輸入後繼續。',
     'inbox.connect.instr_tg_protocol': '用手機 Telegram：設定 → 裝置 → 關聯桌面裝置，掃描二維碼。',
+    'inbox.connect.instr_tiktok': 'TikTok 走官方 Business Messaging：在「接入嚮導」裡填好 App ID / Secret，再按註冊地完成授權。只能回覆對方先發來的私信；個人號沒有官方私信介面。',
     'inbox.connect.instr_wa_protocol': '用手機 WhatsApp：設定 → 已關聯的裝置 → 關聯新裝置，掃描二維碼。登入憑據僅儲存在本機；二維碼會定時重新整理，請在最新一張碼出現後儘快掃描。',
     'inbox.connect.instr_wechat_kf': '微信客服走企業微信官方接入：在「接入嚮導」裡填好企微自建應用的 CorpID / Secret 即自動上線，無需掃碼；應用需配可信 IP，客戶掃客服二維碼即可諮詢。',
     'inbox.connect.instr_whatsapp': '掃碼：在裝置 / 投屏端開啟 WhatsApp「關聯裝置」並用手機掃碼；官方 Cloud API：在「接入嚮導」裡填好 Meta 憑證即自動上線。',
@@ -10498,6 +10502,8 @@ ZH_HANT = {
     'inbox.kbd.miss': '知識庫 · 未命中',
     'inbox.kbd.miss_add_t': '知識庫裡沒有這一題——點選按客戶原話新建條目（標題 / 觸發詞已預填，儲存即向量化）',
     'inbox.kbd.miss_fixed': '知識庫 · 未命中 · 已按固定話術',
+    'inbox.kbd.miss_health': '檢視覆蓋',
+    'inbox.kbd.miss_health_t': '開啟知識庫健康行：黃燈會說明是還沒配嵌入、正在重試，還是已經失敗。每小時草稿上限不變。',
     'inbox.kbd.r.companion_chat': '陪聊閒聊',
     'inbox.kbd.r.media_desc': '圖片/影片描述',
     'inbox.kbd.r.other': '{code}',
@@ -10539,6 +10545,11 @@ ZH_HANT = {
     'inbox.l1r.platform_cap': '平台檔位封頂',
     'inbox.l1r.warmup': '新號預熱期',
     'inbox.l1r.weak_evidence': '訊息太短·證據不足',
+    'inbox.langunk.banner': '有 {n} 個會話還不知道對方語言',
+    'inbox.langunk.banner_t': '這是庫裡記下的會話語言，不是最後一條的猜測。回填指令碼預設只預覽，--apply 只補 unknown，不會改已經判出來的語言。',
+    'inbox.langunk.view': '只看當前列表裡的',
+    'inbox.langunk.view_off': '返回全部',
+    'inbox.langunk.window': '當前列表裡能看到 {shown} 個，庫裡一共 {n} 個',
     'inbox.langwarn.dismiss_t': '本會話不再提示',
     'inbox.langwarn.fix': '開啟自動翻譯',
     'inbox.langwarn.fix_t': '傳送時自動翻譯成客戶語言（與「譯文語言→自動」相同）',
@@ -10920,6 +10931,7 @@ ZH_HANT = {
     'inbox.pinrow.out_t': '這條是你正在處理的會話，不在當前篩選條件內，特意為你留在這裡',
     'inbox.plat.badge_wechat': 'PC',
     'inbox.plat.badge_wechat_kf': '企',
+    'inbox.plat.douyin_desc': '抖音企業號官方私信 · 客戶先開口才能回 · 24 小時內最多 6 條 · 填憑證後掃碼授權',
     'inbox.plat.instagram_desc': '官方 Messaging API 接入 · 專業賬號私信 · 填憑證即用（無掃碼）',
     'inbox.plat.line_desc': '協議掃碼 / 真機接入 · 群聊與 1v1 · 自動翻譯 / 引流話術',
     'inbox.plat.messenger_desc': '個人 Messenger 賬號接入 · AI 自動回覆私信 · 自動發現潛在客戶',
@@ -10931,6 +10943,7 @@ ZH_HANT = {
     'inbox.plat.qq_desc': 'QQ 個人號 · 用你自己的 QQ 號 · 文字/圖片/語音/影片 · 智聊內建連線，掃碼即用',
     'inbox.plat.qqbot_desc': 'QQ 開放平台官方機器人 · 單聊 / 群 @ 被動回覆（60 分鐘內 4 條）· 填 AppID/AppSecret 即用（無掃碼）',
     'inbox.plat.telegram_desc': 'MTProto 直連 · 收發文字/圖片/語音 · 實時翻譯',
+    'inbox.plat.tiktok_desc': 'TikTok 企業號官方私信 · 對方先開口才能回 · 48 小時內最多 10 條 · 註冊地決定能否發圖',
     'inbox.plat.web_desc': '網站訪客渠道 · 實時會話 · 引流轉化',
     'inbox.plat.wechat_kf_desc': '微信客服（企業微信官方通道）· 微信使用者掃客服二維碼即聊，不用加好友 · 填企微憑證即接通，不掃碼',
     'inbox.plat.whatsapp_desc': 'Web 掃碼接入 · 支援多賬號 · 媒體收發',
@@ -11683,6 +11696,8 @@ ZH_HANT = {
     'inbox.xl.lb_patch_t': '把譯文按原位置貼回圖片（純色底截圖效果最好；隨時可切回原圖核對）',
     'inbox.xl.lb_patched': '譯文圖',
     'inbox.xl.lb_src': '識別原文',
+    'inbox.xl.local_mt_gap': '標準翻譯轉人工：還沒配本地模型',
+    'inbox.xl.local_mt_gap_t': '免費檔只用本部署的本地翻譯模型。沒配地址和模型名時不會改打付費引擎，這條需要人來處理。',
     'inbox.xl.manage': '管理',
     'inbox.xl.manage_t': '檢視/管理所有已配置的預設譯文語言（全域性/各平台/各賬號）',
     'inbox.xl.media_no_caption': '此訊息沒有客戶文字可譯（AI 識別摘要不送翻譯）；要翻譯圖/影片裡的文字請用「識圖翻譯」',
@@ -15802,6 +15817,8 @@ ZH_HANT = {
     'msg_s292': '自有音色命令',
     # ── msg_s293 ──
     'msg_s293': 'TTS 聲音',
+    # ── msg_s293_eg ──
+    'msg_s293_eg': '例：zh-CN-XiaoxiaoNeural / alloy',
     # ── msg_s293_ph ──
     'msg_s293_ph': '例：zh-CN-XiaoxiaoNeural / alloy',
     # ── msg_s294 ──
@@ -27997,6 +28014,8 @@ ZH_HANT = {
     'tg_s084': '微軟 Edge TTS 配置',
     # ── tg_s085 ──
     'tg_s085': '聲線',
+    # ── tg_s085_eg ──
+    'tg_s085_eg': '例：zh-CN-XiaoxiaoNeural',
     # ── tg_s085_ph ──
     'tg_s085_ph': '例：zh-CN-XiaoxiaoNeural',
     # ── tg_s086 ──
