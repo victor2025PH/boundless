@@ -116,8 +116,10 @@ def test_router_describe_marks_deepl_fallback_to_ai():
 
 
 def test_service_engine_matrix_delegates():
+    # 能力矩阵委托：DeepL 不支持泰语时 effective 落到下一可用引擎。
+    # 免费档重排是另一条契约（test_free_tier_zero_cost_zhiyu），这里显式 legacy。
     router = EngineRouter([DeepLEngine("k"), _FixedEngine("ai", available=True)])
-    svc = TranslationService(engine_router=router)
+    svc = TranslationService(engine_router=router, free_tier_zero_cost=False)
     m = svc.engine_matrix("th")
     assert m["primary"] == "deepl" and m["effective"] == "ai"
 
@@ -621,6 +623,8 @@ async def test_opencc_engine_converts_and_yields():
     eng = OpenCCEngine()
     assert eng.available is True
     assert eng.supports_target("zh-tw") is True
+    assert eng.supports_target("zh-hk") is True
+    assert eng.supports_target("zh-hant") is True
     assert eng.supports_target("zh") is False
     assert eng.supports_target("yue") is False   # 粤语是语言变体不是字形转换
 

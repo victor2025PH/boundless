@@ -1123,7 +1123,9 @@ class OpenCCEngine:
         self._cc: Any = None
 
     def supports_target(self, target_lang: str) -> bool:
-        return str(target_lang or "").strip().lower() == "zh-tw"
+        # 简→繁。zh-hk / zh-hant 与 zh-tw 共用本引擎；用词风格由 profile（s2twp / s2hk）决定。
+        tgt = str(target_lang or "").strip().lower().replace("_", "-")
+        return tgt in {"zh-tw", "zh-hk", "zh-hant"} or tgt.startswith("zh-hant")
 
     @property
     def available(self) -> bool:
@@ -1172,9 +1174,8 @@ class OpenCCEngine:
 # 免费档要本地 MT，走 ollama_mt（含 api: openai / vLLM），不要走 custom: 或 ai。
 # custom OpenAI 兼容线一律付费，哪怕 base_url 在局域网。
 #
-# 缺省策略是 legacy：免费档照旧打到付费引擎（合并/部署不改变现网），
-# 但每次打到都记 would_block。配好 ollama_mt / opencc 后把
-# translation.free_tier_zero_cost 设成 enforce，才会真的拦住。
+# 缺省策略是 enforce：免费档只走本地引擎（ollama_mt，繁体变体优先 opencc）。
+# 显式 legacy / off 才恢复旧链，并在打到付费引擎时记 would_block。
 
 FREE_TIERS = frozenset({"", "std", "free"})
 _ENFORCE_GUARD_VALUES = frozenset({
@@ -1201,7 +1202,7 @@ def is_free_tier(tier: Optional[str]) -> bool:
 
 
 def free_tier_guard_enabled(value: Any) -> bool:
-    """``translation.free_tier_zero_cost``：缺省 / legacy = 不拦截；只有显式 enforce 才拦截。
+    """``translation.free_tier_zero_cost``：缺省 / enforce = 拦截；显式 legacy / off 才不拦截。
 
     布尔 True/False 直接采用（测试与构造参数）。legacy 仍会计 would_block，
     不改变计费档，也不取消这次调用。
@@ -1209,8 +1210,11 @@ def free_tier_guard_enabled(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if value is None:
+        return True
+    text = str(value).strip().lower()
+    if text in {"", "legacy", "off", "false", "0", "no", "disable", "disabled"}:
         return False
-    return str(value).strip().lower() in _ENFORCE_GUARD_VALUES
+    return text in _ENFORCE_GUARD_VALUES
 
 
 def is_paid_engine(eng: Any) -> bool:
@@ -1277,6 +1281,24 @@ def note_paid_engine_would_block(engine: str, *, target_lang: str = "") -> None:
         engine, target_lang=target_lang, verb="would_block",
         record=_paid_engine_recorder("record_paid_would_block"),
     )
+
+
+def order_free_tier_local_first(seq: List[Any], target_lang: str) -> List[Any]:
+    """免费档尝试序：一般目标语 ollama_mt 在前；繁体变体 opencc 在前。付费引擎留在最后。"""
+    tgt = str(target_lang or "").strip().lower().replace("_", "-")
+    opencc_first = tgt in {"zh-tw", "zh-hk", "zh-hant"} or tgt.startswith("zh-hant")
+
+    def rank(eng: Any) -> int:
+        name = getattr(eng, "name", "")
+        if name == "opencc":
+            return 0 if opencc_first else 1
+        if name == "ollama_mt":
+            return 1 if opencc_first else 0
+        if is_zero_cost_engine(eng):
+            return 2
+        return 3
+
+    return sorted(list(seq), key=rank)
 
 
 def skip_paid_for_free_tier(
@@ -1383,16 +1405,19 @@ class EngineRouter:
         sim = num / (da * db)
         return round(sim, 3) if sim < self._sem_min else None
 
-    def describe(self, target_lang: str) -> Dict[str, Any]:
+    def describe(self, target_lang: str, *, free_tier: bool = False) -> Dict[str, Any]:
         """对指定目标语产出引擎能力矩阵，供前端提前提示「主引擎是否兜底」。
 
         返回 {target_lang, primary, effective, engines:[{engine,available,supports}]}。
         primary/rows 按该目标语的**实际尝试序**（含 per_lang_order 覆写）；
         effective = 首个「可用且支持该目标语」的引擎（即实际会命中的）。
+        ``free_tier=True`` 时本地引擎排到前面，付费引擎不计入 effective。
         """
         rows: List[Dict[str, Any]] = []
         effective = "none"
         seq = self._engines_for(target_lang)
+        if free_tier:
+            seq = order_free_tier_local_first(seq, target_lang)
         for eng in seq:
             name = getattr(eng, "name", "?")
             avail = bool(getattr(eng, "available", False))
@@ -1400,10 +1425,12 @@ class EngineRouter:
                 supports = bool(eng.supports_target(target_lang)) if hasattr(eng, "supports_target") else True
             except Exception:
                 supports = True
+            blocked = bool(free_tier and is_paid_engine(eng))
             rows.append({"engine": name, "available": avail, "supports": supports,
                          "label": str(getattr(eng, "label", "") or name),
-                         "tone": bool(getattr(eng, "supports_tone", False))})
-            if effective == "none" and avail and supports:
+                         "tone": bool(getattr(eng, "supports_tone", False)),
+                         "free_tier_blocked": blocked})
+            if effective == "none" and avail and supports and not blocked:
                 effective = name
         return {
             "target_lang": target_lang,
@@ -1565,6 +1592,8 @@ class EngineRouter:
         best_key: Tuple[int, float] = (-1, -1.0)
         saw_low_conf = False                       # 本次调用是否发生过低置信（→ 切换观测）
         seq = self._engines_for(target_lang)
+        if free_tier_enforce and is_free_tier(tier):
+            seq = order_free_tier_local_first(seq, target_lang)
         call_primary = getattr(seq[0], "name", "none") if seq else "none"
         for eng in seq:
             if not getattr(eng, "available", False):

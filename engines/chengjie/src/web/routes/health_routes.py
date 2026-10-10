@@ -35,6 +35,23 @@ def register_health_routes(app, ctx) -> None:
             issues.append({"level": level, "category": category, "title": title,
                            "detail": detail, "action_url": action_url, "action_label": action_label})
 
+        # 0. 免费档本地翻译模型（没配好就转人工，不改打付费引擎）
+        try:
+            svc = getattr(getattr(request, "app", None), "state", None)
+            svc = getattr(svc, "translation_service", None)
+            if svc is not None and getattr(svc, "free_tier_zero_cost", False):
+                matrix = svc.engine_matrix("en")
+                if matrix.get("local_mt_gap"):
+                    _issue(
+                        "warn", "翻译",
+                        "免费档没有可用的本地翻译模型",
+                        "在本部署的配置里填写 translation.engines.ollama_mt 的 base_url 和 model。"
+                        "填好之前，标准档翻译转人工，不会改用付费引擎。",
+                        "/workspace", "查看收件箱",
+                    )
+        except Exception:
+            pass
+
         # 1. 模板配置检查（已迁移至 KB，仅做兼容提示）
         tpl = config_manager.get_dynamic_templates_config() or {}
         if not tpl:

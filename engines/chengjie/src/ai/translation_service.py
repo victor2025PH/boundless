@@ -174,7 +174,7 @@ class TranslationService:
         per_lang_order: Optional[Dict[str, Any]] = None,
         semantic_embed_fn: Optional[Any] = None,
         semantic_min_similarity: float = 0.65,
-        free_tier_zero_cost: bool = False,
+        free_tier_zero_cost: bool = True,
     ) -> None:
         self.ai_client = ai_client
         self.default_target_lang = normalize_lang(default_target_lang) or "zh"
@@ -190,9 +190,9 @@ class TranslationService:
         self._glossary_version = str(glossary_version or "")
         self._glossary_protect = [str(t) for t in (glossary_protect or []) if t]
         self._cost_tracking = bool(cost_tracking)
-        # 免费档零成本守卫。默认关（legacy）：引擎链与部署前一致，免费请求打到
-        # 付费引擎时只记 would_block。配好 ollama_mt/opencc 后设 True（配置值 enforce）
-        # 才会拦住。计费档与这个开关无关。
+        # 免费档零成本守卫。默认开（enforce）：只走 ollama_mt / opencc。
+        # 显式 False（配置 legacy）才恢复旧链，打到付费引擎时只记 would_block。
+        # 计费档与这个开关无关。
         self.free_tier_zero_cost = bool(free_tier_zero_cost)
         # P56：多引擎路由（默认 [AIEngine(ai_client)]，行为与改造前一致）
         from src.ai.translation_engines import AIEngine, EngineRouter
@@ -260,7 +260,8 @@ class TranslationService:
         """
         target = normalize_lang(target_lang) or self.default_target_lang
         try:
-            matrix = self._router.describe(target)
+            matrix = self._router.describe(
+                target, free_tier=bool(self.free_tier_zero_cost))
         except Exception:
             return {"target_lang": target, "primary": "none",
                     "effective": "none", "engines": []}
@@ -275,6 +276,15 @@ class TranslationService:
                     row["ok_rate"] = st.get("success_rate")
         except Exception:
             pass
+        matrix["free_tier_enforce"] = bool(self.free_tier_zero_cost)
+        local_ready = any(
+            r.get("available") and r.get("supports") and not r.get("free_tier_blocked")
+            and r.get("engine") in ("ollama_mt", "opencc")
+            for r in matrix.get("engines") or []
+        )
+        matrix["local_mt_ready"] = bool(local_ready) or not self.free_tier_zero_cost
+        matrix["local_mt_gap"] = (
+            "" if matrix["local_mt_ready"] else "local_mt_unconfigured")
         return matrix
 
     async def compare_translations(
@@ -374,11 +384,10 @@ class TranslationService:
         ``tier``（2026-08-19 Token 定价 P5b）：翻译服务层级——计费跟**显式请求的层级**
         走，绝不跟引擎回落走（本地引擎失败时，标准请求不能被按专业价扣）：
         - ``""``/``"std"``/``"free"``：标准翻译＝免费（只记公平使用水表）。
-          ``free_tier_zero_cost`` **默认关**（配置 ``legacy``）：引擎链与打开此功能前
-          一致；免费请求若打到付费引擎，只记 ``would_block`` 日志和计数，调用照旧发生。
-          配好零成本引擎（ollama_mt / opencc）后把配置设成 ``enforce``（构造参数 True）：
-          标准档只调用 ollama_mt / opencc，付费 API 与主对话 LLM 被 EngineRouter 跳过；
-          没有可用零成本引擎或全部失败 → ok=False、原文回填、``needs_human``。
+          ``free_tier_zero_cost`` **默认开**（配置 ``enforce``）：标准档先走本地
+          ollama_mt，繁体变体（zh-tw / zh-hk / zh-hant）先走 opencc。付费 API 与主对话
+          LLM 被跳过。没有可用本地引擎或全部失败 → ok=False、原文回填、``needs_human``，
+          不改打付费引擎。显式 ``legacy``（构造参数 False）才恢复旧链，并只记 would_block。
         - ``"pro"``：专业翻译（术语锁定/翻译记忆语义）＝10 Token/千字符，引擎链不设防；
         - ``"certified"``：认证翻译＝优先 DeepL 引擎（独立缓存桶），真由 DeepL 交付
           才计 40 Token/千字符；回落其它引擎按 pro 价 10 计——绝不按未交付的价值收费。

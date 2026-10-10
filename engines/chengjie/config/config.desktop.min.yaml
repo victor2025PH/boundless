@@ -92,11 +92,16 @@ web_admin:
   port: 18799                       # 桌面壳 launcher 经 AITR_WEB_PORT 覆盖（与 config.json 默认对齐）
   auth_token: admin                 # 桌面壳 launcher 经 AITR_WEB_TOKEN 覆盖（与 config.json 默认对齐）
 
-# 翻译：只填 ai.* 即可用（首启向导保存 Key 后「翻译生效」的最短路径）
+# 翻译：免费/标准档默认 enforce，先走本部署的本地模型（地址留空，由安装环境填写）。
+# 没配 base_url/model 时标准档转人工，不改打付费引擎。付费档仍可按 order 用到 ai。
 translation:
+  free_tier_zero_cost: enforce
   engines:
-    order: ["ai"]
+    order: ["ollama_mt", "opencc", "ai"]
     timeout_sec: 8
+    ollama_mt:
+      base_url: ""
+      model: ""
 
 # 统一收件箱持久层（安全默认开；与 example 对齐）
 inbox:

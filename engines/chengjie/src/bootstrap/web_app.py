@@ -913,7 +913,7 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                     _engines = build_engines(_tr_cfg, assistant.ai_client)
                     from src.ai.translation_engines import free_tier_guard_enabled
                     _free_tier_guard = free_tier_guard_enabled(
-                        _tr_cfg.get("free_tier_zero_cost", "legacy"))
+                        _tr_cfg.get("free_tier_zero_cost", "enforce"))
                     # K：引擎置信度智能切换（默认关 → min_confidence=0 行为不变）
                     _conf_sw = (_tr_cfg.get("engines") or {}).get("confidence_switch") or {}
                     _min_conf = (
@@ -959,6 +959,14 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                         len(_glossary.terms), len(_glossary.protect),
                         _free_tier_guard,
                     )
+                    if _free_tier_guard:
+                        _mt = next((e for e in _engines if getattr(e, "name", "") == "ollama_mt"), None)
+                        if _mt is None or not getattr(_mt, "available", False):
+                            assistant.logger.warning(
+                                "免费档翻译已 enforce，但 ollama_mt 不可用（本部署需配置 "
+                                "translation.engines.ollama_mt 的 base_url 与 model，不要写死某台机器）。"
+                                "标准档翻译将转人工，不会改打付费引擎。繁体变体在装了 opencc 时仍可本地转换。"
+                            )
 
                     # ── Phase B：可选统计语种检测（缺库自动跳过，仅精修含糊拉丁） ──
                     try:
