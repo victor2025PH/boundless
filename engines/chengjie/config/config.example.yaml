@@ -299,15 +299,16 @@ whatsapp_cloud:
   unsupported_type_reply: "目前仅支持文字消息。"
   # 24h 窗口外回退模板（须先在 Meta 审核通过）。name 留空且 by_language 无 name = 不回退
   # （窗口外失败 → 进待人工）。会话语言 zh/en/tl（Taglish、fil、ceb 归 tl）命中 by_language；
-  # 对不上用 default_language。只填顶层 name/language（旧形状）时不按语言分流。
+  # 未知、为空或不在这三档：不发模板（不改用 default_language，也不拿中文顶上）。
+  # 只填顶层 name/language（旧形状）时不按语言分流。
   # 正文与提交清单：config/presets/packs/<包>/wa_fallback_templates.yaml
   # 与 docs/wa_cloud_window_fallback_templates.md。博彩模板只在 config/presets/internal/，
   # 名字前缀 wa_fb_gamble_，公开包打不进去，公开形态也不会选中。
   window_fallback_template:
-    name: ""                       # 旧形状：单模板。与 by_language 同时存在时只作最后回落
+    name: ""                       # 旧形状：单模板。写了 by_language 之后不再用它顶未知语言
     language: "zh_CN"
     text_param: true               # 把事项文本作为正文 {{1}}（by_language 可再限 param_max_chars）
-    default_language: zh           # 会话语言未知或不在 zh/en/tl 时用哪一档
+    # default_language 不再参与选择。留着只为旧配置还能被读到，未知语言不会改发中文。
     by_language: {}
     # 审核通过后按所选行业包填名字（示例为跨境私域中性模板，勿填 wa_fb_gamble_*）：
     # by_language:

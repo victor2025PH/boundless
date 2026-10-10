@@ -7,7 +7,8 @@
 
 - 只填顶层 ``name`` / ``language`` / ``text_param``（旧形状）→ 不看会话语言，行为与以前一致。
 - ``by_language.{zh,en,tl}`` 有 name → 会话语言命中该条；Taglish / fil / ceb 归 ``tl``。
-  对不上时用 ``default_language``（缺省 ``zh``），再不行才回落顶层旧模板。
+  会话语言未知、为空，或不在这三档里：不改用 ``default_language``，也不拿另一种语言顶上。
+  名字为空 = 不发。只填顶层 ``name``（旧形状）时仍不看会话语言。
 - 名字以 ``wa_fb_gamble_`` 开头的模板只允许内部包。未设置版本环境变量、以及
   除字面 ``internal`` 以外的值，都按公开包丢掉这些名字（与 ``product_edition`` 相同）。
 
@@ -163,20 +164,22 @@ def select_window_fallback(
         lang_key = normalize_fallback_lang(block.get("language"))
         return _pack_choice(block, legacy_name, lang_key, "legacy")
 
+    # 有按语言分档时，只发这一档里审核过的名字。未知语言不落到 default_language
+    # （从前缺省是 zh，会把中文模板发给语言还没判出来的客户）。
     lang = normalize_fallback_lang(conv_lang)
-    default = normalize_fallback_lang(block.get("default_language")) or "zh"
-    tried = []
+    raw = str(conv_lang or "").strip().lower().replace("_", "-")
+    unknownish = raw in {"", "unknown", "auto", "und"}
     if lang:
-        tried.append((lang, "by_language"))
-    if default not in (lang,):
-        tried.append((default, "default_language"))
-    for key, source in tried:
-        name = usable.get(key) or ""
+        name = usable.get(lang) or ""
         if name:
-            return _pack_choice(by[key], name, key, source)
-    if legacy_name:
-        return _pack_choice(block, legacy_name, normalize_fallback_lang(block.get("language")), "legacy")
-    return _empty()
+            return _pack_choice(by[lang], name, lang, "by_language")
+        missed = _empty()
+        missed["source"] = "unapproved"
+        missed["resolved_lang"] = lang
+        return missed
+    missed = _empty()
+    missed["source"] = "lang_unknown" if unknownish else "unsupported_lang"
+    return missed
 
 
 def fallback_configured(block: Any, *, edition: str = "") -> bool:

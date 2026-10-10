@@ -26,14 +26,14 @@ whatsapp_cloud:
     name: ""
     language: zh_CN
     text_param: true
-    default_language: zh
+    # default_language 不再参与选择。未知语言不发模板。
     by_language:
       zh: {name: cbp_svc_followup_zh, language: zh_CN, text_param: true, param_max_chars: 80}
       en: {name: cbp_svc_followup_en, language: en, text_param: true, param_max_chars: 80}
       tl: {name: cbp_svc_followup_fil, language: fil, text_param: true, param_max_chars: 80}
 ```
 
-只填顶层 `name` / `language` / `text_param`、不写 `by_language` 时，行为与旧的单模板一样，不看会话语言。
+只填顶层 `name` / `language` / `text_param`、不写 `by_language` 时，行为与旧的单模板一样，不看会话语言。写了 `by_language` 之后，会话语言未知、为空，或不在 zh/en/tl：名字为空，不发。成功时响应里的 `fallback_lang` 是命中的档，`fallback_template_lang` 是发给 Meta 的语言码。
 
 ## 公开包 · 跨境私域 `cross_border_private`
 
