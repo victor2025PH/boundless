@@ -116,10 +116,27 @@ def test_i18n_keys_present_in_zh_en_hant():
     assert keys == set(pack.EN) == set(pack.ZH_HANT)
     for k in ("err.inbox.send_blocked_rate_warmup", "err.inbox.send_blocked_rate_script",
               "inbox.gate.rate_warmup", "inbox.gate.rate_script", "inbox.gate.rate_frees",
-              "inbox.failr.rate_warmup"):
+              "inbox.failr.rate_warmup", "inbox.gate.rate_degraded",
+              "inbox.gate.rate_degraded_t"):
         assert k in keys
     from src.web.web_i18n import get_translations
-    assert get_translations("zh_hant").get("inbox.gate.rate_frees") == "預計 {time} 恢復"
+    hant = get_translations("zh_hant")
+    assert hant.get("inbox.gate.rate_frees") == "預計 {time} 恢復"
+    assert "{n}" in hant.get("inbox.gate.rate_degraded", "")
+
+
+def test_fail_open_snapshot_reports_count_without_blocking(monkeypatch):
+    from src.inbox.send_gate_status import send_gate_snapshot
+
+    def boom(*_a, **_k):
+        raise RuntimeError("db")
+
+    monkeypatch.setattr(srg, "get_store", boom)
+    snap = send_gate_snapshot("telegram", "acc1", "u9", config={})
+    assert snap is not None and snap["blocked"] is False
+    assert snap["rate_degraded"]["count"] >= 1
+    assert "rate" not in snap
+    assert srg.DEFAULTS["script_daily_cap"] == 20
 
 
 def test_frontend_banner_and_fail_reason_wired():
@@ -129,3 +146,9 @@ def test_frontend_banner_and_fail_reason_wired():
     i_rate = html.index("send_rate_gate:warmup')>=0")
     i_daily = html.index("low.indexOf('send_gate:daily_cap')>=0")
     assert i_rate < i_daily, "限速闸短语必须在 warmup_cap 通配之前"
+    start = html.index("if(!g.blocked && degraded")
+    end = html.index("软信息态", start)
+    degraded = html[start:end]
+    assert "inbox.gate.rate_degraded" in degraded
+    assert "grayscale" not in degraded
+    assert "btn.style.filter=''" in degraded

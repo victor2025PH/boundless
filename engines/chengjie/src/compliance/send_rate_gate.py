@@ -415,11 +415,31 @@ def get_store(config: Any = None) -> SendRateStore:
     return inst
 
 
+_DEGRADED_LOCK = threading.Lock()
+_DEGRADED_COUNT = 0
+
+
+def note_degraded() -> int:
+    """判定异常、按 fail-open 放行一次。返回进程内累计次数。不改变上限。"""
+    global _DEGRADED_COUNT
+    with _DEGRADED_LOCK:
+        _DEGRADED_COUNT += 1
+        return _DEGRADED_COUNT
+
+
+def degraded_count() -> int:
+    with _DEGRADED_LOCK:
+        return _DEGRADED_COUNT
+
+
 def reset_for_tests() -> None:
+    global _DEGRADED_COUNT
     with _INST_LOCK:
         for inst in _INSTANCES.values():
             inst.close()
         _INSTANCES.clear()
+    with _DEGRADED_LOCK:
+        _DEGRADED_COUNT = 0
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -516,9 +536,11 @@ def check(
                     None if res.get("age_days") is None else round(float(res["age_days"]), 1))
         return res
     except Exception:
-        logger.warning("[send-rate-gate] 判定异常（放行）%s:%s", p, a, exc_info=True)
+        n = note_degraded()
+        logger.warning("[send-rate-gate] 判定异常（放行，第 %s 次）%s:%s", n, p, a, exc_info=True)
         return {"allowed": True, "reason": "error", "origin": res.get("origin") or "",
-                "used": 0, "cap": 0, "age_days": None, "in_warmup": False}
+                "used": 0, "cap": 0, "age_days": None, "in_warmup": False,
+                "degraded": True, "degraded_count": n}
 
 
 def frees_at(platform: str, account_id: str, *, reason: str, cap: int, config: Any = None,
@@ -604,4 +626,5 @@ __all__ = [
     "gate_cfg", "enabled", "classify_origin", "script_daily_cap_for", "origin_to_sent_by", "in_script_scope",
     "set_script_scope", "reset_script_scope", "mark_script_from_request", "SendRateStore",
     "get_store", "reset_for_tests", "check", "record_external", "snapshot",
+    "note_degraded", "degraded_count",
 ]

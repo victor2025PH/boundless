@@ -26,6 +26,8 @@ ZH = {
     # 失败原因短语（消息气泡悬停）
     "inbox.failr.rate_warmup": "预热期限速：已达建议上限，暂停 AI 与坐席发送",
     "inbox.failr.rate_script": "脚本测试已达每号日上限",
+    "inbox.gate.rate_degraded": "发送限速闸刚才异常了 {n} 次，这些发送已放行，没有改日上限。请看日志。",
+    "inbox.gate.rate_degraded_t": "闸门坏掉时不会把全部发送卡死。次数是本进程里 fail-open 的累计。",
 }
 
 EN = {
@@ -46,6 +48,8 @@ EN = {
     "inbox.gate.rate_frees_unknown": "resumes once the oldest send is 24 hours old",
     "inbox.failr.rate_warmup": "Warm-up rate limit: recommended cap reached, AI and agent sending paused",
     "inbox.failr.rate_script": "Script testing hit the per-account daily cap",
+    "inbox.gate.rate_degraded": "The send rate gate failed open {n} time(s). Those sends went through. The daily cap was not raised. Check the log.",
+    "inbox.gate.rate_degraded_t": "A broken gate does not freeze every send. The count is fail-open events in this process.",
 }
 
 ZH_HANT = {
@@ -64,4 +68,6 @@ ZH_HANT = {
     "inbox.gate.rate_frees_unknown": "最早一則滿 24 小時後自動恢復",
     "inbox.failr.rate_warmup": "預熱期限速：已達建議上限，暫停 AI 與坐席傳送",
     "inbox.failr.rate_script": "腳本測試已達每帳號日上限",
+    "inbox.gate.rate_degraded": "傳送限速閘剛才異常了 {n} 次，這些傳送已放行，沒有改日上限。請看日誌。",
+    "inbox.gate.rate_degraded_t": "閘門壞掉時不會把全部傳送卡住。次數是本行程裡 fail-open 的累計。",
 }
