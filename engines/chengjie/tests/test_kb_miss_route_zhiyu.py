@@ -132,6 +132,11 @@ async def test_policy_already_logged_is_not_double_counted(tmp_path):
     assert _misses(kb)[Q] == 1 and len(_drafts(ln)) == 1
 
 
+def test_default_hourly_cap_stays_thirty():
+    assert kmr.DEFAULT_DRAFTS_PER_HOUR == 30
+    assert kmr._drafts_per_hour({}) == 30
+
+
 @pytest.mark.asyncio
 async def test_rate_limit_and_switch_off(tmp_path):
     kb = _kb(tmp_path)
