@@ -27,6 +27,10 @@ function imagePathForTheme(idx: number): string {
 // 优惠展开（下标 = getDay()，周日=0）；其他产品线只在帖内作一句配角带过（红线见 system prompt）。
 // 注意：不设「客户故事」类选题——生成模型会不受控地编造业绩数字，改用「场景拆解」讲能力。
 // Real-time web/news ingestion would need a search API key (see roadmap).
+// historical-draft: not current product claims（2026-10-10 注记，选题字符串未改）
+// 下面七档是 2026-08-21 的频道日更原稿，不是现行会员口径。现行标准档：
+// 标准翻译走本部署的本地模型，不调用付费接口；没配好时转人工。
+export const DATED_CAMPAIGN_DRAFT = true;
 const THEMES = [
   "社群福利 · 智聊 ChatX 下载即免费开始：标准翻译不限量 + 注册送体验 Token，新人 6U 大礼包双倍到账",
   "产品力 · 智聊统一收件箱：Telegram / WhatsApp / Messenger / LINE 全渠道消息一个工作台接住",

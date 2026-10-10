@@ -74,6 +74,20 @@
 > 幻缘/FateX 产品定义与九产品口径（`PRODUCT_ORDER`/`PRODUCT_COUNT`），扫它会对合法
 > 内容误报；brand.ts 的高风险词（防封类）已于同日清零，靠 review 守住。
 
+## 过期活动稿（只注记，不改写）
+
+下列文件是 2026-08 / 2026-09 的活动、视频与日更选题原稿。2026-10-10 只加
+`historical-draft: not current product claims` 注记，正文未改。它们不是现行会员口径。
+现行标准档仍是：标准翻译走本部署的本地模型，不调用付费接口；没配好时转人工。
+
+- `website/lib/daily-content.ts`（`DATED_CAMPAIGN_DRAFT`）
+- `deliverables/video_songs_20260916/`
+- `deliverables/video_sample_20260827/`
+- `docs/实施52_官网顾问小界_频道日更ChatX聚焦_三视角定传方案_2026-08.md`
+- `docs/实施77_智聊获客与营销作战方案_渠道打法与90天执行清单_2026-08.md`
+- `docs/实施77A_TG广告弹药包_频道定向素材与投放SOP_2026-08.md`
+- `docs/方案_视频教程与介绍体系_竖屏横屏唱歌式场景_2026-09-16.md`
+
 ## 维护规则
 
 1. **新增对外数字必须先入此表**：给出分级与举证来源后才可进文案；无法举证的数字一律不上线。
