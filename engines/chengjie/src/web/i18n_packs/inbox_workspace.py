@@ -2109,6 +2109,8 @@ ZH = {
     "inbox.kbd.r.other": "{code}",
     "inbox.kbd.chip_t": "这条草稿的知识库使用情况：客服 / 销售人设每条必查；陪聊人设闲聊不查。查无时按固定话术回一次，客户再追问自动标需人工",
     "inbox.kbd.miss_add_t": "知识库里没有这一题——点击按客户原话新建条目（标题 / 触发词已预填，保存即向量化）",
+    "inbox.kbd.miss_health": "查看覆盖",
+    "inbox.kbd.miss_health_t": "打开知识库健康行：黄灯会说明是还没配嵌入、正在重试，还是已经失败。每小时草稿上限不变。",
     # Q-21 B（#302 / Y82GWM）：会话语言计划 chip（lp-）——对方语言判不出时按人设 / 账号默认语言起草，明说
     "inbox.lp.fallback_persona": "对方语言未知 · 按人设语言（{lang}）回",
     "inbox.lp.fallback_default": "对方语言未知 · 按账号默认语言（{lang}）回",
@@ -5381,6 +5383,8 @@ EN = {
     "inbox.kbd.r.other": "{code}",
     "inbox.kbd.chip_t": "How this draft used the knowledge base: support / sales personas query it on every reply; companion personas skip it for small talk. With no match it sends one fixed line, and a repeat question is flagged for a human",
     "inbox.kbd.miss_add_t": "The knowledge base has no entry for this question — click to create one from the customer's words (title / triggers pre-filled, vectorized on save)",
+    "inbox.kbd.miss_health": "Coverage",
+    "inbox.kbd.miss_health_t": "Open the knowledge health row. Yellow means the embedding endpoint is not configured, a retry is in progress, or the last run failed. The hourly draft cap is unchanged.",
     # Q-21 B (#302 / Y82GWM): conversation language-plan chip (lp-)
     "inbox.lp.fallback_persona": "Peer language unknown · replying in persona language ({lang})",
     "inbox.lp.fallback_default": "Peer language unknown · replying in account default ({lang})",

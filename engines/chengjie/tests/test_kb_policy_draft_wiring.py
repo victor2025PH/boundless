@@ -243,5 +243,9 @@ def test_miss_chip_deep_links_to_knowledge_prefill():
     kb = (root / "src" / "web" / "templates" / "knowledge.html").read_text(encoding="utf-8")
     assert "function openKbMissAdd" in inbox
     assert "/knowledge?new=1&q=" in inbox
+    assert "function openKbEmbedHealth" in inbox
+    assert "/knowledge?health=embed" in inbox
     assert "kb2_prefill_scenario" in kb
     assert "_qs.get('new')" in kb
+    assert "_qs.get('health')==='embed'" in kb
+    assert 'id="embed-health-row"' in kb

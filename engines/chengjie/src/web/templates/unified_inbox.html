@@ -17831,7 +17831,7 @@ async function _loadDraftsBody(c){
           <span class="unsent-badge" title="${esc(window.T('inbox.draft_mini.unsent_t'))}">${esc(window.T('inbox.draft_mini.unsent'))}</span>
           ${l1txt?`<span class="draft-l1r-chip" title="${esc(window.T('inbox.l1r.chip_t'))}">${esc(l1txt)}</span>`:''}
           ${kbdTxt?(_kbDecisionMiss(dr)
-            ?`<button type="button" class="draft-l1r-chip draft-kbd-chip is-miss is-link" title="${esc(window.T('inbox.kbd.miss_add_t'))}" onclick="event.stopPropagation();openKbMissAdd('${esc(dr.peer_last_text||dr.peer_text||'')}')">${esc(kbdTxt)} ＋</button>`
+            ?`<span class="draft-l1r-chip draft-kbd-chip is-miss">${esc(kbdTxt)} <button type="button" class="draft-kbd-health" title="${esc(window.T('inbox.kbd.miss_health_t'))}" onclick="event.stopPropagation();openKbEmbedHealth()">${esc(window.T('inbox.kbd.miss_health'))}</button> <button type="button" class="draft-kbd-add" title="${esc(window.T('inbox.kbd.miss_add_t'))}" onclick="event.stopPropagation();openKbMissAdd('${esc(dr.peer_last_text||dr.peer_text||'')}')">＋</button></span>`
             :`<span class="draft-l1r-chip draft-kbd-chip" title="${esc(window.T('inbox.kbd.chip_t'))}">${esc(kbdTxt)}</span>`):''}
           ${ageTxt?`<span class="draft-age-chip${blocked?' is-stale':''}" title="${esc(window.T('inbox.draft_mini.age_t'))}">${esc(ageTxt)}</span>`:''}
           ${blocked?`<span class="draft-block-chip" title="${esc(blockTip)}">${esc(blocked==='replied'?window.T('inbox.draft_mini.chip_replied'):window.T('inbox.draft_mini.chip_stale'))}</span>`:''}
@@ -18126,7 +18126,12 @@ function openKbMissAdd(peerText){
   _uiBeacon('kbd.miss_add');
   window.open(_kbMissAddUrl(peerText),'_blank');
 }
+function openKbEmbedHealth(){
+  _uiBeacon('kbd.miss_health');
+  window.open('/knowledge?health=embed','_blank');
+}
 window.openKbMissAdd=openKbMissAdd;
+window.openKbEmbedHealth=openKbEmbedHealth;
 /* Q-21 B（#302 / Y82GWM）：会话语言计划 chip（lp-）。起草链每稿登记一份
    {reply_lang, decided_by, persona_lang, peer_known, fallback}；fallback=对方语言判不出、按人设 /
    账号默认语言起草 → 会话头 #lp-bar + 稿头 #lp-cdraft 同文案；对方语言有证据 → 两处都不显。
@@ -18206,11 +18211,11 @@ function _cdraftRender(){
     const ktxt=_kbDecisionText(d);
     if(ktxt){
       const miss=_kbDecisionMiss(d);
-      kbd.style.display=''; kbd.textContent=miss?(ktxt+' ＋'):ktxt;
-      kbd.title=window.T(miss?'inbox.kbd.miss_add_t':'inbox.kbd.chip_t');
+      kbd.style.display=''; kbd.textContent=ktxt;
+      kbd.title=window.T(miss?'inbox.kbd.miss_health_t':'inbox.kbd.chip_t');
       kbd.classList.toggle('is-miss', miss); kbd.classList.toggle('is-link', miss);
-      // P1-3：未命中 → 点开知识库新建抽屉预填客户原话；其余态不可点
-      kbd.onclick=miss?function(ev){ ev.stopPropagation(); openKbMissAdd(d.peer_text||d.peer_last_text||''); }:null;
+      // 未命中先打开知识库健康行（未配置 / 重试中 / 失败）。新建条目仍走草稿卡上的 ＋。
+      kbd.onclick=miss?function(ev){ ev.stopPropagation(); openKbEmbedHealth(); }:null;
     }
     else kbd.style.display='none';
   }

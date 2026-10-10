@@ -3045,6 +3045,12 @@ loadEntries().then(_focusHashEntry).then(async ()=>{
   try{
     const _qs=new URLSearchParams(location.search);
     const _q=(_qs.get('q')||'').trim().slice(0,120);
+    if(_qs.get('health')==='embed'){
+      openMaintPanel();
+      await runHealthCheck();
+      const _row=document.getElementById('embed-health-row');
+      if(_row&&_row.scrollIntoView) _row.scrollIntoView({block:'center'});
+    }
     if(_qs.get('new')&&_q){
       await openEntryDrawer();
       const _set=(id,v)=>{ const el=document.getElementById(id); if(el&&!el.value) el.value=v; };
