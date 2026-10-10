@@ -63,6 +63,11 @@ def test_explicit_include_and_env(monkeypatch):
     monkeypatch.setenv("CHATX_FLAVOR", "client")
     assert edition_shows_internal(None) is False
     monkeypatch.setenv("CHATX_FLAVOR", "dev")
+    assert edition_shows_internal(None) is False
+    monkeypatch.setenv("CHATX_FLAVOR", "full")
+    assert edition_shows_internal(None) is False
+    monkeypatch.delenv("CHATX_FLAVOR", raising=False)
+    monkeypatch.setenv("CHATX_EDITION", "internal")
     assert edition_shows_internal(None) is True
 
 

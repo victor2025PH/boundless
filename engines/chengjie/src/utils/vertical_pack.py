@@ -5,12 +5,13 @@
 ``--init`` / ``/api/kb/seed-pack`` 走的是另一套起步包（``kb_starter``），未知域
 仍回落 general，本模块不改变那条回落。
 
-可见性：
+可见性（``src.utils.product_edition``，与 WhatsApp 回退模板同一判断）：
 
 - ``include_internal=True`` 强制列出内部包（CLI ``--internal``）；
 - ``include_internal=False`` 强制隐藏；
-- ``None`` 读 ``CHATX_FLAVOR``，空则读 ``CHATX_EDITION``：
-  ``internal`` / ``full`` / ``dev`` 可见，``public`` / ``clean`` / ``client`` 与未设置都隐藏。
+- ``None`` 读环境变量：只有 ``CHATX_FLAVOR=internal``（flavor 为空时才看
+  ``CHATX_EDITION=internal``）可见。未设置、``public`` / ``clean`` / ``client`` /
+  ``dev`` / ``full`` 都隐藏。公开 flavor 优先于 edition=internal。
 
 HTTP 不接受请求体里的 ``allow_internal``。公开版环境变量不能被请求体绕过。
 
@@ -26,7 +27,6 @@ HTTP 不接受请求体里的 ``allow_internal``。公开版环境变量不能�
 """
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -38,7 +38,6 @@ _PRESETS = _ENGINE / "config" / "presets"
 _PUBLIC_ROOT = _PRESETS / "packs"
 _INTERNAL_ROOT = _PRESETS / "internal"
 
-_SHOW_INTERNAL = frozenset({"internal", "full", "dev"})
 _PH_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 _ENTRY_TEXT_KEYS = (
     "category", "title", "scenario", "steps", "principles", "example_reply_zh",
@@ -62,15 +61,9 @@ def engine_root() -> Path:
 
 
 def edition_shows_internal(include_internal: Optional[bool] = None) -> bool:
-    """内部包是否可见。显式布尔优先于环境变量；未设置环境变量时隐藏。"""
-    if include_internal is True:
-        return True
-    if include_internal is False:
-        return False
-    flavor = (os.environ.get("CHATX_FLAVOR") or "").strip().lower()
-    if not flavor:
-        flavor = (os.environ.get("CHATX_EDITION") or "").strip().lower()
-    return flavor in _SHOW_INTERNAL
+    """内部包是否可见。显式布尔优先于环境变量；未设置环境变量时隐藏（公开包）。"""
+    from src.utils.product_edition import is_internal_edition
+    return is_internal_edition(include_internal)
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:

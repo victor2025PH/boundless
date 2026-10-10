@@ -161,13 +161,16 @@ def test_public_edition_drops_gamble_bucket_without_substituting_another_languag
     assert fallback_configured(only, edition="public") is False
     assert configured_languages(only, edition="public") == []
     assert fallback_configured(only, edition="internal") is True
-    assert configured_languages(block, edition="") == ["zh", "en", "tl"]
+    # 空 edition 跟运行时走；测试进程没设内部包 → 公开包，博彩中文名不算已配置
+    assert configured_languages(block, edition="") == ["en", "tl"]
+    assert select_window_fallback(only, "zh")["name"] == ""
+    assert select_window_fallback(only, "zh", edition="internal")["name"] == "wa_fb_gamble_member_zh"
 
 
 # ── 目录：Meta 约束 + 公开包看不到内部模板 ──────────────────────────────────
 
 def test_catalog_templates_pass_utility_rules_and_doc_lists_them():
-    items = load_catalog(ENGINE)
+    items = load_catalog(ENGINE, edition="all")
     assert items, "模板目录为空"
     assert problems_for(items) == []
     names = [it["name"] for it in items]
@@ -178,9 +181,13 @@ def test_catalog_templates_pass_utility_rules_and_doc_lists_them():
     assert not any(n.startswith(INTERNAL_ONLY_NAME_PREFIX) for n in public_names)
     assert set(GAMBLE_NAMES).isdisjoint(public_names)
     assert set(GAMBLE_NAMES) <= set(names)
+    unset_names = {it["name"] for it in load_catalog(ENGINE)}
+    assert unset_names == public_names
+    assert set(GAMBLE_NAMES).isdisjoint(unset_names)
     public_files = [p.as_posix() for p in catalog_files(ENGINE, edition="public")]
     assert public_files and all("/presets/internal/" not in p for p in public_files)
-    all_files = catalog_files(ENGINE)
+    assert all("/presets/internal/" not in p.as_posix() for p in catalog_files(ENGINE))
+    all_files = catalog_files(ENGINE, edition="all")
     assert any("gambling_operator" in p.as_posix() for p in all_files)
     doc = DOC.read_text(encoding="utf-8")
     for item in items:

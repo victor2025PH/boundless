@@ -8,8 +8,8 @@
 - 只填顶层 ``name`` / ``language`` / ``text_param``（旧形状）→ 不看会话语言，行为与以前一致。
 - ``by_language.{zh,en,tl}`` 有 name → 会话语言命中该条；Taglish / fil / ceb 归 ``tl``。
   对不上时用 ``default_language``（缺省 ``zh``），再不行才回落顶层旧模板。
-- 名字以 ``wa_fb_gamble_`` 开头的模板只允许内部包。``edition="public"``（或运行期
-  ``CHATX_FLAVOR`` / ``CHATX_EDITION`` 为 public、clean）时这些名字视为没配置。
+- 名字以 ``wa_fb_gamble_`` 开头的模板只允许内部包。未设置版本环境变量、以及
+  除字面 ``internal`` 以外的值，都按公开包丢掉这些名字（与 ``product_edition`` 相同）。
 
 模板正文本身在 ``config/presets/packs/*/wa_fallback_templates.yaml``（中性）和
 ``config/presets/internal/gambling_operator/wa_fallback_templates.yaml``（仅内部包）。
@@ -17,7 +17,6 @@
 """
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -70,23 +69,17 @@ def is_internal_only_template_name(name: Any) -> bool:
 
 
 def runtime_edition() -> str:
-    """桌面打包形态。``public`` / ``clean`` 视作公开包；未设置则 ``""``（开发/服务进程不拦前缀以外的名字）。"""
-    for key in ("CHATX_FLAVOR", "CHATX_EDITION"):
-        v = str(os.environ.get(key) or "").strip().lower()
-        if v in {"public", "clean"}:
-            return "public"
-        if v == "internal":
-            return "internal"
-    return ""
+    """桌面打包形态。未设置环境变量 = 公开包。只有显式 ``internal`` 才是内部包。"""
+    from src.utils.product_edition import effective_edition
+    return effective_edition()
 
 
 def _edition(edition: str) -> str:
-    e = str(edition or "").strip().lower()
-    if e in {"public", "clean"}:
-        return "public"
-    if e == "internal":
-        return "internal"
-    return ""
+    from src.utils.product_edition import normalize_edition
+    mode = normalize_edition(edition)
+    if mode == "all":
+        return "all"
+    return mode
 
 
 def _usable_name(name: Any, edition: str) -> str:
@@ -231,7 +224,10 @@ def prepare_text_param(text: str, max_chars: Optional[int] = None) -> str:
 
 
 def catalog_files(engine_root: Path, *, edition: str = "") -> List[Path]:
-    """模板目录。``edition="public"`` 不返回 ``config/presets/internal`` 下的文件（与打包省略同口径）。"""
+    """模板目录。公开包（含未设环境变量）不返回 ``config/presets/internal``。
+
+    ``edition="all"`` 或 ``"internal"`` 才带上内部包文件。
+    """
     root = Path(engine_root)
     files = sorted((root / "config" / "presets" / "packs").glob("*/wa_fallback_templates.yaml"))
     if _edition(edition) != "public":
