@@ -27,7 +27,8 @@
 （:func:`origin_to_sent_by`）。计数与审计落 ``config/send_rate_gate.db``（不记消息原文）。
 
 紧急关闭：``compliance.send_rate_gate.enabled: false``。任何异常一律放行（fail-open，
-与 send_guard 同口径：坏掉的护栏不得把全部发送卡死），但会打 warning。
+与 send_guard 同口径：坏掉的护栏不得把全部发送卡死），但会打 warning。放行次数记在
+同一份限速库的 ``send_rate_degraded`` 里，重启还在；库打不开时只记在本进程。
 """
 from __future__ import annotations
 
@@ -296,6 +297,10 @@ CREATE TABLE IF NOT EXISTS send_rate_audit (
     age_days REAL
 );
 CREATE INDEX IF NOT EXISTS idx_sra_ts ON send_rate_audit(ts);
+CREATE TABLE IF NOT EXISTS send_rate_degraded (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    n INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -311,6 +316,28 @@ class SendRateStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_DDL)
+            self._conn.commit()
+
+    def bump_degraded(self) -> int:
+        """fail-open 次数 +1，返回累计。上限不变。"""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO send_rate_degraded (id, n) VALUES (1, 1) "
+                "ON CONFLICT(id) DO UPDATE SET n = n + 1")
+            row = self._conn.execute(
+                "SELECT n FROM send_rate_degraded WHERE id = 1").fetchone()
+            self._conn.commit()
+        return int(row[0] if row else 0)
+
+    def degraded_total(self) -> int:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT n FROM send_rate_degraded WHERE id = 1").fetchone()
+        return int(row[0] if row else 0)
+
+    def reset_degraded(self) -> None:
+        with self._lock:
+            self._conn.execute("UPDATE send_rate_degraded SET n = 0 WHERE id = 1")
             self._conn.commit()
 
     def close(self) -> None:
@@ -420,22 +447,46 @@ _DEGRADED_COUNT = 0
 
 
 def note_degraded() -> int:
-    """判定异常、按 fail-open 放行一次。返回进程内累计次数。不改变上限。"""
+    """判定异常、按 fail-open 放行一次。次数写入限速库，重启还在。
+
+    库打不开时退回本进程计数，仍然放行。不改变任何上限。
+    """
     global _DEGRADED_COUNT
+    persisted = None
+    try:
+        persisted = int(get_store().bump_degraded())
+    except Exception:
+        persisted = None
     with _DEGRADED_LOCK:
-        _DEGRADED_COUNT += 1
-        return _DEGRADED_COUNT
+        if persisted is None:
+            _DEGRADED_COUNT += 1
+            return _DEGRADED_COUNT
+        _DEGRADED_COUNT = max(_DEGRADED_COUNT, persisted)
+        return persisted
 
 
 def degraded_count() -> int:
+    global _DEGRADED_COUNT
+    try:
+        n = int(get_store().degraded_total())
+    except Exception:
+        n = None
     with _DEGRADED_LOCK:
-        return _DEGRADED_COUNT
+        if n is None:
+            return _DEGRADED_COUNT
+        _DEGRADED_COUNT = max(_DEGRADED_COUNT, n)
+        return n
 
 
 def reset_for_tests() -> None:
     global _DEGRADED_COUNT
     with _INST_LOCK:
-        for inst in _INSTANCES.values():
+        for inst in list(_INSTANCES.values()):
+            try:
+                inst.reset_degraded()
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "swallowed in reset_for_tests", exc_info=True)
             inst.close()
         _INSTANCES.clear()
     with _DEGRADED_LOCK:

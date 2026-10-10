@@ -213,6 +213,39 @@ def test_check_error_fails_open_and_counts(monkeypatch):
     assert srg.degraded_count() == 0
 
 
+def test_degraded_count_persists_across_reopen(tmp_path, monkeypatch):
+    """fail-open 次数写在限速库里。关掉进程内单例再读，次数还在。上限仍是 20。"""
+    db = tmp_path / "send_rate_gate.db"
+    monkeypatch.setenv("ZHILIAO_SEND_RATE_DB", str(db))
+    srg.reset_for_tests()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("logic")
+
+    monkeypatch.setattr(srg, "classify_origin", boom)
+    try:
+        d = srg.check("telegram", "a1", origin="agent")
+        assert d["allowed"] is True and d["degraded"] is True
+        assert d["degraded_count"] == 1
+        path = str(db)
+        with srg._INST_LOCK:
+            inst = srg._INSTANCES.pop(path, None)
+        if inst is not None:
+            inst.close()
+        srg._DEGRADED_COUNT = 0
+        assert srg.degraded_count() == 1
+        fresh = srg.SendRateStore(path)
+        try:
+            assert fresh.degraded_total() == 1
+            assert fresh.bump_degraded() == 2
+        finally:
+            fresh.close()
+        assert srg.DEFAULTS["script_daily_cap"] == 20
+    finally:
+        srg.reset_for_tests()
+        assert srg.degraded_count() == 0
+
+
 def test_inbox_send_route_marks_script_header():
     from src.web.routes.unified_inbox_send_routes import _mark_script_send
 
