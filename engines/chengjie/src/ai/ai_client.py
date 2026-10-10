@@ -1061,6 +1061,44 @@ class AIClient(LoggerMixin):
             self._alert_key_failure_if_matches(e)
             return False
 
+    def _paid_ai_blocked_after_local_miss(
+        self, context: Optional[Dict[str, Any]], wallet_empty: bool,
+    ) -> bool:
+        """对客回复在余额用尽且免费档守卫开着时，本地没有结果就不打付费云端。
+
+        工具调用（``_tool_call`` / ``_bare_system``）保持付费回落：它们不是对客那句。
+        legacy（``translation.free_tier_zero_cost`` 关）也保持回落。余额还在的付费档不进这里。
+        """
+        ctx = context or {}
+        if ctx.get("_tool_call") or ctx.get("_bare_system"):
+            return False
+        try:
+            from src.ai.translation_engines import (
+                block_paid_when_local_miss,
+                free_tier_blocks_paid_fallback,
+            )
+            return block_paid_when_local_miss(
+                wallet_empty=bool(wallet_empty),
+                guard=free_tier_blocks_paid_fallback(self.config),
+                customer_facing=True,
+            )
+        except Exception:
+            self.logger.debug("[ai] free-tier guard lookup failed", exc_info=True)
+            return bool(wallet_empty)
+
+    def _stop_paid_ai(self, context: Optional[Dict[str, Any]], lang: str) -> Optional[str]:
+        """本地没有结果：拦住付费云端，留下失败原因，本轮不回复。"""
+        try:
+            from src.ai.translation_engines import note_paid_engine_blocked
+            note_paid_engine_blocked("ai_reply")
+        except Exception:
+            self.logger.debug("[ai] paid_blocked metric failed", exc_info=True)
+        self.logger.warning(
+            "余额用尽且本地模型没有结果 → 不调用付费云端（免费档守卫） request_id=%s",
+            (context or {}).get("request_id") or "n/a")
+        self._note_ai_fail("free_tier_no_local", context, latency_ms=0, attempt=0)
+        return self._fallback_reply(lang)
+
     async def _generate_reply_openai_compat(
         self,
         user_message: str,
@@ -1141,19 +1179,21 @@ class AIClient(LoggerMixin):
             return self._fallback_reply(_fb_lang)
 
         # 2026-08-19 Token enforce（P6）：钱包耗尽（曾注资且余额≤0）+ enforce 开 →
-        # 跳过云端主链/备用池，直接本地兜底出话（免费路径）。只有本地兜底可用才降级
-        # ——无处可去时照走云端（永不断线 > 计费，本次照常计费）。熔断开路时让位
-        # 熔断语义（那条链本就以本地收尾）。
-        _token_degraded = False
-        if not _cb_blocked and not _local_primary and not _route_strict:
+        # 先走本地兜底。本地有结果就用（免费路径）。本地没有结果时：
+        # 免费档守卫开（缺省 enforce）且这是对客回复 → 本轮不回复，不改打付费云端。
+        # legacy 才保留付费回落。工具调用不在这句客户口径里，仍可回落。
+        # 熔断开路时：守卫开则只试本地；守卫关才走备用云 Key。
+        _wallet_empty_ai = False
+        if not _route_strict:
             try:
                 from src.licensing.token_ledger import should_degrade_action
 
-                _token_degraded = bool(
-                    (self._fb_client and self._fb_model)
-                    and should_degrade_action("ai_reply"))
+                _wallet_empty_ai = bool(should_degrade_action("ai_reply"))
             except Exception:
-                _token_degraded = False
+                _wallet_empty_ai = False
+        _token_degraded = bool(
+            _wallet_empty_ai and not _cb_blocked and not _local_primary
+            and self._fb_client and self._fb_model)
 
         so = strategy_overrides or {}
         use_temperature = float(so["temperature"]) if "temperature" in so else self.temperature
@@ -1259,6 +1299,8 @@ class AIClient(LoggerMixin):
                     "本地主模型失败且 local_only（不回落云端）→ 本轮不回复 request_id=%s",
                     request_id or "n/a")
                 return self._fallback_reply(_fb_lang)
+            if self._paid_ai_blocked_after_local_miss(context, _wallet_empty_ai):
+                return self._stop_paid_ai(context, _fb_lang)
             if not self._oa_client and not self._pool_entries:
                 self.logger.warning(
                     "本地主模型失败且未配置云端主链 → 本轮不回复 request_id=%s",
@@ -1279,8 +1321,19 @@ class AIClient(LoggerMixin):
             self.logger.warning(
                 "本地主模型失败 → 回落云端主链 request_id=%s", request_id or "n/a")
         if _cb_blocked:
-            # 熔断开路：主模型免打扰（保住冷却窗口语义）。降级链＝备用云 Key（质量同级）
-            # → 本地兜底，逐级尝试；全灭＝本轮不回复。
+            # 熔断开路：主模型免打扰。余额用尽且免费档守卫开 → 只试本地，不打备用云 Key。
+            # 守卫关（legacy）才走备用云 Key → 本地。全灭＝本轮不回复。
+            if self._paid_ai_blocked_after_local_miss(context, _wallet_empty_ai):
+                local_reply = None
+                if self._fb_client and self._fb_model and not _skip_local:
+                    local_reply = await self._try_local_fallback_chat(
+                        messages, use_temperature, use_max_tokens, context, request_id,
+                        skip_quality_check=_skip_quality_check,
+                        model_override=use_local_model,
+                    )
+                if local_reply:
+                    return local_reply
+                return self._stop_paid_ai(context, _fb_lang)
             fb_reply = await self._run_fallback_chain(
                 messages, use_temperature, use_max_tokens, context, request_id,
                 skip_quality_check=_skip_quality_check, use_local_model=use_local_model,
@@ -1289,7 +1342,7 @@ class AIClient(LoggerMixin):
         if _token_degraded:
             # Token enforce 降级：本地兜底出真话（免费路径，_reply_free_path 标记
             # 由 _try_local_fallback_chat 成功时打上 → 顶层计费钩跳过记账）。
-            # 本地失败 → fall through 照走云端主链（永不断线 > 计费）。
+            # 本地没有结果：守卫开 → 本轮不回复；legacy → 照走云端并记 would_block。
             fb_reply = await self._try_local_fallback_chat(
                 messages, use_temperature, use_max_tokens, context, request_id,
                 skip_quality_check=_skip_quality_check,
@@ -1300,9 +1353,20 @@ class AIClient(LoggerMixin):
                     "Token 钱包耗尽（enforce）→ 本地模型已出话 request_id=%s",
                     request_id or "n/a")
                 return fb_reply
+            if self._paid_ai_blocked_after_local_miss(context, True):
+                return self._stop_paid_ai(context, _fb_lang)
+            try:
+                from src.ai.translation_engines import note_paid_engine_would_block
+                note_paid_engine_would_block("ai_reply")
+            except Exception:
+                self.logger.debug("[ai] paid_would_block metric failed", exc_info=True)
             self.logger.warning(
-                "Token enforce 降级失败（本地无话）→ 照走云端主链（永不断线优先）"
+                "Token enforce 降级失败（本地无话）→ legacy 守卫放行，照走云端"
                 " request_id=%s", request_id or "n/a")
+        elif (not _local_primary and not _cb_blocked
+              and self._paid_ai_blocked_after_local_miss(context, _wallet_empty_ai)):
+            # 余额用尽、没有可用的本地端点：不把对客回复改打付费云端。
+            return self._stop_paid_ai(context, _fb_lang)
         if (not _local_primary and not _cb_blocked and not _token_degraded
                 and _skip_cloud and (self._pool_entries or (self._fb_client and self._fb_model))):
             self.logger.warning(

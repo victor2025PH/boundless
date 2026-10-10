@@ -1053,6 +1053,10 @@ class TTSPipeline:
     def __init__(self, cfg: Optional[Dict[str, Any]] = None):
         cfg = cfg or {}
         self.enabled = bool(cfg.get("enabled", False))
+        # 可选：单测或调用方把 translation.free_tier_zero_cost 透传进来。
+        # 缺省不设，合成时用进程级守卫（web 启动写入），再缺省就是 enforce。
+        if "free_tier_zero_cost" in cfg:
+            self._free_tier_zero_cost = cfg.get("free_tier_zero_cost")
         self.backend = str(cfg.get("backend", "edge_tts")).strip().lower()
         # 缺省音色＝中文女声（业务主力语言）。历史值 ja-JP-NanamiNeural 是 2026-07-23
         # 「新好友被日语腔轰炸」事故的静默地雷之一：任何一层配置漏填 voice，
@@ -1955,21 +1959,44 @@ class TTSPipeline:
         # 非克隆后端 / 语种不明 / 短文本一律返回 ""（宁可漏拦不误拦）。
         _lang_blocked = self._clone_lang_blocked(rv.text)
         # 2026-08-19 Token enforce（P6）：钱包耗尽 + enforce 开 + 主后端是克隆声
-        # （计费引擎）→ 注入合成失败原因，交给下方**既有** edge 兜底块出免费兜底声
-        # （voice/format 语义全复用，语音永不哑）；兜底不可用则照走克隆（永不断线 > 计费）。
-        # 兜底声 provider=edge → 计费钩天然不记（克隆引擎集合外）。
+        # → 不打付费克隆。有免费兜底声时交给下方既有 edge 块（坐席未二次确认则改发文字）。
+        # 没有兜底声时：免费档守卫开（缺省）直接改发文字，不改打付费克隆；
+        # legacy 才照走克隆。兜底声 provider=edge 不在克隆计费集合里。
         _token_skip_clone = False
+        _token_block_unbacked_clone = False
         if (primary_backend in ("avatar_clone", "minicpm_clone")
                 or primary_backend.endswith("_clone")):
             try:
                 from src.licensing.token_ledger import should_degrade_action
 
-                _token_skip_clone = bool(
-                    self.fallback_on_error and self.fallback_backend
-                    and self.fallback_backend != primary_backend
-                    and should_degrade_action("voice_clone"))
+                _voice_wallet_empty = bool(should_degrade_action("voice_clone"))
             except Exception:
-                _token_skip_clone = False
+                _voice_wallet_empty = False
+            _voice_fb_ready = bool(
+                self.fallback_on_error and self.fallback_backend
+                and self.fallback_backend != primary_backend)
+            if _voice_wallet_empty and _voice_fb_ready:
+                _token_skip_clone = True
+            elif _voice_wallet_empty:
+                try:
+                    from src.ai.translation_engines import (
+                        block_paid_when_local_miss,
+                        free_tier_blocks_paid_fallback,
+                    )
+                    _guard_cfg = (
+                        {"free_tier_zero_cost": self._free_tier_zero_cost}
+                        if hasattr(self, "_free_tier_zero_cost") else None)
+                    _guard_on = free_tier_blocks_paid_fallback(_guard_cfg)
+                    _token_block_unbacked_clone = block_paid_when_local_miss(
+                        wallet_empty=True, guard=_guard_on, customer_facing=True)
+                except Exception:
+                    _token_block_unbacked_clone = True
+                if not _token_block_unbacked_clone:
+                    try:
+                        from src.ai.translation_engines import note_paid_engine_would_block
+                        note_paid_engine_would_block("voice_clone")
+                    except Exception:
+                        logger.debug("[tts] paid_would_block metric failed", exc_info=True)
         # minicpm_clone：与 fish 同 /v1/tts/clone 契约的远程情感克隆主机（产 WAV），作为
         # 可显式选择的克隆后端（异步语音消息专用，慢于实时但不阻塞）。成功直接定稿；
         # 失败且允许兜底 → 落到下方 edge 回落（绝不卡死出站）。
@@ -1995,6 +2022,23 @@ class TTSPipeline:
                 primary_backend,
                 (f"走 '{self.fallback_backend}' 兜底（坐席已二次确认）"
                  if confirm_system_voice else "阻断（不出系统音，改发文字）"))
+        elif _token_block_unbacked_clone:
+            try:
+                from src.ai.translation_engines import note_paid_engine_blocked
+                note_paid_engine_blocked("voice_clone")
+            except Exception:
+                logger.debug("[tts] paid_blocked metric failed", exc_info=True)
+            rv.error = "clone_unavailable:token_wallet_exhausted"
+            rv.extra["clone_unavailable"] = "token_wallet_exhausted"
+            rv.extra["degrade_to_text"] = True
+            rv.extra["fallback_blocked"] = "free_tier_no_paid_clone"
+            rv.extra["primary_error"] = "token_wallet_exhausted"
+            logger.info(
+                "[tts] 余额用尽且没有免费兜底声 → 不调用付费克隆，改发文字 "
+                "persona=%s backend=%s",
+                self.persona_id or "-", primary_backend)
+            rv.latency_ms = int((time.monotonic() - t0) * 1000)
+            return rv
         elif primary_backend == "avatar_clone":
             # AvatarHub CosyVoice3（本机 7852）：情感克隆在线主力（2~4s/句）。
             av_rv = await self._try_avatar_clone(

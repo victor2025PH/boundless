@@ -38,8 +38,9 @@ ZH = {
     "ws.quotawall.claim": "🎁 注册领 100 万字符（免费）",
     "ws.quotawall.title_token": "Token 余额已用完",
     "ws.quotawall.body_token": "Token 余额已用完：专业翻译已降为标准档（本部署本地"
-                               "模型，没配好转人工），AI 回复改走本地模型；收件箱与"
-                               "手动发送照常。充值后恢复：",
+                               "模型，没配好转人工）。AI 回复和克隆语音不改调付费"
+                               "接口；本地没有结果时本轮不自动回复，语音改发文字。"
+                               "收件箱与手动发送照常。充值后恢复：",
     "ws.quotawall.title_agent": "本月坐席额度已用尽",
     "ws.quotawall.body_agent": "已用 {used} / 上限 {quota}，月初自动重置。请联系管理员"
                                "调整你的月度额度；期间翻译与 AI 拟稿暂停，收件箱与"
@@ -51,8 +52,9 @@ ZH = {
     "ws.quotawall.voucher_err": "凭证兑换失败，请核对后重试",
     # 顶栏徽章补充态（Token 钱包 / 坐席月度额度也值得一颗 pill）
     "base.pill.quota_tokens": "Token",
-    "base.pill.quota_tip_token": "Token 余额已用完：AI 回复走本地模型、专业翻译降为"
-                                 "标准档（本地模型，没配好转人工）；充值后恢复",
+    "base.pill.quota_tip_token": "Token 余额已用完：专业翻译降为标准档（本地模型，"
+                                 "没配好转人工）；AI 回复和克隆语音不改调付费接口。"
+                                 "充值后恢复",
     "base.pill.quota_tip_agent": "你本月的坐席字符额度已用尽（已用 {used} / 上限 "
                                  "{quota}）；月初自动重置，可联系管理员调整",
     # ── 预计耗尽预警条（quotawall v2 P2，2026-08-21）：80%/临期不是拦截时刻，
@@ -98,7 +100,9 @@ EN = {
     "ws.quotawall.title_token": "Token balance used up",
     "ws.quotawall.body_token": "Token balance used up: pro translation dropped to "
                                "standard (this deployment's local model; a person "
-                               "takes it if unset) and AI replies use the local model. "
+                               "takes it if unset). AI replies and cloned voice do not "
+                               "switch to a paid API; if the local path has no result, "
+                               "this turn is not auto-replied and voice goes out as text. "
                                "Inbox and manual sending keep working. Top up to restore:",
     "ws.quotawall.title_agent": "Monthly seat quota used up",
     "ws.quotawall.body_agent": "{used} used / {quota} limit; resets at the start of "
@@ -113,9 +117,10 @@ EN = {
     "ws.quotawall.voucher_err": "Voucher redemption failed; check it and try again",
     # Top-bar pill extras (token wallet / per-seat monthly quota deserve a pill too)
     "base.pill.quota_tokens": "Tokens",
-    "base.pill.quota_tip_token": "Token balance used up: AI replies use the local model "
-                                 "and pro translation drops to standard (local model; "
-                                 "a person takes it if unset). Top up to restore",
+    "base.pill.quota_tip_token": "Token balance used up: pro translation drops to "
+                                 "standard (local model; a person takes it if unset). "
+                                 "AI replies and cloned voice do not switch to a paid API. "
+                                 "Top up to restore",
     "base.pill.quota_tip_agent": "Your monthly seat character quota is used up "
                                  "({used} used / {quota} limit); it resets monthly — "
                                  "ask your admin to adjust",

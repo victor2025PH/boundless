@@ -720,8 +720,10 @@ def should_degrade_action(action: str, *, lic_status: Any = None,
     命中记影子计数 ``enforce_degrade_<action>``。自身异常一律 False（fail-open）。
 
     ⚠ 本函数只建议「降级」，绝不建议「阻断」。标准翻译走本部署本地模型、不调用
-    付费接口；没配好时由翻译服务转人工。AI 回复与克隆语音若本地兜底没有结果，
-    现行调用方仍回落付费路径并计费（ai_client / tts_pipeline）。
+    付费接口；没配好时由翻译服务转人工。对客 AI 回复与克隆语音在免费档守卫
+    （``translation.free_tier_zero_cost``，缺省 enforce）开着时同样不改打付费接口：
+    本地没有结果则本轮不回复，克隆没有免费兜底声则改发文字。显式 legacy 才保留
+    付费回落。工具调用（``_tool_call`` / ``_bare_system``）不在这句对客口径里。
     """
     try:
         if not _ENABLED or not _ENFORCE:
