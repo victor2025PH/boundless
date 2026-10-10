@@ -196,6 +196,23 @@ def test_send_guard_script_scope_counts_as_script():
     assert send_blocked("telegram", "s1", config=cfg, registry=reg, origin="manual") == (False, "")
 
 
+def test_check_error_fails_open_and_counts(monkeypatch):
+    """闸门坏掉仍放行，并累计次数。日上限保持 20，不改成拦截。"""
+    def boom(*_a, **_k):
+        raise RuntimeError("db")
+
+    monkeypatch.setattr(srg, "get_store", boom)
+    d = srg.check("telegram", "a1", origin="agent")
+    assert d["allowed"] is True and d["reason"] == "error" and d["degraded"] is True
+    assert d["degraded_count"] == 1
+    d2 = srg.check("telegram", "a1", origin="agent")
+    assert d2["allowed"] is True and d2["degraded_count"] == 2
+    assert srg.degraded_count() == 2
+    assert srg.DEFAULTS["script_daily_cap"] == 20
+    srg.reset_for_tests()
+    assert srg.degraded_count() == 0
+
+
 def test_inbox_send_route_marks_script_header():
     from src.web.routes.unified_inbox_send_routes import _mark_script_send
 

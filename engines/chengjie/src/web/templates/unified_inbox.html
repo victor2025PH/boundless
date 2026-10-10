@@ -16390,8 +16390,19 @@ function _renderGateBanner(){
   var g=_gateState;
   var btn=document.getElementById('send-btn');
   var q=(g&&g.quota)||null;
-  if(!g||(!g.blocked&&!(q&&q.auto_blocked))){
+  var degraded=(g&&g.rate_degraded&&Number(g.rate_degraded.count))||0;
+  if(!g||(!g.blocked&&!(q&&q.auto_blocked)&&!degraded)){
     el.style.display='none'; el.innerHTML='';
+    if(btn){ btn.style.filter=''; btn.removeAttribute('title'); }
+    return;
+  }
+  if(!g.blocked && degraded && !(q&&q.auto_blocked)){
+    el.style.background='var(--th-bg-amber100,#fef3c7)';
+    el.style.color='var(--th-ink-amber5,#92400e)';
+    el.style.borderBottom='1px solid var(--th-bd-amber2,#fde68a)';
+    el.innerHTML='<span style="flex:1;min-width:0;" title="'+esc(window.T('inbox.gate.rate_degraded_t'))+'">'
+      +esc(window.Tf('inbox.gate.rate_degraded',{n:degraded}))+'</span>';
+    el.style.display='flex';
     if(btn){ btn.style.filter=''; btn.removeAttribute('title'); }
     return;
   }
