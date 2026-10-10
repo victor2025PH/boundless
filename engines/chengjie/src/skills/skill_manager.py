@@ -12815,7 +12815,7 @@ class SkillManager(LoggerMixin):
                 from src.utils.kb_gate import should_log_kb_miss
                 if should_log_kb_miss(user_msg):
                     _kb.log_miss(user_msg)
-                    self.logger.info("[F1] 无KB命中低分 �?miss_log: '%s'", user_msg[:50])
+                    self.logger.info("[F1] 无KB命中低分 -> miss_log: '%s'", user_msg[:50])
             elif has_kb:
                 _kb.add_feedback({
                     "user_message": user_msg[:200],
@@ -12824,7 +12824,7 @@ class SkillManager(LoggerMixin):
                     "correction": "",
                     "operator": "auto_quality",
                 })
-                self.logger.info("[F1] 有KB但低�?�?负面反�: '%s'", user_msg[:50])
+                self.logger.info("[F1] 有KB但低分 -> 负面反馈: '%s'", user_msg[:50])
 
             if "..." in reasons:
                 _kb.add_feedback({

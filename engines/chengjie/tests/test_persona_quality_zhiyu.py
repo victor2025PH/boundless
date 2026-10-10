@@ -140,6 +140,15 @@ def test_live_script_reads_key_without_echo(tmp_path, monkeypatch, capsys):
     assert mod.resolve_endpoint(str(cfg))["key_source"] == "env"
 
 
+def test_live_eval_stays_manual_and_off_the_redline_gate():
+    """真模型要付费密钥，分数不能接进红线断言，也不做定时作业。"""
+    doc = (pq.ENGINE / "src" / "eval" / "persona_quality_eval.py").read_text(encoding="utf-8")
+    live = (pq.ENGINE / "scripts" / "persona_quality_live.py").read_text(encoding="utf-8")
+    assert "单元 CI 只跑 mock" in doc
+    assert "定时作业" in doc and "放宽 STOP" in doc
+    assert "也不做定时作业" in live.split('"""', 2)[1]
+
+
 def test_pack_style_forbids_echoing_banned_phrases_even_negated():
     """10-08 真模型 59/60 的唯一失败：否定句里复述了「保证收益」。人设风格须明确禁止，且自身不含禁词。"""
     from pathlib import Path
