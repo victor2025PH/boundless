@@ -1021,22 +1021,26 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
               <div class="cdraft-hd" id="cdraft-hd" onclick="_cdraftHdClick(event)">
                 <span class="cd-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 3l1.7 4.6L17 9l-4.3 1.4L11 15l-1.7-4.6L5 9l4.3-1.4L11 3z"/><path d="M18 13l.8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8L18 13z"/></svg></span>
                 <span data-i18n="inbox.cdraft.ready">AI 草稿已就绪</span>
-                <span class="cdraft-risk" id="cdraft-risk" style="display:none;"></span>
                 <span class="cdraft-reason" id="cdraft-reason" style="display:none;" title="为什么这条要你确认" data-i18n-title="inbox.l1r.chip_t"></span>
-                <span class="cdraft-reason lp-cdraft" id="lp-cdraft" style="display:none;" title="对方消息里判不出语言（首条问候 / 表情 / 图片），本轮按人设默认语言起草；对方一开口就会跟随对方语言" data-i18n-title="inbox.lp.chip_t"></span>
-                <span class="cdraft-reason cdraft-kbd" id="cdraft-kbd" style="display:none;" title="这条草稿的知识库使用情况" data-i18n-title="inbox.kbd.chip_t"></span>
-                <span class="cdraft-n" id="cdraft-n" style="display:none;"></span>
+                <span class="cdraft-reason cdraft-sticky" id="cdraft-sticky" style="display:none;" title="停联或要钱，不折进查看"></span>
                 <span class="cdraft-acts">
                   <button type="button" class="cdraft-btn primary" onclick="acceptComposerDraft()" title="填入输入框，可编辑后发送" data-i18n-title="inbox.cdraft.accept_t"><span data-i18n="inbox.cdraft.accept">采用</span><kbd>Tab</kbd></button>
-                  <button type="button" class="cdraft-btn" onclick="_openAiDraftPanel()" title="展开待审草稿面板（可直接放行/驳回）" data-i18n-title="inbox.cdraft.panel_t" data-i18n="inbox.cdraft.panel">面板</button>
-                  <button type="button" class="cdraft-btn" onclick="dismissComposerDraft()" title="本会话内忽略这条草稿" data-i18n-title="inbox.cdraft.dismiss_t"><span data-i18n="inbox.cdraft.dismiss">忽略</span><kbd>Esc</kbd></button>
                   <button type="button" class="cdraft-btn cd-expand" onclick="_cdraftExpand()" data-i18n="inbox.cdraft.expand">查看</button>
                 </span>
               </div>
               <div class="cdraft-body" id="cdraft-body" onclick="acceptComposerDraft()" title="点击填入输入框" data-i18n-title="inbox.cdraft.body_t" tabindex="0"></div>
-              <!-- K-3 B（#183 #177，J-10 交办）：这条草稿用了哪几条 AI 记忆（/api/episodic-memory/used，
-                   与草稿所回复的入站 id 对账；旧后端 404 / 本轮没用记忆 → 容器留空不占位） -->
-              <div class="mem-chips" id="cdraft-mem"></div>
+              <div class="cdraft-more" id="cdraft-more">
+                <div class="cdraft-more-row">
+                  <span class="cdraft-risk" id="cdraft-risk" style="display:none;"></span>
+                  <span class="cdraft-reason lp-cdraft" id="lp-cdraft" style="display:none;" title="对方消息里判不出语言（首条问候 / 表情 / 图片），本轮按人设默认语言起草；对方一开口就会跟随对方语言" data-i18n-title="inbox.lp.chip_t"></span>
+                  <span class="cdraft-reason cdraft-kbd" id="cdraft-kbd" style="display:none;" title="这条草稿的知识库使用情况" data-i18n-title="inbox.kbd.chip_t"></span>
+                  <span class="cdraft-n" id="cdraft-n" style="display:none;"></span>
+                  <button type="button" class="cdraft-btn" onclick="_openAiDraftPanel()" title="展开待审草稿面板（可直接放行/驳回）" data-i18n-title="inbox.cdraft.panel_t" data-i18n="inbox.cdraft.panel">面板</button>
+                  <button type="button" class="cdraft-btn" onclick="dismissComposerDraft()" title="本会话内忽略这条草稿" data-i18n-title="inbox.cdraft.dismiss_t"><span data-i18n="inbox.cdraft.dismiss">忽略</span><kbd>Esc</kbd></button>
+                </div>
+                <!-- K-3 B：这条草稿用了哪几条 AI 记忆。默认折在查看里。 -->
+                <div class="mem-chips" id="cdraft-mem"></div>
+              </div>
             </div>
             <!-- 身份可视化：回复区身份条（以哪个人设 · 哪个号回复；未绑人设=黄色警示）。
                  2026-08-17 起可点击=直达工具箱人设卡（_identBarJump，含键盘 Enter/Space） -->
@@ -18202,6 +18206,18 @@ function _cdraftRender(){
   const typing=!!(ta && ta.value.trim());
   bar.classList.add('show');
   bar.classList.toggle('slim', typing);
+  var draftKey=String(d.draft_id||'');
+  if(bar.getAttribute('data-draft')!==draftKey){
+    bar.setAttribute('data-draft', draftKey);
+    bar.classList.remove('cdraft-open');
+  }
+  var sticky=document.getElementById('cdraft-sticky');
+  if(sticky){
+    var sk=String(d.sticky_alert||'');
+    var stxt=sk==='stop'?window.T('inbox.risk.cat_stop_contact'):(sk==='money'?window.T('inbox.risk.cat_money_request'):'');
+    if(stxt){ sticky.style.display=''; sticky.textContent=stxt; }
+    else { sticky.style.display='none'; sticky.textContent=''; }
+  }
   const body=document.getElementById('cdraft-body');
   if(body) body.textContent=(d.draft_text_display||d.draft_text||d.text||'')+(d.photo_directive?(' '+window.Tf('inbox.draft_mini.photo_directive',{kind:String(d.photo_directive.kind||'')})):'');   // R87 P1-3：[PHOTO …] 协议标记不进预览
   const risk=document.getElementById('cdraft-risk');
@@ -18313,7 +18329,13 @@ function _cdraftHdClick(e){
 }
 function _cdraftExpand(){
   const bar=document.getElementById('cdraft-bar');
-  if(bar) bar.classList.remove('slim');
+  if(!bar) return;
+  if(bar.classList.contains('slim')){
+    bar.classList.remove('slim');
+    bar.classList.add('cdraft-open');
+    return;
+  }
+  bar.classList.toggle('cdraft-open');
 }
 // 采用的草稿在人工发送成功后 cancel（fire-and-forget；审计留痕 by=composer_adopt）
 // Q-10 A（#267，CV4E22）：send 成功路径已在服务端同步把会话在途稿置 consumed（响应

@@ -1220,7 +1220,12 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .cdraft-bar.slim .cdraft-hd{cursor:pointer;padding:4px 10px;font-weight:600;}
 .cdraft-bar.slim .cdraft-acts .cdraft-btn{display:none;}
 .cdraft-bar.slim .cdraft-acts .cdraft-btn.cd-expand{display:inline-flex;}
-.cdraft-btn.cd-expand{display:none;}
+.cdraft-btn.cd-expand{display:inline-flex;}
+.cdraft-more{display:none;}
+.cdraft-bar.cdraft-open .cdraft-more{display:block;}
+.cdraft-bar.slim .cdraft-more{display:none;}
+.cdraft-more-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 10px 6px;}
+.cdraft-reason.cdraft-sticky{background:rgba(225,29,72,.16);color:var(--tk-danger-ink);max-width:220px;}
 .cdraft-btn:focus-visible,.cdraft-body:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 /* 会话行「谁在处理」微标（右侧 meta 列，与未读点/SLA 同列） */
 .conv-handler{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 4px;border-radius:8px;font-size:10px;font-weight:800;line-height:1;border:1px solid transparent;}
