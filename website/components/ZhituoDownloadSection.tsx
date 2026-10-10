@@ -30,7 +30,7 @@ import type { BrandLang } from "@/lib/brand";
 /**
  * 智拓 专属下载页主体（与智聊 ChatX / 智控 MatrixX 的下载组件隔离，零回归风险）。
  * 视觉沿用下载页统一骨架（growth 家族青色），lang 由路由显式传入。
- * 合规隔离：本页为 gated，主站不收录（见 app/download/zhituo/page.tsx 的 robots 设置）。
+ * 2026-10-11：本页为智拓官方下载页（下载菜单与下载中心均指向此处）。
  */
 export default function ZhituoDownloadSection({ lang: forced }: { lang?: BrandLang }) {
   const ctx = useLang();
@@ -276,13 +276,13 @@ export default function ZhituoDownloadSection({ lang: forced }: { lang?: BrandLa
             <ol className="mt-4 space-y-2.5">
               {(zh
                 ? [
-                    "在主控智拓后台（局域网地址，如 http://192.168.0.176:18080）拿到你的登录账号和密码。",
+                    "在主控智拓后台（填写主控后台地址）拿到你的登录账号和密码。",
                     "安装时选「机房节点」，填电脑编号，再填这组主控账号密码。",
                     "认证通过后自动建立受控连接并接入——有失败限流、可吊销、留接入记录。",
                     "现在不方便就勾「暂不接入」，装完后在桌面「智拓后台」或「重新接入主控」里补。",
                   ]
                 : [
-                    "Get your login account and password from the master console on your LAN (e.g. http://192.168.0.176:18080).",
+                    "Get your login account and password from the master console (enter your master console address).",
                     "During install pick Room Node, enter the PC code, then this master account and password.",
                     "On success it sets up the controlled connection and enrolls — rate-limited, revocable, audit-logged.",
                     "Not convenient now? Tick Enroll later and finish from the desktop console or Re-enroll afterwards.",

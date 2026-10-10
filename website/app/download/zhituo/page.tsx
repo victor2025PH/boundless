@@ -4,12 +4,11 @@ import Footer from "@/components/Footer";
 import ZhituoDownloadSection from "@/components/ZhituoDownloadSection";
 import { SITE_URL } from "@/lib/site";
 
-// 合规隔离（lib/isolation.ts）：/download/zhituo 为 gated，主站不收录，仅供直达访问。
+// 2026-10-11：智拓官方下载页（公开，下载菜单/下载中心指向此处）。
 export const metadata: Metadata = {
   title: "下载智拓客户端 · 无界科技 BOUNDLESS",
   description:
     "下载智拓（Windows）：机房真机多账号运营客户端，一体安装、按账号自动接入主控，本地部署、数据不出本机。含分步安装教程与接入说明，SHA-256 可校验。",
-  robots: { index: false, follow: false },
   alternates: {
     canonical: "/download/zhituo",
     languages: { "zh-CN": "/download/zhituo", en: "/en/download/zhituo", "x-default": "/download/zhituo" },

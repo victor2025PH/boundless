@@ -4,12 +4,11 @@ import Footer from "@/components/Footer";
 import ZhituoDownloadSection from "@/components/ZhituoDownloadSection";
 import { SITE_URL } from "@/lib/site";
 
-// Compliance isolation (lib/isolation.ts): /download/zhituo is gated — not indexed, direct access only.
+// 2026-10-11: official Zhituo download page (public; linked from the download menu and hub).
 export const metadata: Metadata = {
   title: "Download the Zhituo Client · BOUNDLESS",
   description:
     "Download Zhituo (Windows): on-prem multi-account operations client, one-shot install, account-based auto-enrollment, deployed locally with data on-device. Step-by-step guide, SHA-256 verifiable.",
-  robots: { index: false, follow: false },
   alternates: {
     canonical: "/en/download/zhituo",
     languages: { "zh-CN": "/download/zhituo", en: "/en/download/zhituo", "x-default": "/download/zhituo" },

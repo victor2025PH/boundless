@@ -105,14 +105,14 @@ export const CLIENT_APPS: ClientApp[] = [
   },
   {
     key: "zhituo",
-    name: { zh: "智拓", en: "Zhituo" },
+    name: { zh: "智拓 ReachX", en: "ReachX" },
     subName: { zh: "机房节点", en: "Room Node" },
     family: "growth",
-    productIcon: null,
+    productIcon: "reachx",
     // 中性口径：能力细节与营销话术只在其 gated 下载页出现。
     tagline: {
-      zh: "机房真机多账号运营客户端 · 本地部署，数据不出本机",
-      en: "On-prem multi-account ops client · runs locally, data stays on-device",
+      zh: "机房电脑一体安装包：手机矩阵内容发布与群控",
+      en: "Room PC all-in-one installer: phone-matrix publishing & control",
     },
     page: "/download/zhituo",
     version: ZHITUO.download.version,

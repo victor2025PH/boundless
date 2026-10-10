@@ -28,12 +28,12 @@ export const ZHITUO = {
   },
   /** 下载构建信息（发布时同步）。 */
   download: {
-    version: "1.0.1",
+    version: "1.0.2",
     size: { zh: "约 56 MB", en: "~56 MB" },
-    filename: "ZhituoSetup-1.0.1.exe",
+    filename: "ZhituoSetup-1.0.2.exe",
     os: { zh: "Windows 10 / 11（64 位）", en: "Windows 10 / 11 (x64)" },
-    url: `${ZHITUO_RELEASE_BASE}/ZhituoSetup-1.0.1.exe`,
-    sha256: "DA1A59CFF206F37A1AE982B331F5EC43AF34F93A8B60FC8F97AC687EF58967FF",
+    url: `${ZHITUO_RELEASE_BASE}/ZhituoSetup-1.0.2.exe`,
+    sha256: "6641C5F5DCEBF968AD99B176EDD0D57B55C305A796634BA7660C9E8DF6E9066C",
     nodeOnly: {
       filename: "ZhituoRoomNodeSetup-0.1.9.exe",
       url: `${ZHITUO_RELEASE_BASE}/ZhituoRoomNodeSetup-0.1.9.exe`,
@@ -59,8 +59,8 @@ export const ZHITUO = {
       title: { zh: "下载一体安装包", en: "Download the all-in-one installer" },
       time: { zh: "约 1–2 分钟", en: "~1–2 min" },
       detail: {
-        zh: "在本页点击下载按钮，获取 **ZhituoSetup-1.0.1.exe**（约 56 MB，含节点、群控组件、Python 与 scrcpy，无需再下其他组件）。",
-        en: "Click the download button to get **ZhituoSetup-1.0.1.exe** (~56 MB, bundling node, control component, Python and scrcpy — nothing else to download).",
+        zh: "在本页点击下载按钮，获取 **ZhituoSetup-1.0.2.exe**（约 56 MB，含节点、群控组件、Python 与 scrcpy，无需再下其他组件）。",
+        en: "Click the download button to get **ZhituoSetup-1.0.2.exe** (~56 MB, bundling node, control component, Python and scrcpy — nothing else to download).",
       },
     },
     {
@@ -87,8 +87,8 @@ export const ZHITUO = {
       title: { zh: "接入主控（关键一步）", en: "Enroll to the master (key step)" },
       time: { zh: "约 1 分钟", en: "~1 min" },
       detail: {
-        zh: "填 **主控登录账号与密码**——就是主控智拓后台（局域网地址，如 http://192.168.0.176:18080）的登录账号，不知道就问管理员。通过后自动接入、不需要再等人批准。暂时不方便接入，可勾选 **暂不接入主控**，装完后在桌面「智拓后台」或开始菜单「重新接入主控」里再补，不用重装。",
-        en: "Enter the **master login account and password** — the login for the master Zhituo console on your LAN (e.g. http://192.168.0.176:18080); ask your admin if unsure. On success it enrolls automatically, no manual approval. Not convenient now? Tick **Enroll later** and finish it afterwards from the desktop \"Zhituo Console\" or Start menu \"Re-enroll\" — no reinstall.",
+        zh: "填 **主控登录账号与密码**——就是主控智拓后台（填写主控后台地址）的登录账号，不知道就问管理员。通过后自动接入、不需要再等人批准。暂时不方便接入，可勾选 **暂不接入主控**，装完后在桌面「智拓后台」或开始菜单「重新接入主控」里再补，不用重装。",
+        en: "Enter the **master login account and password** — the login for the master Zhituo console (enter your master console address); ask your admin if unsure. On success it enrolls automatically, no manual approval. Not convenient now? Tick **Enroll later** and finish it afterwards from the desktop \"Zhituo Console\" or Start menu \"Re-enroll\" — no reinstall.",
       },
       sub: {
         zh: [
@@ -131,15 +131,15 @@ export const ZHITUO = {
     {
       q: { zh: "提示「群控组件安装失败」怎么办？", en: "It says the control component failed to install — now what?" },
       a: {
-        zh: "通常是旧版群控组件或手机助手还开着、占用了安装。1.0.1 已会 **自动先停占用再装、失败也不影响智拓节点**；若仍失败，关闭 ChatX / 手机助手后重新运行一次安装包即可，不用卸载。",
-        en: "Usually an old control component or phone helper is still running and holding the installer. 1.0.1 **stops the occupant first, and a failure no longer blocks the Zhituo node**; if it still fails, close those apps and re-run the installer — no uninstall needed.",
+        zh: "通常是旧版群控组件或手机助手还开着、占用了安装。1.0.2 已会 **自动先停占用再装、失败也不影响智拓节点**；若仍失败，关闭 ChatX / 手机助手后重新运行一次安装包即可，不用卸载。",
+        en: "Usually an old control component or phone helper is still running and holding the installer. 1.0.2 **stops the occupant first, and a failure no longer blocks the Zhituo node**; if it still fails, close those apps and re-run the installer — no uninstall needed.",
       },
     },
     {
       q: { zh: "「接入主控」要填的账号密码是什么？", en: "What account does \"enroll to master\" ask for?" },
       a: {
-        zh: "就是主控智拓后台（局域网地址，如 http://192.168.0.176:18080）的登录账号和密码。用哪个主控账号登录，这台电脑就归哪个主控。不知道账号请问管理员。",
-        en: "The login account and password for the master Zhituo console on your LAN (e.g. http://192.168.0.176:18080). Whichever master account you log in with decides which master this PC belongs to. Ask your admin for the account.",
+        zh: "就是主控智拓后台（填写主控后台地址）的登录账号和密码。用哪个主控账号登录，这台电脑就归哪个主控。不知道账号请问管理员。",
+        en: "The login account and password for the master Zhituo console (enter your master console address). Whichever master account you log in with decides which master this PC belongs to. Ask your admin for the account.",
       },
     },
     {
