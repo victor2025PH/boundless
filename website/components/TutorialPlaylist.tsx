@@ -269,8 +269,8 @@ export default function TutorialPlaylist({ lang }: { lang: TutorialLang }) {
                   </p>
                   <p className="mt-2 text-xs leading-relaxed text-slate-400">
                     {zh
-                      ? "标准翻译永久免费，不用显卡、不用 API Key；装好后有问题点右下角小智球。"
-                      : "Standard translation is free forever; no GPU or API key needed. Once installed, ask the Xiaozhi bubble any time."}
+                      ? "标准翻译走本地模型，没配好转人工；不用显卡、不用 API Key。装好后有问题点右下角小智球。"
+                      : "Standard translation uses the local model; if it is not set, a person takes the line. No GPU or API key needed. Once installed, ask the Xiaozhi bubble any time."}
                   </p>
                   <div className="mt-4 flex flex-wrap justify-center gap-2">
                     <Link
@@ -312,7 +312,7 @@ export default function TutorialPlaylist({ lang }: { lang: TutorialLang }) {
               <span className="font-medium text-white">
                 {zh ? "看着顺手？装一个自己点点。" : "Looks useful? Install it and click along."}
               </span>{" "}
-              {zh ? "Windows 客户端 · 免费开始 · 标准翻译永久免费。" : "Windows client · free to start · standard translation free forever."}
+              {zh ? "Windows 客户端 · 免费开始 · 标准翻译走本地模型。" : "Windows client · free to start · standard translation on the local model."}
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
               <Link

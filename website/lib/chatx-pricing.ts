@@ -37,7 +37,7 @@ export interface TokenRate {
   key: string;
   /** 动作名 */
   action: { zh: string; en: string };
-  /** 每单位消耗 Token 数（0 = 永久免费） */
+  /** 每单位消耗 Token 数（0 = 不扣 Token） */
   tokens: number;
   /** 计量单位 */
   unit: { zh: string; en: string };
@@ -446,7 +446,7 @@ export function chatxPlanCardItems(lang: Lang): PlanCardItem[] {
     {
       name: zh ? "免费开始" : "Free start",
       price: "0",
-      unit: zh ? "永久免费" : "free forever",
+      unit: zh ? "下载即用" : "free to start",
       desc: zh ? "下载即用 · 标准翻译走本地模型" : "Download and go · standard translation uses the local model",
       features: zh
         ? [
