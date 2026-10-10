@@ -29,8 +29,10 @@ from src.web.routes.unified_inbox_services import (
     _get_translation_service,
     _inbox_store,
     _list_default_langs,
+    _effective_conv_translation_tier,
     _resolve_conv_engine,
     _resolve_conv_language,
+    _resolve_conv_translation_tier,
     _resolve_default_lang,
     _resolve_default_reply_lang,
 )
@@ -348,7 +350,10 @@ def register_translate_routes(app, *, api_auth) -> None:
             engine = _resolve_conv_engine(request, platform, account_id, chat_key)
 
         svc = _get_translation_service(request)
-        tier = str(body.get("tier") or "").strip().lower()
+        tier = _effective_conv_translation_tier(
+            request, platform, account_id, chat_key,
+            str(body.get("tier") or ""),
+        )
         result = await svc.translate(
             text,
             target_lang=target_lang,
@@ -775,11 +780,25 @@ def register_translate_routes(app, *, api_auth) -> None:
 
     @app.get("/api/unified-inbox/translation-engines")
     async def api_unified_inbox_translation_engines(
-        request: Request, target_lang: str = "zh", _=Depends(api_auth)
+        request: Request, target_lang: str = "zh", tier: str = "",
+        platform: str = "", account_id: str = "default", chat_key: str = "",
+        _=Depends(api_auth),
     ):
-        """指定目标语的引擎能力矩阵：让坐席在切换目标语时即知主引擎是否兜底。"""
+        """指定目标语的引擎能力矩阵。带会话时按该会话的翻译档，不按整箱。
+
+        查询串 ``tier`` 优先（并记住到会话）；否则读 ``conversations.pref_tier``。
+        都没有 = 标准档。专业/认证档不报「本地模型没配好」。
+        """
         svc = _get_translation_service(request)
-        return {"ok": True, "matrix": svc.engine_matrix(target_lang)}
+        if str(tier or "").strip():
+            resolved = _effective_conv_translation_tier(
+                request, platform, account_id, chat_key, tier)
+        elif str(chat_key or "").strip() and str(platform or "").strip():
+            resolved = _resolve_conv_translation_tier(
+                request, platform, account_id, chat_key)
+        else:
+            resolved = ""
+        return {"ok": True, "matrix": svc.engine_matrix(target_lang, tier=resolved)}
 
     @app.get("/api/lang-catalog")
     async def api_lang_catalog(
@@ -849,7 +868,13 @@ def register_translate_routes(app, *, api_auth) -> None:
                     "candidates": []}
 
         svc = _get_translation_service(request)
-        tier = str(body.get("tier") or "").strip().lower()
+        tier = _effective_conv_translation_tier(
+            request,
+            str(body.get("platform") or "").lower(),
+            str(body.get("account_id") or "default"),
+            str(body.get("chat_key") or ""),
+            str(body.get("tier") or ""),
+        )
         data = await svc.compare_translations(
             text, target_lang=target_lang, source_lang=source_lang, style=style,
             tier=tier,
@@ -913,7 +938,10 @@ def register_translate_routes(app, *, api_auth) -> None:
         engine = str(body.get("engine") or "").strip().lower()
         if not engine:
             engine = _resolve_conv_engine(request, platform, account_id, chat_key)
-        tier = str(body.get("tier") or "").strip().lower()
+        tier = _effective_conv_translation_tier(
+            request, platform, account_id, chat_key,
+            str(body.get("tier") or ""),
+        )
 
         from src.ai.document_translate import DocumentTranslateService
         svc = DocumentTranslateService(_get_translation_service(request))
