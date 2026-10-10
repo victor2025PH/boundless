@@ -43,6 +43,20 @@ def test_zh_hant_conversion_quality_spots():
     assert view.get("ck.why.waiting") == "客戶說了最後一句，還沒人回"
 
 
+def test_psn_js_305_tag_text_converts_without_reject():
+    """按钮 title 里的「折叠/展开」要转成繁体，标签骨架不能因此被拒。"""
+    from scripts.i18n_hant import _conversion_ok, _converter, convert_value
+    from src.web.i18n_packs.persona_studio import ZH
+
+    zh = ZH["psn_js_305"]
+    tr = convert_value(_converter(), zh)
+    assert _conversion_ok(zh, tr)
+    assert 'title="摺疊/展開"' in tr
+    assert 'onclick="_grToggleCard(this)"' in tr
+    view = get_translations("zh_hant")
+    assert view.get("psn_js_305") == tr
+
+
 def test_zh_hant_no_tai_variant_pin():
     """术语钉「臺→台」生效：全量值里不得出现「臺」（工作台/平台/后台惯用台）。"""
     _z, _e, extras = collect_all()
