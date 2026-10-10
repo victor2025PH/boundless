@@ -83,6 +83,18 @@ def test_missing_snippet_file_falls_back_to_farewell(monkeypatch, tmp_path):
     assert sg.resolve_confirm_text(EN_TEXT, cfg) == EN_FAREWELL
 
 
+def test_example_documents_confirm_off_and_empty_vertical_pack():
+    from pathlib import Path
+    import yaml
+    text = (Path(__file__).resolve().parents[1] / "config" / "config.example.yaml").read_text(encoding="utf-8")
+    assert "multilingual_confirm: false" in text
+    data = yaml.safe_load(text)
+    assert data["compliance"]["stop_gate"]["multilingual_confirm"] is False
+    assert data["compliance"]["stop_gate"]["enabled"] is True
+    assert data["vertical_pack"]["id"] == ""
+    assert data["vertical_pack"]["allow_internal"] is False
+
+
 def test_replybus_calls_resolve_confirm_text():
     from src.web.routes import replybus_routes
     src = inspect.getsource(replybus_routes._stop_gate_decision)

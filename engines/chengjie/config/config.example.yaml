@@ -5380,6 +5380,20 @@ compliance:
   # 运营方《危机干预协议》公示页 URL（SB 243 公示义务；配置后随披露语带出，
   # 官网模板页见 website /compliance/crisis-protocol）
   crisis_protocol_url: ""
+  # STOP 硬闸默认开（只有 enabled: false 才回到「只记录」）。多语确认默认关：
+  # 停联后的那一句仍用 farewell。显式 true 之后，只有 tl / ceb / hi 改用
+  # config/presets/snippets/stop_confirm_templates.yaml，en / zh 仍用 farewell。
+  # 不改变 STOP 词检测，也不走 LLM。
+  stop_gate:
+    enabled: true
+    multilingual_confirm: false
+
+# 垂直行业包。空 id = 没有激活包，启动不会按它自动播种知识库。
+# 写入仍要 CLI --apply 或 POST /api/kb/seed-pack 带 vertical_pack。
+# 公开包看不到 internal；未设置 CHATX_FLAVOR / CHATX_EDITION 按公开包。
+vertical_pack:
+  id: ""
+  allow_internal: false
 
 # ============ AI 助手悬浮球「小智」（2026-08-19 P0）============
 # 双壳（后台管理 + 坐席工作台）常驻 AI 助手：产品使用问答（独立帮助语料库
