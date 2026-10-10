@@ -309,9 +309,18 @@ async def test_std_tiers_block_and_paid_tiers_reach_engines():
     assert r.ok and r.provider == "ai" and ai.calls == 1 and r.needs_human is False
 
     ai.calls = 0
+    get_translation_engine_stats().reset()
     r = await _svc(ai).translate(
         "hello friend", target_lang="zh", source_lang="en", tier="enterprise")
-    assert r.ok and ai.calls == 1  # 未知显式档 fail-open，不当免费档
+    assert ai.calls == 0 and r.needs_human  # 未知档按标准档，不放行付费引擎
+    assert get_translation_engine_stats().dump()["unknown_tier"] == 1
+    assert "translation_engine_unknown_tier_total 1" in (
+        get_translation_engine_stats().dump_prom())
+    # 已知付费档不记 unknown。legacy 下未知档仍是标准档，才会打到付费引擎。
+    pro_before = get_translation_engine_stats().dump()["unknown_tier"]
+    await _svc(ai).translate(
+        "good morning friend", target_lang="zh", source_lang="en", tier="pro")
+    assert get_translation_engine_stats().dump()["unknown_tier"] == pro_before
 
 
 @pytest.mark.asyncio
