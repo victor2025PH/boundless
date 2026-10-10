@@ -131,7 +131,11 @@ def run_generate(dry_run: bool = False, packs_dir: Path | None = None,
             prev = g
         lines.append(f"    {k!r}: {out[k]!r},\n")
     lines.append("}\n")
-    target.write_text("".join(lines), encoding="utf-8")
+    # 词包在仓库里是 CRLF。生成器若改写成 LF，整文件会被当成每行都改过。
+    newline = "\n"
+    if target.exists() and b"\r\n" in target.read_bytes()[:160]:
+        newline = "\r\n"
+    target.write_text("".join(lines), encoding="utf-8", newline=newline)
     print(f"[i18n_hant] 已写 {target}: {stats['written']} 键 "
           f"(同形 {stats['identical']}, 人工包排除 {stats['skip_human']}, "
           f"拒绝 {stats['invalid']})")
