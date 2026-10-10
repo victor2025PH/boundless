@@ -43,9 +43,12 @@ const BANNED_CLAIMS = [
   "98%",    // 虚构百分比（无评测口径支撑的"98% 准确率/满意度"）
   "300+",   // 虚构数量级（无清单支撑的"300+ 企业/功能"）
   "封号自动换号", // 高风险表述：公开承诺规避平台风控 = 自证违反平台 ToS，法务红线
-  // 免费档翻译已改为本部署本地模型；没配好转人工，不许再承诺用尽后自动换免费引擎且永不断线。
+  // 免费档翻译已改为本部署本地模型；没配好转人工，不许再承诺用尽后自动换免费引擎且永不断线，
+  // 也不许再写「标准翻译永久免费 / 免费不限量」。
   "永不断线",
   "用尽自动降级",
+  "标准翻译永久免费",
+  "标准翻译免费不限量",
   // （2026-07-26 政策更新：幻缘/FateX 获批独立落地页 /fate，销售面解禁，从黑名单移除；
   //   「九产品」仍禁——销售面禁止手写产品数量数字，防与 brand.ts PRODUCT_COUNT 双源漂移。）
   "九产品", // 品牌层口径（brand.ts PRODUCT_COUNT 驱动）；销售面禁止手写产品数量数字
@@ -80,6 +83,18 @@ const BANNED_TARGET_FILES = [
   "app/pricing/page.tsx",
   "app/en/pricing/page.tsx",
   "app/llms.txt/route.ts",
+  // 对比文、教程、首页下单与演示（2026-10-10）：活营销面跟免费档本地模型口径
+  "lib/compare-content.ts",
+  "lib/chatx-tutorials.ts",
+  "lib/order-lines.ts",
+  "components/TutorialPlaylist.tsx",
+  "components/CompareHubPage.tsx",
+  "components/TranslateDemo.tsx",
+  "components/EnterprisePage.tsx",
+  "app/chatx/tutorials/page.tsx",
+  "app/en/chatx/tutorials/page.tsx",
+  "app/order/page.tsx",
+  "app/en/order/page.tsx",
 ];
 
 // ---------------------------------------------------------------------------

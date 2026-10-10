@@ -410,7 +410,7 @@ const zh: Dict = {
     titleLines: ["跟全球客户聊天", "像跟老乡聊天", "一样自然"],
     rotating: ["30+ 语种拟人互译秒回", "AI 用你的人设 7×24 跟单", "多平台消息一个收件箱", "关键时刻一键人工接管", "私有部署 · 数据不出网"],
     subtitle:
-      "把 WhatsApp / Telegram / LINE / Messenger 全部接进一个收件箱：客户说什么语言都行，AI 实时拟人互译、按你的人设自动答疑、跟单、促成交，重要节点你随时一键接管。全程支持私有部署，数据不出你的服务器。",
+      "把 WhatsApp / Telegram / LINE / Messenger，以及抖音企业号、TikTok 官方客服，接进一个收件箱：客户说什么语言都行，AI 实时拟人互译、按你的人设自动答疑、跟单、促成交，重要节点你随时一键接管。个人抖音号和个人 TikTok 号不能在智聊里网页登录，个人号获客是智拓；智控是另一套矩阵。全程支持私有部署，数据不出你的服务器。",
     trustline: "7×24 看门狗自愈生产运行 · 1100+ 自动化测试护航 · 数据不出网",
     // hero_cta A/B 结案定稿（2026-08-07）：demo 钩子文案胜出（30 天 b 组 2 击 / a 组 0 击），
     // 且与按钮落点 #autochat 演示区语义一致（旧文案承诺「咨询」落点却是演示，文不对题）。
@@ -419,7 +419,7 @@ const zh: Dict = {
     stats: [
       { value: "24H", label: "看门狗自愈全天候运行" },
       { value: "30+", label: "语种拟人互译" },
-      { value: "5", label: "大平台统一接入" },
+      { value: "官方", label: "渠道进同一收件箱" },
       { value: "1100+", label: "自动化回归测试" },
     ],
   },
@@ -432,8 +432,8 @@ const zh: Dict = {
       id: "chatx",
       tag: "智聊 ChatX",
       title: "AI 成交聊天 · 统一收件箱",
-      desc: "多平台消息聚合进一个工作台：AI 按你的人设自动答疑、跟单、促成交，标准翻译永久免费，重要节点一键人工接管；AI 用量按 Token 透明计价，支持私有部署。",
-      features: ["多平台统一收件箱", "AI 人设自动跟单", "标准翻译永久免费", "一键人工接管"],
+      desc: "多平台消息聚合进一个工作台：AI 按你的人设自动答疑、跟单、促成交。标准翻译走本部署的本地模型，不调用付费接口；本地模型没配好时转人工。AI 用量按 Token 透明计价，支持私有部署。",
+      features: ["多平台统一收件箱", "AI 人设自动跟单", "标准翻译走本地模型", "一键人工接管"],
       highlight: true,
       // 2026-08-19 Token 分层：档位行由 chatx-pricing.ts 派生（免费/个人/按量/团队/旗舰）。
       pricing: chatxPlanRows("zh"),
@@ -462,9 +462,9 @@ const zh: Dict = {
       //（id/SKU/深链不变，授权层 lingox-* 照旧履约；主推位 highlight 移交智聊主卡）。
       id: "translate",
       tag: "智聊 ChatX · 翻译",
-      title: "跨境聊天翻译 · 标准翻译永久免费",
-      desc: "多平台文字 + 语音双向实时翻译——标准翻译所有档位免费含、不限字符（内置引擎，公平使用 200 万字符/日）；术语锁定、翻译记忆、DeepL 认证与图片/语音多模态属专业翻译，按 Token 透明计量。翻译能力内置在智聊 ChatX 客户端，下载即用。",
-      features: ["标准翻译免费 · 不限字符", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
+      title: "跨境聊天翻译 · 标准翻译走本地模型",
+      desc: "多平台文字 + 语音双向实时翻译。标准翻译走本部署的本地模型，不按字符扣 Token，也不调用付费翻译接口；本地模型没配好时转人工（公平使用 200 万字符/日，超出仅提醒）。术语锁定、翻译记忆、DeepL 认证与图片/语音多模态属专业翻译，按 Token 计量。翻译能力内置在智聊 ChatX 客户端，下载即用。",
+      features: ["标准翻译走本地模型", "术语锁定 · 翻译记忆", "统一收件箱 · 客户资产", "多模态（图片/语音）翻译"],
       // 2026-08-19 翻译免费化：报价行由 chatx-pricing.ts::translateRows 派生。
       pricing: translateRows("zh"),
     },
@@ -514,7 +514,7 @@ const zh: Dict = {
     },
   ],
   pricingSection: {
-    note: `智聊 ChatX：免费开始（标准翻译不限量），按充值计费不订阅——50U 起充、1U = 1,500 Token、首充按档加赠最高 +40%，新人 6U 大礼包 18,000 Token 双倍到账；企业年框 / 私有化部署面议。幻境 STUDIO ：免费换脸+水印 / 入门 ${studioTier("starter").monthly} / 标准 ${studioTier("standard").monthly} / 专业 ${studioTier("pro").monthly} / 旗舰咨询报价。超出清单的需求按场景定制。`,
+    note: `智聊 ChatX：免费开始（标准翻译走本地模型，没配好转人工），按充值计费不订阅——50U 起充、1U = 1,500 Token、首充按档加赠最高 +40%，新人 6U 大礼包 18,000 Token 双倍到账；企业年框 / 私有化部署面议。幻境 STUDIO ：免费换脸+水印 / 入门 ${studioTier("starter").monthly} / 标准 ${studioTier("standard").monthly} / 专业 ${studioTier("pro").monthly} / 旗舰咨询报价。超出清单的需求按场景定制。`,
   },
   trust: {
     platformsLabel: "深度对接的沟通平台",
@@ -524,10 +524,12 @@ const zh: Dict = {
       { name: "LINE", note: "双向收发 · 媒体 · 好友欢迎" },
       { name: "Messenger", note: "网页 + 移动 App 双链路" },
       { name: "Web", label: "网页客服", note: "官网 / 独立站即嵌即用" },
-      { name: "Facebook", note: "真机获客 · 好友 / 群触达" },
+      { name: "Facebook", note: "个人主页获客是智拓，不是智聊收件箱" },
+      { name: "抖音", note: "企业号小程序私信 · 客户先开口 · 不能网页登录个人号" },
+      { name: "TikTok", note: "官方客服 · 不能网页登录个人号" },
     ],
     platformsComingLabel: "更多平台 · 陆续接入",
-    platformsComing: ["Instagram", "TikTok", "X", "Discord", "WeChat", "Zalo", "Viber", "KakaoTalk", "Signal"],
+    platformsComing: ["Instagram", "X", "Discord", "WeChat", "Zalo", "Viber", "KakaoTalk", "Signal"],
     statsTitle: "用工程事实说话",
     statsSubtitle: "每个数字都有仓内实测记录与运行台账背书——可举证、可复现，拒绝形容词式吹牛。",
     stats: [
@@ -536,7 +538,7 @@ const zh: Dict = {
       { value: "22", suffix: "/22", label: "断云演习本地模型全量接管", sub: "云端断链客户零感知，恢复自动闭合" },
       { value: "24", suffix: "/7", label: "生产运行 · 看门狗 5 分钟自愈巡检", sub: "凌晨三点挂了也会自己爬起来" },
       { value: "30", suffix: "+", label: "语种拟人互译（模型口径）", sub: "俚语与语气像本地人" },
-      { value: "5", suffix: "", label: "大平台接入 · 统一收件箱", sub: "全平台消息一个工作台接住" },
+      { value: "官方", suffix: "", label: "渠道进同一收件箱", sub: "个人号获客是智拓，智控是另一套矩阵" },
       { value: "0.939", suffix: "", label: "回译语义均分（满分 1.0）", sub: "机器评审口径，周批持续追踪" },
       { value: "20", suffix: "+", label: "专项质量评测门禁", sub: "危机安全 / 人设一致性 / 图文一致性…" },
     ],
@@ -562,7 +564,7 @@ const zh: Dict = {
   },
   plans: {
     title: "AI 成交聊天 · 按充值计费",
-    subtitle: `免费开始，充多少用多少，不订阅：标准翻译永久免费；AI 回复 / 专业翻译 / 克隆语音按 Token 透明计价——注册送 ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} 体验 Token。`,
+    subtitle: `免费开始，充多少用多少，不订阅：标准翻译走本地模型，没配好转人工；AI 回复 / 专业翻译 / 克隆语音按 Token 透明计价——注册送 ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} 体验 Token。`,
     note: "充值均为一次性、无月费；首笔充值按档加赠最高 +40%，实付 Token 12 个月有效（500U 及以上 24 个月）。",
     popular: "最受欢迎",
     cta: "选择此档",
@@ -589,7 +591,7 @@ const zh: Dict = {
       { q: "AI 能自动跟客户成交吗？人工能接管吗？", a: "可以。AI 以你的人设 7×24 自动接洽、答疑、跟进、促单转化，遇到关键节点人工可随时一键接管。" },
       { q: "声音克隆需要什么素材？", a: "仅需几十秒清晰人声样本即可零样本克隆；请确保你拥有该声音的授权。" },
       { q: "私有大模型和公有云 API 有什么区别？", a: "私有部署的大模型数据完全留在本地、不依赖公有云内容策略，可按你的业务自由微调知识库与输出风格，无云端上报，自主可控。" },
-      { q: "可以按量付费吗？Token 是什么？", a: "可以，而且只有按量：不订阅、无月费。Token 是全站统一的 AI 用量单位，每个动作的消耗全部公示（如 AI 回复 10 Token/条、专业翻译 10 Token/千字符）；充值 50U 起、1U = 1,500 Token，首笔充值按档加赠最高 +40%，实付 12 个月有效（500U 及以上档 24 个月）。标准翻译不耗 Token、永久免费。" },
+      { q: "可以按量付费吗？Token 是什么？", a: "可以，而且只有按量：不订阅、无月费。Token 是全站统一的 AI 用量单位，每个动作的消耗全部公示（如 AI 回复 10 Token/条、专业翻译 10 Token/千字符）；充值 50U 起、1U = 1,500 Token，首笔充值按档加赠最高 +40%，实付 12 个月有效（500U 及以上档 24 个月）。标准翻译走本地模型，不按字符扣 Token，也不调用付费接口；本地模型没配好时转人工。" },
       { q: "如何确认我在和官方沟通、收款地址无误？", a: "官网只在订单页实时展示收款地址；客服只使用官网页面上列出的官方 Telegram 账号。任何『主动私聊你的客服』或第三方转发的地址，请一律回到订单页核对后再操作。" },
     ],
   },
@@ -1029,7 +1031,7 @@ const en: Dict = {
     titleLines: ["Chat with customers worldwide", "as naturally as", "with a neighbor"],
     rotating: ["Human-like translation, 30+ languages", "AI follows up 24/7 in your persona", "Every platform, one inbox", "One-click human takeover", "Private deployment, data stays home"],
     subtitle:
-      "Bring WhatsApp / Telegram / LINE / Messenger into one inbox. Customers write in any language — AI translates like a native, answers and follows up in your persona, and you take over with one click when it matters. Deploy privately; data never leaves your servers.",
+      "Bring WhatsApp / Telegram / LINE / Messenger, plus Douyin enterprise and TikTok official customer service, into one inbox. Customers write in any language — AI translates like a native, answers and follows up in your persona, and you take over with one click when it matters. Personal Douyin and personal TikTok accounts cannot web-login inside ChatX; personal-account outreach is ReachX, and MatrixX is a separate fleet. Deploy privately; data never leaves your servers.",
     trustline: "24/7 self-healing production · 1100+ automated tests · Data stays on-prem",
     // hero_cta A/B closed 2026-08-07: demo-hook copy won (see zh note above).
     ctaPrimary: "Watch AI close a deal live",
@@ -1037,7 +1039,7 @@ const en: Dict = {
     stats: [
       { value: "24H", label: "Watchdog-healed, always on" },
       { value: "30+", label: "Languages, human-like" },
-      { value: "5", label: "Platforms, one inbox" },
+      { value: "Official", label: "channels, one inbox" },
       { value: "1100+", label: "Automated regression tests" },
     ],
   },
@@ -1050,8 +1052,8 @@ const en: Dict = {
       id: "chatx",
       tag: "ChatX",
       title: "AI Closing Chat · Unified Inbox",
-      desc: "Every platform's messages flow into one workspace: AI answers, follows up and closes in your persona, standard translation is free forever, and you take over with one click at key moments; AI usage meters at transparent token rates. Private deployment supported.",
-      features: ["Unified multi-platform inbox", "Persona-driven AI follow-up", "Standard translation free forever", "One-click human takeover"],
+      desc: "Every platform's messages flow into one workspace: AI answers, follows up and closes in your persona. Standard translation uses this deployment's local model and does not call a paid API; if that model is not set, a person takes the line. AI usage meters at transparent token rates. Private deployment supported.",
+      features: ["Unified multi-platform inbox", "Persona-driven AI follow-up", "Standard translation on the local model", "One-click human takeover"],
       highlight: true,
       // 2026-08-19 token plans: rows derived from chatx-pricing.ts (Free/Personal/Flex/Team/Flagship).
       pricing: chatxPlanRows("en"),
@@ -1080,9 +1082,9 @@ const en: Dict = {
       // (id / SKUs / deep links unchanged; lingox-* licensing keeps fulfilling as before).
       id: "translate",
       tag: "ChatX · Translate",
-      title: "Cross-border Chat Translation · Standard Free Forever",
-      desc: "Two-way real-time text + voice translation across platforms — standard translation is free in every plan with unlimited characters (built-in engine, fair use 2M chars/day). Term-lock glossaries, translation memory, certified DeepL and image/voice multimodal are pro features metered in tokens. Ships inside the ChatX client; download and go.",
-      features: ["Standard translation free · unlimited", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
+      title: "Cross-border Chat Translation · Local-model Standard",
+      desc: "Two-way real-time text + voice translation across platforms. Standard translation uses this deployment's local model: no per-character token charge and no paid translation API. If the local model is not set, a person takes the line (fair use 2M chars/day; overage is a reminder only). Term-lock glossaries, translation memory, certified DeepL and image/voice multimodal are pro features metered in tokens. Ships inside the ChatX client; download and go.",
+      features: ["Standard translation on the local model", "Term lock · translation memory", "Unified inbox · customer assets", "Multimodal (image/voice)"],
       // 2026-08-19 free-translation repricing: rows derived from chatx-pricing.ts::translateRows.
       pricing: translateRows("en"),
     },
@@ -1132,7 +1134,7 @@ const en: Dict = {
     },
   ],
   pricingSection: {
-    note: `ChatX: start free (unlimited standard translation), pay by top-up — no subscription: from 50U at 1U = 1,500 tokens, first top-up earns up to +40%, newcomer 6U pack lands 18,000 tokens at double rate; enterprise frames / private deployment by quote. STUDIO: free face swap+watermark / Starter ${studioTier("starter").monthly} / Standard ${studioTier("standard").monthly} / Pro ${studioTier("pro").monthly} / Flagship quote. Anything beyond the list is custom by scenario.`,
+    note: `ChatX: start free (standard translation on the local model; a person takes the line if it is not set), pay by top-up — no subscription: from 50U at 1U = 1,500 tokens, first top-up earns up to +40%, newcomer 6U pack lands 18,000 tokens at double rate; enterprise frames / private deployment by quote. STUDIO: free face swap+watermark / Starter ${studioTier("starter").monthly} / Standard ${studioTier("standard").monthly} / Pro ${studioTier("pro").monthly} / Flagship quote. Anything beyond the list is custom by scenario.`,
   },
   trust: {
     platformsLabel: "Deeply integrated platforms",
@@ -1142,10 +1144,12 @@ const en: Dict = {
       { name: "LINE", note: "Two-way messaging · media · welcome flows" },
       { name: "Messenger", note: "Web + mobile app, dual link" },
       { name: "Web", label: "Web Chat", note: "Embed on any site in minutes" },
-      { name: "Facebook", note: "Real-device lead-gen · friends / groups" },
+      { name: "Facebook", note: "Personal-page outreach is ReachX, not the ChatX inbox" },
+      { name: "Douyin", note: "Enterprise mini-program DMs · customer speaks first · no personal web login" },
+      { name: "TikTok", note: "Official customer service · no personal web login" },
     ],
     platformsComingLabel: "More platforms · coming",
-    platformsComing: ["Instagram", "TikTok", "X", "Discord", "WeChat", "Zalo", "Viber", "KakaoTalk", "Signal"],
+    platformsComing: ["Instagram", "X", "Discord", "WeChat", "Zalo", "Viber", "KakaoTalk", "Signal"],
     statsTitle: "Engineering facts, not adjectives",
     statsSubtitle: "Every number is backed by in-repo measurements and production records — verifiable and reproducible.",
     stats: [
@@ -1154,7 +1158,7 @@ const en: Dict = {
       { value: "22", suffix: "/22", label: "Cloud-outage drill, local model took over", sub: "Customers noticed nothing; circuit self-closed" },
       { value: "24", suffix: "/7", label: "In production · watchdog probes every 5 min", sub: "Crashes at 3am get back up on their own" },
       { value: "30", suffix: "+", label: "Languages, human-like translation (model scope)", sub: "Slang and tone that read like a local" },
-      { value: "5", suffix: "", label: "Platforms into one inbox", sub: "Every channel lands in one workspace" },
+      { value: "Official", suffix: "", label: "channels, one inbox", sub: "Personal-account outreach is ReachX; MatrixX is a separate fleet" },
       { value: "0.939", suffix: "", label: "Mean semantic score (out of 1.0)", sub: "Machine-judged, tracked weekly" },
       { value: "20", suffix: "+", label: "Dedicated quality-eval gates", sub: "Crisis safety / persona / media consistency…" },
     ],
@@ -1180,7 +1184,7 @@ const en: Dict = {
   },
   plans: {
     title: "AI Auto-Closing Chat · Pay by Top-up",
-    subtitle: `Start free and top up as you go — no subscription. Standard translation free forever; AI replies, pro translation and cloned voice meter at transparent token rates, with ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} bonus tokens on signup.`,
+    subtitle: `Start free and top up as you go — no subscription. Standard translation uses the local model, and a person takes the line if it is not set. AI replies, pro translation and cloned voice meter at transparent token rates, with ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} bonus tokens on signup.`,
     note: "All top-ups are one-time with no monthly fee; the first top-up earns up to +40% by tier, and paid tokens stay valid 12 months (24 for 500U+).",
     popular: "Most popular",
     cta: "Choose this",
@@ -1207,7 +1211,7 @@ const en: Dict = {
       { q: "Can AI close deals automatically? Can humans take over?", a: "Yes. AI works your persona 24/7 to engage, answer, follow up and convert; at key moments a human can take over in one click." },
       { q: "What does voice cloning need from me?", a: "Just a few dozen seconds of clear voice audio for zero-shot cloning; make sure you hold the rights to that voice." },
       { q: "How is a private LLM different from a public cloud API?", a: "A privately deployed LLM keeps data fully local, free of public-cloud dependencies — fine-tune its knowledge base and output style to your business, with no cloud reporting and full self-control." },
-      { q: "Can I pay per usage? What are tokens?", a: "Yes — and usage is the only thing you pay for: no subscription, no monthly fee. Tokens are the single AI-usage unit across the product, with every action's cost published (e.g. an AI reply costs 10 tokens; pro translation 10 tokens/1k chars). Top up from 50U at 1U = 1,500 tokens; your first top-up earns up to +40% by tier, and paid tokens stay valid 12 months (24 for 500U+). Standard translation costs no tokens — it's free forever." },
+      { q: "Can I pay per usage? What are tokens?", a: "Yes — and usage is the only thing you pay for: no subscription, no monthly fee. Tokens are the single AI-usage unit across the product, with every action's cost published (e.g. an AI reply costs 10 tokens; pro translation 10 tokens/1k chars). Top up from 50U at 1U = 1,500 tokens; your first top-up earns up to +40% by tier, and paid tokens stay valid 12 months (24 for 500U+). Standard translation uses the local model: no per-character token charge and no paid API. If the local model is not set, a person takes the line." },
       { q: "How do I know I'm talking to the official team and paying the right address?", a: "The payment address is shown live on the order page only, and our support uses only the official Telegram accounts listed on this site. If a \"support agent\" messages you first, or a third party forwards you an address, always go back to the order page and verify before acting." },
     ],
   },

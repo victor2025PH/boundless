@@ -41,6 +41,11 @@
 `lib/pricing-faq.ts`、`components/PricingPage.tsx`、`components/OrderPanel.tsx`、
 `components/RechargeOrderZone.tsx`、`components/ChatxDownloadSection.tsx`、
 `app/pricing/page.tsx`、`app/en/pricing/page.tsx`、`app/llms.txt/route.ts`，2026-10-10 起），
+以及对比文 / 教程 / 下单与演示（`lib/compare-content.ts`、`lib/chatx-tutorials.ts`、
+`lib/order-lines.ts`、`components/TutorialPlaylist.tsx`、`components/CompareHubPage.tsx`、
+`components/TranslateDemo.tsx`、`components/EnterprisePage.tsx`、
+`app/chatx/tutorials/page.tsx`、`app/en/chatx/tutorials/page.tsx`、
+`app/order/page.tsx`、`app/en/order/page.tsx`，同日），
 命中即 build 失败：
 
 | 禁用子串 | 禁用原因 |
@@ -57,6 +62,7 @@
 | `防封` | 暗示对抗平台风控，与「封号自动换号」同族，法务红线 |
 | `顾嘉` / `Gary` | 2026-08-21 顾问改名「小界（Jie）」——与 ChatX 产品内助手、交流群 @小界 同名统一；旧名（含英文名）不许从旧文案复制回潮 |
 | `永不断线` / `用尽自动降级` | 免费档标准翻译走本部署本地模型；本地模型没配好时转人工，不会改用付费引擎。不许再承诺额度用尽后自动换免费引擎且会话翻译永不中断 |
+| `标准翻译永久免费` / `标准翻译免费不限量` | 同上。标准档不按字符扣 Token、不调用付费翻译接口，但依赖本部署本地模型；没配好时转人工。日 200 万字符是提醒，不是不限量承诺。企业私有化「本地模型 Token 不限量」是自有算力口径，不在此禁 |
 
 > 注：2026-07-26 清理收口后，`lib/growthContent.ts`、`lib/downloads.ts` 已进
 > `BANNED_TARGET_FILES`。`lib/brand.ts` **刻意不进**：它是品牌层单一事实源，合法包含
