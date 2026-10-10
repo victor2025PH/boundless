@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""2026-08-19 Token P6 门禁：enforce=「耗尽降级免费路径」，永不断线。
+"""2026-08-19 Token P6 门禁：enforce=「耗尽降级免费路径」。
 
 产品不变量：
 1. 降级判定五闸全过才 True（总闸/enforce/计费动作/钱包曾注资/余额≤0）——
    从未注资的存量授权不适用（防 enforce 一开全体打降级）；判定异常一律 False。
-2. 降级永远指向**能出结果的免费路径**：AI 回复→本地模型、专业翻译→标准档、
-   克隆声→edge 兜底；免费路径不可用时照走付费路径（永不断线 > 计费）。
+2. 降级先走免费路径：AI 回复→本地模型、专业翻译→标准档、克隆声有兜底声→edge。
+   免费档守卫开（缺省）且本地没有结果：对客回复本轮不自动回复，克隆没有
+   免费兜底声则改发文字，不改打付费接口。显式 legacy 才保留付费回落。
+   工具调用不在这句对客口径里。
 3. 免费路径出话不计费：本地模型回复带 _reply_free_path 标记，计费钩 pop 消费
    （context 跨轮复用，残留标记会豁免下一条云端回复——取走即清是硬约束）。
 """
@@ -101,11 +103,11 @@ def test_ai_client_wiring_pinned():
     # 计费钩必须 pop 消费免费路径标记（读而不清 = 残留豁免下一条云端回复）
     assert 'context.pop("_reply_free_path"' in gen
     oa = inspect.getsource(AIClient._generate_reply_openai_compat)
-    # 降级判定存在，且**本地兜底可用**是前置（无处可去不降级=永不断线）
+    # 降级判定存在；有本地端点才先试本地。本地没有结果时守卫决定是否停住。
     assert 'should_degrade_action("ai_reply")' in oa
-    assert "self._fb_client and self._fb_model" in oa.split(
-        'should_degrade_action("ai_reply")')[0].rsplit("_token_degraded", 2)[-1] or \
-        "self._fb_client and self._fb_model" in oa
+    assert "self._fb_client and self._fb_model" in oa
+    assert "_paid_ai_blocked_after_local_miss" in oa
+    assert "_stop_paid_ai" in oa
     lf = inspect.getsource(AIClient._try_local_fallback_chat)
     # 免费路径标记打在成功 return 之前
     assert '_reply_free_path' in lf
@@ -118,11 +120,97 @@ def test_tts_wiring_pinned():
     assert tts_pipeline._is_non_fallback_error("token_wallet_exhausted") is False
     src = inspect.getsource(tts_pipeline.TTSPipeline._synthesize_uncached)
     assert 'should_degrade_action("voice_clone")' in src
-    # 降级=注入失败原因交既有 edge 兜底块（不自造第二条兜底链）
+    # 有兜底声：注入失败原因交既有 edge 块。没有兜底声：守卫开则改发文字。
     assert '"token_wallet_exhausted"' in src
-    # 兜底可用性是降级前置（fallback_on_error + fallback_backend）
-    seg = src.split('should_degrade_action("voice_clone")')[0]
-    assert "fallback_on_error" in seg and "fallback_backend" in seg
+    assert "fallback_on_error" in src and "fallback_backend" in src
+    assert "_token_block_unbacked_clone" in src
+    assert 'rv.extra["degrade_to_text"] = True' in src
+
+
+def test_block_paid_when_local_has_no_result():
+    """守卫开 + 对客 + 余额用尽 → 拦住。legacy、工具调用、余额还在 → 不拦。"""
+    from src.ai.ai_client import AIClient
+    from src.ai.translation_engines import (
+        block_paid_when_local_miss,
+        free_tier_blocks_paid_fallback,
+        set_free_tier_guard_process,
+    )
+
+    assert block_paid_when_local_miss(
+        wallet_empty=True, guard=True, customer_facing=True) is True
+    assert block_paid_when_local_miss(
+        wallet_empty=True, guard=False, customer_facing=True) is False
+    assert block_paid_when_local_miss(
+        wallet_empty=False, guard=True, customer_facing=True) is False
+    assert block_paid_when_local_miss(
+        wallet_empty=True, guard=True, customer_facing=False) is False
+    assert free_tier_blocks_paid_fallback(
+        {"translation": {"free_tier_zero_cost": "legacy"}}) is False
+    assert free_tier_blocks_paid_fallback(
+        {"translation": {"free_tier_zero_cost": "enforce"}}) is True
+    set_free_tier_guard_process(False)
+    try:
+        assert free_tier_blocks_paid_fallback(None) is False
+    finally:
+        set_free_tier_guard_process(None)
+    assert free_tier_blocks_paid_fallback(None) is True
+
+    client = SimpleNamespace(config=SimpleNamespace(config={
+        "translation": {"free_tier_zero_cost": "enforce"}}))
+    assert AIClient._paid_ai_blocked_after_local_miss(client, {}, True) is True
+    assert AIClient._paid_ai_blocked_after_local_miss(
+        client, {"_tool_call": True}, True) is False
+    assert AIClient._paid_ai_blocked_after_local_miss(
+        client, {"_bare_system": "translate"}, True) is False
+    assert AIClient._paid_ai_blocked_after_local_miss(client, {}, False) is False
+    client.config.config["translation"]["free_tier_zero_cost"] = "legacy"
+    assert AIClient._paid_ai_blocked_after_local_miss(client, {}, True) is False
+
+
+@pytest.mark.asyncio
+async def test_unbacked_clone_degrades_to_text_instead_of_paid(tmp_path, monkeypatch):
+    """没有免费兜底声时，余额用尽不调用付费克隆，改发文字。legacy 才去调克隆。"""
+    from src.ai.tts_pipeline import TTSPipeline
+
+    monkeypatch.setattr(
+        "src.licensing.token_ledger.should_degrade_action", lambda *_a, **_k: True)
+
+    async def _no_clone(*_a, **_k):
+        raise AssertionError("paid clone must not run")
+
+    pipe = TTSPipeline({
+        "enabled": True,
+        "backend": "avatar_clone",
+        "fallback_on_error": False,
+        "out_dir": str(tmp_path),
+    })
+    monkeypatch.setattr(pipe, "_should_try_lan", lambda: False)
+    monkeypatch.setattr(pipe, "_clone_lang_blocked", lambda *_a, **_k: "")
+    monkeypatch.setattr(pipe, "_try_avatar_clone", _no_clone)
+    rv = await pipe._synthesize_uncached("你好，今天天气不错，我们晚点再聊。")
+    assert rv.ok is False
+    assert rv.extra.get("degrade_to_text") is True
+    assert "token_wallet_exhausted" in str(rv.error or "")
+
+    called = {"n": 0}
+
+    async def _yes_clone(rv, *_a, **_k):
+        called["n"] += 1
+        rv.ok = True
+        return rv
+
+    legacy = TTSPipeline({
+        "enabled": True,
+        "backend": "avatar_clone",
+        "fallback_on_error": False,
+        "free_tier_zero_cost": "legacy",
+        "out_dir": str(tmp_path),
+    })
+    monkeypatch.setattr(legacy, "_should_try_lan", lambda: False)
+    monkeypatch.setattr(legacy, "_clone_lang_blocked", lambda *_a, **_k: "")
+    monkeypatch.setattr(legacy, "_try_avatar_clone", _yes_clone)
+    rv2 = await legacy._synthesize_uncached("你好，今天天气不错，我们晚点再聊。")
+    assert called["n"] == 1 and rv2.ok is True
 
 
 def test_translate_wiring_pinned():

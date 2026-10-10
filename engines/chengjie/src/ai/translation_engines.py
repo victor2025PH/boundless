@@ -1217,6 +1217,51 @@ def free_tier_guard_enabled(value: Any) -> bool:
     return text in _ENFORCE_GUARD_VALUES
 
 
+# 进程级覆盖：web 启动按 translation.free_tier_zero_cost 写一次。
+# 没写过时按 enforce（与 TranslationService 构造缺省一致）。
+_FREE_TIER_GUARD_PROCESS: Optional[bool] = None
+
+
+def set_free_tier_guard_process(enabled: Optional[bool]) -> None:
+    """启动时记下免费档守卫。``None`` 清掉覆盖，回到缺省 enforce。"""
+    global _FREE_TIER_GUARD_PROCESS
+    _FREE_TIER_GUARD_PROCESS = None if enabled is None else bool(enabled)
+
+
+def free_tier_blocks_paid_fallback(config: Any = None) -> bool:
+    """AI 回复 / 克隆语音要不要在「本地没有结果」时拦住付费回落。
+
+    显式 config（ConfigManager 或 dict）优先。否则用启动时写下的进程值。
+    都没有 → enforce（拦住）。legacy / off 返回 False，付费回落保留。
+    """
+    try:
+        cfg = config
+        if cfg is not None and not isinstance(cfg, dict):
+            cfg = getattr(cfg, "config", None)
+        if isinstance(cfg, dict) and "translation" in cfg:
+            return free_tier_guard_enabled(
+                (cfg.get("translation") or {}).get("free_tier_zero_cost", "enforce"))
+        if isinstance(cfg, dict) and "free_tier_zero_cost" in cfg:
+            return free_tier_guard_enabled(cfg.get("free_tier_zero_cost"))
+    except Exception:
+        logger.debug("[xlate] free_tier guard lookup failed", exc_info=True)
+        return True
+    if _FREE_TIER_GUARD_PROCESS is not None:
+        return bool(_FREE_TIER_GUARD_PROCESS)
+    return True
+
+
+def block_paid_when_local_miss(
+    *, wallet_empty: bool, guard: bool, customer_facing: bool,
+) -> bool:
+    """余额用尽、守卫开、且这是对客回复：本地没有结果时不许改打付费接口。
+
+    工具调用（``customer_facing=False``）和余额还在的付费档保持原路径。
+    ``guard=False`` 是 legacy 逃生口，允许付费回落。
+    """
+    return bool(wallet_empty and guard and customer_facing)
+
+
 def is_paid_engine(eng: Any) -> bool:
     """生产付费引擎（云翻译 API、主对话 LLM、custom OpenAI 兼容线）。"""
     if eng is None:

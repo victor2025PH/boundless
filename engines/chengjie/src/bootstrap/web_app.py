@@ -911,9 +911,13 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                         _cfg_root, domain_files=_domain_files, overrides=_gloss_overrides,
                     )
                     _engines = build_engines(_tr_cfg, assistant.ai_client)
-                    from src.ai.translation_engines import free_tier_guard_enabled
+                    from src.ai.translation_engines import (
+                        free_tier_guard_enabled,
+                        set_free_tier_guard_process,
+                    )
                     _free_tier_guard = free_tier_guard_enabled(
                         _tr_cfg.get("free_tier_zero_cost", "enforce"))
+                    set_free_tier_guard_process(_free_tier_guard)
                     # K：引擎置信度智能切换（默认关 → min_confidence=0 行为不变）
                     _conf_sw = (_tr_cfg.get("engines") or {}).get("confidence_switch") or {}
                     _min_conf = (
