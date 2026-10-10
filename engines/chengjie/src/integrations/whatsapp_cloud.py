@@ -39,8 +39,7 @@ config.yaml 示例：
       name: ""                                 # 旧形状单模板（不按语言分流）
       language: "zh_CN"
       text_param: true
-      default_language: zh
-      by_language: {}                          # zh/en/tl → {name, language, text_param}
+      by_language: {}                          # zh/en/tl；未知语言不发，不改用中文
     stop_gate: {allow_farewell: false, extra_keywords: []}
     handoff: {on_human_request: true, on_media: true, on_empty_reply: true}
     pricing: {currency: USD, rates: {default: {marketing: 0.0, utility: 0.0}}}
@@ -319,6 +318,14 @@ async def wa_send_text(
         block = _rt("window_fallback_template", {}) or {}
         conv_lang = str(lang or "").strip() or _lookup_wa_conv_lang(to, phone_number_id)
         chosen = select_window_fallback(block, conv_lang, edition=runtime_edition())
+        if not chosen.get("name"):
+            out["window_fallback_skipped"] = str(chosen.get("source") or "none")
+            out["fallback_lang"] = str(chosen.get("resolved_lang") or "")
+            logger.info(
+                "[wa_cloud] 窗口外未发模板 conv_lang=%s source=%s template_lang=%s",
+                conv_lang or "-", chosen.get("source") or "none",
+                chosen.get("language") or "-",
+            )
         if chosen.get("name"):
             params: List[str] = []
             if chosen.get("text_param", True):
@@ -332,7 +339,13 @@ async def wa_send_text(
                     _send_stats["window_fallback"] = int(_send_stats.get("window_fallback") or 0) + 1
                 fb["window_fallback"] = True
                 fb["fallback_lang"] = chosen.get("resolved_lang") or ""
+                fb["fallback_template_lang"] = chosen.get("language") or ""
                 fb["fallback_source"] = chosen.get("source") or ""
+                logger.info(
+                    "[wa_cloud] 窗口外已发模板 name=%s template_lang=%s resolved=%s source=%s",
+                    chosen.get("name"), chosen.get("language") or "-",
+                    chosen.get("resolved_lang") or "-", chosen.get("source") or "-",
+                )
                 return fb
             out["window_fallback_error"] = str(fb.get("error") or "")[:200]
             out["window_fallback_template_name"] = str(chosen.get("name") or "")

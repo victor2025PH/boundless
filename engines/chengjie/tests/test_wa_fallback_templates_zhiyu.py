@@ -109,23 +109,23 @@ def test_select_matches_conversation_language():
     assert select_window_fallback(block, "ceb")["name"] == "cbp_svc_followup_fil"
 
 
-def test_unknown_language_uses_configurable_default_then_legacy():
+def test_unknown_language_does_not_send_another_language():
     block = _neutral_block()
-    picked = select_window_fallback(block, "ja")
-    assert picked["name"] == "cbp_svc_followup_zh" and picked["source"] == "default_language"
-    block["default_language"] = "en"
-    assert select_window_fallback(block, "")["name"] == "cbp_svc_followup_en"
-    # 缺默认档时才用顶层旧模板，不拿另一种语言冒充
-    thin = {
-        "name": "reengage_v1",
-        "language": "en_US",
-        "text_param": True,
-        "default_language": "zh",
-        "by_language": {"en": _spec("cbp_svc_followup_en", "en")},
-    }
-    legacy = select_window_fallback(thin, "ja")
-    assert legacy["name"] == "reengage_v1" and legacy["source"] == "legacy"
-    assert legacy["language"] == "en_US"
+    unknown = select_window_fallback(block, "unknown")
+    assert unknown["name"] == "" and unknown["source"] == "lang_unknown"
+    blank = select_window_fallback(block, "")
+    assert blank["name"] == "" and blank["source"] == "lang_unknown"
+    # 配了 default_language 也不拿中文顶未知会话
+    block["default_language"] = "zh"
+    assert select_window_fallback(block, "auto")["name"] == ""
+    # 明确是别的语言、没有这一档的审核名：同样不发
+    other = select_window_fallback(block, "ja")
+    assert other["name"] == "" and other["source"] == "unsupported_lang"
+    # 这一档名字被公开包丢掉时，不改发 en/tl
+    missing = _neutral_block()
+    missing["by_language"]["zh"] = _spec("", "zh_CN")
+    gap = select_window_fallback(missing, "zh")
+    assert gap["name"] == "" and gap["source"] == "unapproved" and gap["resolved_lang"] == "zh"
 
 
 def test_legacy_single_template_ignores_conversation_language():
@@ -151,7 +151,8 @@ def test_public_edition_drops_gamble_bucket_without_substituting_another_languag
     block = _neutral_block()
     block["by_language"]["zh"] = _spec("wa_fb_gamble_member_zh", "zh_CN")
     dropped = select_window_fallback(block, "zh", edition="public")
-    assert dropped["name"] == "" and dropped["source"] == "none"
+    assert dropped["name"] == "" and dropped["source"] == "unapproved"
+    assert dropped["resolved_lang"] == "zh"
     kept = select_window_fallback(block, "en", edition="public")
     assert kept["name"] == "cbp_svc_followup_en"
     internal = select_window_fallback(block, "zh", edition="internal")
@@ -324,6 +325,7 @@ def test_send_uses_fil_template_for_tl_and_for_stored_taglish(graph):
         USER, "order\nstatus please", PNID, TOKEN, lang="tl"))
     assert out["ok"] is True and out["window_fallback"] is True
     assert out["fallback_lang"] == "tl" and out["fallback_source"] == "by_language"
+    assert out["fallback_template_lang"] == "fil"
     tpl = g.requests[-1]["template"]
     assert tpl["name"] == "cbp_svc_followup_fil"
     assert tpl["language"] == {"code": "fil"}
@@ -339,6 +341,16 @@ def test_send_uses_fil_template_for_tl_and_for_stored_taglish(graph):
     out2 = asyncio.run(wac.wa_send_text(USER, "sige po", PNID, TOKEN))
     assert out2["fallback_lang"] == "tl"
     assert g.requests[-1]["template"]["name"] == "cbp_svc_followup_fil"
+
+
+def test_unknown_conv_lang_does_not_send_template(graph):
+    g, _store = graph
+    _expire(g)
+    out = asyncio.run(wac.wa_send_text(USER, "hello there", PNID, TOKEN, lang="unknown"))
+    assert out["ok"] is False
+    assert out.get("window_fallback") is not True
+    assert out["window_fallback_skipped"] == "lang_unknown"
+    assert len(g.requests) == 1 and g.requests[0]["type"] == "text"
 
 
 def test_send_legacy_template_keeps_full_param(graph):
