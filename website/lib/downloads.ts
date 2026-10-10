@@ -20,11 +20,12 @@ import { isGatedSlug } from "./isolation";
 import { LATEST_VERSION } from "./releaseNotes";
 import { MATRIXX } from "./matrixxContent";
 import { CHATX } from "./chatxContent";
+import { ZHITUO } from "./zhituoContent";
 
 export type PlatformStatus = "available" | "coming" | "planned";
 
 export interface ClientApp {
-  key: "chatx" | "avatarhub" | "matrixx";
+  key: "chatx" | "avatarhub" | "matrixx" | "zhituo";
   name: { zh: string; en: string };
   /** 副名（另一语言名 / 引擎名），卡片上以弱化样式展示。
    *  实施78 P0-2：改为按语言取——原为单串，英文下载页会渲染出「STUDIO 实时数字人引擎」。 */
@@ -101,6 +102,24 @@ export const CLIENT_APPS: ClientApp[] = [
     platforms: { windows: "available", macos: "planned" },
     covers: ["matrixx"],
     gated: isGatedSlug("/matrix/download"),
+  },
+  {
+    key: "zhituo",
+    name: { zh: "智拓", en: "Zhituo" },
+    subName: { zh: "机房节点", en: "Room Node" },
+    family: "growth",
+    productIcon: null,
+    // 中性口径：能力细节与营销话术只在其 gated 下载页出现。
+    tagline: {
+      zh: "机房真机多账号运营客户端 · 本地部署，数据不出本机",
+      en: "On-prem multi-account ops client · runs locally, data stays on-device",
+    },
+    page: "/download/zhituo",
+    version: ZHITUO.download.version,
+    sizeLabel: ZHITUO.download.size,
+    platforms: { windows: "available", macos: "planned" },
+    covers: [],
+    gated: isGatedSlug("/download/zhituo"),
   },
 ];
 
