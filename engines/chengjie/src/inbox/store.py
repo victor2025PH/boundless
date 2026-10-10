@@ -2684,6 +2684,19 @@ class InboxStore:
                 (conversation_id,))
             self._conn.commit()
 
+    def count_unknown_session_language(self) -> int:
+        """会话语言仍是 unknown / 空 / auto 的行数。只读，不回填。
+
+        与 ``scripts/backfill_conversation_language.py`` 的统计口径一致：
+        默认 dry-run，``--apply`` 也只补这些行。
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM conversations "
+                "WHERE COALESCE(language, '') IN ('', 'unknown', 'auto')"
+            ).fetchone()
+        return int(row[0] if row else 0)
+
     def count_conversations_older_than(
         self, ts: float, *, platform: str = "", account_id: str = "",
     ) -> int:

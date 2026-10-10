@@ -456,6 +456,17 @@ def _attn_aggregate_map(
     return out
 
 
+def _session_lang_unknown_count(store: Any) -> int:
+    """全库仍未知的会话语言行数。store 不可用 → 0（横幅不出现）。"""
+    if store is None or not hasattr(store, "count_unknown_session_language"):
+        return 0
+    try:
+        return int(store.count_unknown_session_language() or 0)
+    except Exception:
+        logger.debug("[chats] 未知会话语言计数失败", exc_info=True)
+        return 0
+
+
 def _unread_aggregate_maps(
     store: Any, *, include_archived: bool = False,
 ) -> tuple[Dict[str, int], Dict[str, int]]:
@@ -1179,6 +1190,9 @@ def register_read_routes(app, *, api_auth, config_manager=None) -> None:
             "ai_skip_groups": _ai_skip_groups(config_manager),
             # P0 账号名录（全库口径；空列表=聚合失败，前端回落客户端推导）
             "accounts_summary": accounts_summary,
+            # 会话语言仍未知的存量（全库）。列表窗口只有最近若干条，这条计数
+            # 不靠窗口。回填脚本默认不写库。
+            "session_lang_unknown": _session_lang_unknown_count(store),
             # #12（2026-08-30）：全局真发暂停旗标（非空字符串=原因）。行级「AI」
             # 徽标据此叠加「已暂停真发」黄态；判定单点=deliver_paused_reason
             # （与 effective_automation ⑦ 层同一函数，绝不各算一套）。
