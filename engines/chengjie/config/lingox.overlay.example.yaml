@@ -28,6 +28,9 @@ domain: general
 
 # ── 3. 翻译核心（通译的灵魂，全开）───────────────────────────────
 translation:
+  # 免费/标准档默认 enforce：只走本部署的本地模型。没配 base_url/model
+  # 时转人工，不改打付费引擎。pro / certified 仍按 order 用到 ai。
+  free_tier_zero_cost: enforce
   memory:
     enabled: true            # 翻译记忆：命中直接回填，省 token + 术语一致（差异化卖点）
   glossary:
@@ -35,13 +38,13 @@ translation:
     extra_terms: {}          # 部署时按客户行业填，如 {"size":"尺码","refund":"退款"}
     protect: []              # 品牌/产品名逐字保留，如 ["LINE","WhatsApp","Shopify"]
   engines:
-    # 本地 MT（Hunyuan-MT，零 API 成本、亚秒延迟）优先，AI 兜底；
-    # 若暂无本地 MT，改成 order: ["ai"] 并配好 ai.* 即可。
-    order: ["ollama_mt", "ai"]
+    # 付费档顺序。免费档把已构建的 ollama_mt / opencc 排到前面。
+    # 地址和模型名由每个部署自己填。不要改成 order: ["ai"] 指望免费档去打云。
+    order: ["ollama_mt", "opencc", "ai"]
     timeout_sec: 8
     ollama_mt:
-      base_url: ""           # 如 http://127.0.0.1:11434（缺则自动跳过，回落 ai）
-      model: ""              # 如 hy-mt2-7b-official:latest
+      base_url: ""           # 本部署地址，例如 http://127.0.0.1:11434（缺则免费档转人工）
+      model: ""              # 本部署模型名，例如 hy-mt2-7b-official:latest
 
 # ── 4. 坐席工作台入站自动翻译（打开会话即见译文，通译核心体验）──────
 workspace:

@@ -4092,32 +4092,27 @@ translation:
     statistical:
       enabled: false                 # 默认关；开后需装 lingua 或 langdetect（缺则自动跳过）
       min_chars: 12                  # 低于此长度不咨询统计层（短文本统计不可靠）
-  # 免费档（请求 tier 缺省 / std / free）的付费引擎策略。
-  # 缺省 legacy：引擎链与打开此开关之前完全一致（默认 order 里的 ai / deepl /
-  # google / microsoft / youdao / baidu / custom 仍会被调用）。免费请求每次
-  # 真的打到这些付费引擎时，只打一行日志并给
-  # translation_engine_paid_would_block_total 加一，方便上 enforce 前先量泄漏。
-  # 零成本引擎只有 ollama_mt（含 api: openai 的 vLLM）和 opencc。ai 即使指向
-  # 局域网也算付费（generate_reply 会落到云端 key 池）；custom 兼容线同样算付费。
-  # 配好至少一条零成本引擎、确认 would_block 可以归零之后，再改成 enforce：
-  #   free_tier_zero_cost: enforce
-  # enforce 之后免费档只调用 ollama_mt / opencc；没有可用零成本引擎或全部失败
-  # → 翻译失败（出站 HOLD 转人工），绝不改打付费 API。pro / certified 以及任何
-  # 其它显式档名两种模式下都保持原引擎链（认证档仍优先 DeepL）。
-  free_tier_zero_cost: legacy
-  # P56：多翻译引擎（按 order 故障转移；首个可用且非空者获胜）。
-  # legacy（缺省）与付费档下 AI 仍是默认兜底；enforce 的免费档会跳过 order 里的付费引擎。
+  # 免费档（请求 tier 缺省 / std / free）只走本地模型。
+  # 缺省 enforce：先 ollama_mt（部署自己填 base_url / model），繁体变体
+  # zh-tw / zh-hk / zh-hant 先 opencc。付费引擎（ai / deepl / google / microsoft /
+  # youdao / baidu / custom）不会被免费档调用。ai 即使指向局域网也算付费。
+  # 本地模型没配好或调用失败 → 翻译失败，出站转人工，不改打付费 API。
+  # 显式写成 legacy 才恢复旧链（会记 would_block）。pro / certified 以及任何
+  # 其它显式档名仍走下面的 order，认证档仍优先 DeepL。
+  free_tier_zero_cost: enforce
+  # P56：多翻译引擎（付费档按 order 故障转移；首个可用且非空者获胜）。
+  # 免费档不按这条顺序调用付费引擎：ollama_mt 优先，繁体变体 opencc 优先。
   engines:
     # 可选内置名：ollama_mt/ai/deepl/google/microsoft/youdao/baidu/opencc；
     # custom 段里的任意名字（OpenAI 兼容通用线）写进 order 即参战。
-    # 例：["ollama_mt", "gemini_flash", "qwen_mt", "youdao", "baidu", "microsoft", "ai"]
-    order: ["ai"]
+    # 付费档顺序。免费档会把已构建的 ollama_mt / opencc 排到前面。
+    order: ["ollama_mt", "opencc", "ai"]
     timeout_sec: 8
     # opencc（2026-08-29）：本地简→繁确定性转换线（零 token/微秒级/100% 保真），
     # 只吃「中文源 → zh-tw」，其他语对自动让位下游引擎。推荐姿势＝order 加 "opencc"
     # + per_lang_order 把 zh-tw 重排到 opencc 优先（LLM 兜「源不是中文」的场景）：
-    #   order: ["opencc", "ai"]
-    #   per_lang_order: {"zh-tw": ["opencc", "ai"]}
+    #   order: ["opencc", "ollama_mt", "ai"]
+    #   per_lang_order: {"zh-tw": ["opencc", "ollama_mt"]}
     # profile 可换 s2tw（仅字形不换词）/ s2hk（香港繁体）；缺 opencc 库自动跳过。
     # opencc:
     #   profile: "s2twp"               # 台湾正体 + 台湾用词（软件→軟體、视频→影片）
@@ -4155,15 +4150,14 @@ translation:
     #      translation_options:
     #        source_lang: "auto"
     #        target_lang: "{target_name}"   # 占位符：{target_lang}/{source_lang}/{target_name}/{source_name}
-    # 本地/局域网 Ollama 上的专用 MT 模型（默认适配腾讯 Hunyuan-MT 官方 prompt：
-    # zh↔xx 用中文指令、xx↔xx 用英文指令）。零 API 成本、亚秒延迟；缺 base_url/model
-    # 自动跳过。仅覆盖 Hunyuan-MT 模型卡内语种，集外目标语自动让位下一引擎。
+    # 本地/局域网专用 MT 模型（默认适配腾讯 Hunyuan-MT 官方 prompt：
+    # zh↔xx 用中文指令、xx↔xx 用英文指令）。零 API 成本；缺 base_url/model
+    # 自动跳过，免费档因此转人工。地址和模型名由每个部署自己填，不要写进仓库。
     ollama_mt:
-      base_url: ""                   # 如 http://192.168.0.176:11434（自动补 /v1）
+      base_url: ""                   # 本部署的本地或内网地址，例如 http://127.0.0.1:11434
       # base_urls:                   # 多端点双活（优先于 base_url）：按序尝试，
-      #   - http://192.168.0.176:11434   # 端点异常进 60s 冷却降权（不剔除），
-      #   - http://192.168.0.140:11434   # 两台 LAN GPU 各跑同名模型即可互备
-      model: ""                      # 如 hy-mt2-7b-official:latest
+      #   - http://127.0.0.1:11434   # 端点异常进 60s 冷却降权（不剔除）
+      model: ""                      # 本部署的模型名，例如 hy-mt2-7b-official:latest
       api_key: "ollama"
       timeout_sec: 10                # 覆盖全局 engines.timeout_sec（冷加载留裕量）
       keep_alive: "30m"              # Ollama 侧模型常驻时长（防频繁冷启动）

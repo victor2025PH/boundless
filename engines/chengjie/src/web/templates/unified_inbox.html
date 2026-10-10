@@ -24456,6 +24456,12 @@ async function _updateEngineHint(){
       if(!d||!d.ok||!d.matrix){ _syncEngineSel(null); return; }
       m=d.matrix; _engineMatrixCache.set(target,m);
     }
+    if(m.local_mt_gap){
+      el.innerHTML='<span class="dot" style="background:var(--th-bg-amber5,#f59e0b);"></span>'+window.T('inbox.xl.local_mt_gap')+_prefEngineBadge(m);
+      el.title=window.T('inbox.xl.local_mt_gap_t');
+      _syncEngineSel(m);
+      return;
+    }
     _syncEngineSel(m);   // P1：下拉值/灰显与徽标同步刷新
     const eff=m.effective, primary=m.primary;
     const effLabel=_xlEngLabelOf(eff);

@@ -140,8 +140,8 @@ export const CHATX = {
       {
         q: { zh: "需要自己配置 AI 的 API Key 吗？", en: "Do I need my own AI API key?" },
         a: {
-          zh: "不需要。智聊托管版启动后会经官网验证本机并走我们的云端 AI 通道，**Key 只在服务端**，工作台里看不到、也无需填写。AI 用量按 Token 计量（标准翻译免费、不耗 Token）；余额与流水在会员中心随时可查，用尽可自助购买 Token 包，也不会断线（自动降级到免费引擎）。",
-          en: "No. Managed ChatX verifies this PC with our site and routes AI through our cloud gateway — **the vendor key never leaves the server**. You don't enter or manage keys. AI usage meters in tokens (standard translation is free and costs none); check balance and ledger in the membership center, top up with packs anytime — and you never go offline (graceful fallback to free engines).",
+          zh: "不需要。智聊托管版启动后会经官网验证本机并走我们的云端 AI 通道，**Key 只在服务端**，工作台里看不到、也无需填写。AI 回复按 Token 计量。标准翻译走本部署自己的本地模型，不调用付费翻译接口；本地模型还没配好时，这条翻译会转人工，不会偷偷改用付费引擎。余额与流水在会员中心可查，用尽可自助购买 Token 包。专业/认证翻译才走付费引擎。",
+          en: "No. Managed ChatX verifies this PC with our site and routes AI replies through our cloud gateway — **the vendor key never leaves the server**. You don't enter or manage keys. AI replies meter in tokens. Standard translation uses this deployment's own local model and does not call a paid translation API; if that model is not configured yet, the line waits for a person instead of silently using a paid engine. Balance and ledger are in the membership center. Pro and certified translation still use the paid engines.",
         },
       },
       {
@@ -184,8 +184,8 @@ export const CHATX = {
         //（注册送 10,000 体验 Token，与 /pricing、下单页同源），不再引导「找顾问拿试用码」。
         q: { zh: "免费吗？怎么获得正式授权？", en: "Is it free? How do I get a license?" },
         a: {
-          zh: "下载即免费开始（非限时试用）：标准翻译永久免费不限字符 + 每月 1,000 Token，注册再送 10,000 体验 Token。要更多 AI 用量直接充值（50U 起、1U = 1,500 Token、首充最高 +40%；新人 6U 大礼包双倍到账），到账自动开通，无需找顾问。",
-          en: "The download is the free start (not a timed trial): unlimited standard translation forever plus 1,000 tokens/mo, with 10,000 bonus tokens on signup. Need more AI usage? Just top up (from 50U at 1U = 1,500 tokens, up to +40% on your first top-up; newcomer 6U pack at double rate) — auto-activation, no sales call required.",
+          zh: "下载即免费开始（非限时试用）：标准翻译走本地模型，不按字符扣 Token；每月另有 1,000 Token 给 AI 回复，注册再送 10,000 体验 Token。本地模型未配置时标准翻译转人工，而不是改走付费接口。要更多 AI 用量直接充值（50U 起、1U = 1,500 Token、首充最高 +40%；新人 6U 大礼包双倍到账），到账自动开通，无需找顾问。",
+          en: "The download is the free start (not a timed trial): standard translation runs on the local model and does not spend tokens per character, plus 1,000 tokens/mo for AI replies and 10,000 bonus tokens on signup. If the local model is not configured, standard translation waits for a person instead of switching to a paid API. Need more AI usage? Just top up (from 50U at 1U = 1,500 tokens, up to +40% on your first top-up; newcomer 6U pack at double rate) — auto-activation, no sales call required.",
         },
       },
     ],
@@ -231,7 +231,7 @@ export function chatxDownloadJsonLd(lang: BrandLang, siteUrl: string): object[] 
       ? [
           "全渠道统一收件箱（Telegram / WhatsApp / Messenger / LINE）",
           "AI 自动拟稿与自动回复",
-          "实时互译（标准翻译永久免费不限量）",
+          "实时互译（标准档走本部署的本地模型，不调用付费翻译接口）",
           "克隆声语音消息",
           "客户画像与跟进提醒",
           "数据保存在本机用户目录",
@@ -240,7 +240,7 @@ export function chatxDownloadJsonLd(lang: BrandLang, siteUrl: string): object[] 
       : [
           "Unified omni-channel inbox (Telegram / WhatsApp / Messenger / LINE)",
           "AI drafting and auto-reply",
-          "Live two-way translation (standard translation free and unlimited)",
+          "Live two-way translation (standard tier uses this deployment's local model, not a paid API)",
           "Cloned-voice voice messages",
           "Customer profiles and follow-up reminders",
           "Data stored in your local user folder",

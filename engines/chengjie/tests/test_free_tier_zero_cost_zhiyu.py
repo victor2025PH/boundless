@@ -146,13 +146,13 @@ def test_production_engine_classes_are_classified():
 
 
 def test_guard_switch_and_ollama_openai_mode_stays_zero_cost():
-    assert free_tier_guard_enabled(None) is False
+    assert free_tier_guard_enabled(None) is True
     assert free_tier_guard_enabled("legacy") is False
     assert free_tier_guard_enabled("off") is False
     assert free_tier_guard_enabled("enforce") is True
     assert free_tier_guard_enabled(True) is True
     assert free_tier_guard_enabled(False) is False
-    assert TranslationService().free_tier_zero_cost is False
+    assert TranslationService().free_tier_zero_cost is True
     mt = OllamaMTEngine("http://127.0.0.1:9", "m", api="openai")
     assert is_paid_engine(mt) is False
     built = build_engines(
@@ -168,8 +168,8 @@ def test_config_example_and_web_app_wire_the_switch():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     example = (root / "config" / "config.example.yaml").read_text(encoding="utf-8")
-    assert "free_tier_zero_cost: legacy" in example
     assert "free_tier_zero_cost: enforce" in example
+    assert "order: [\"ollama_mt\", \"opencc\", \"ai\"]" in example
     web = (root / "src" / "bootstrap" / "web_app.py").read_text(encoding="utf-8")
     assert "free_tier_zero_cost" in web
     assert "free_tier_guard_enabled" in web
@@ -267,6 +267,34 @@ async def test_per_lang_tail_does_not_append_paid_call_for_std():
 
 
 @pytest.mark.asyncio
+async def test_free_tier_puts_local_model_ahead_of_paid_order():
+    """配置顺序把付费引擎放前面时，免费档仍先打本地模型。付费档保持原顺序。"""
+    ai = _RecAI()
+    local = _Local()
+    std = await _svc(ai, local).translate(
+        "hello friend", target_lang="zh", source_lang="en")
+    assert std.ok and std.provider == "ollama_mt" and local.calls == 1 and ai.calls == 0
+
+    ai2 = _RecAI()
+    local2 = _Local()
+    pro = await _svc(ai2, local2).translate(
+        "hello friend", target_lang="zh", source_lang="en", tier="pro")
+    assert pro.ok and pro.provider == "ai" and ai2.calls == 1 and local2.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_free_tier_prefers_opencc_for_traditional_chinese():
+    opencc = _Local(text="軟體", name="opencc")
+    local = _Local(text="繁体模型")
+    std = await _svc(local, opencc).translate(
+        "软件", target_lang="zh-tw", source_lang="zh")
+    assert std.ok and std.provider == "opencc" and opencc.calls == 1 and local.calls == 0
+    pro = await _svc(local, opencc).translate(
+        "软件", target_lang="zh-tw", source_lang="zh", tier="pro")
+    assert pro.ok and pro.provider == "ollama_mt"
+
+
+@pytest.mark.asyncio
 async def test_std_tiers_block_and_paid_tiers_reach_engines():
     ai = _RecAI()
     for tier in ("", "std", "free"):
@@ -287,11 +315,22 @@ async def test_std_tiers_block_and_paid_tiers_reach_engines():
 
 
 @pytest.mark.asyncio
-async def test_default_is_legacy_and_counts_would_block_without_skipping():
-    """缺省构造 = legacy：免费请求仍打到付费引擎，同时记 would_block。"""
+async def test_default_is_enforce_and_legacy_still_counts_would_block():
+    """缺省构造 = enforce，不调用付费引擎。显式 legacy 才打到付费引擎并记 would_block。"""
+    blocked_ai = _RecAI()
+    blocked_local = _Local(fail=True)
+    blocked = TranslationService(engines=[blocked_local, blocked_ai])
+    assert blocked.free_tier_zero_cost is True
+    held = await blocked.translate("hello friend", target_lang="zh", source_lang="en")
+    assert held.ok is False and blocked_ai.calls == 0 and held.needs_human
+    blocked_stats = get_translation_engine_stats().dump()
+    assert blocked_stats["paid_blocked"].get("ai", 0) >= 1
+    # 前半段已经记过拦截。legacy 段单独看计数，不能被这次 enforce 污染。
+    get_translation_engine_stats().reset()
+
     ai = _RecAI()
     local = _Local(fail=True)
-    svc = TranslationService(engines=[local, ai])
+    svc = TranslationService(engines=[local, ai], free_tier_zero_cost=False)
     assert svc.free_tier_zero_cost is False
     r = await svc.translate("hello friend", target_lang="zh", source_lang="en")
     assert r.ok and r.provider == "ai" and ai.calls == 1 and local.calls == 1
@@ -444,7 +483,7 @@ async def test_fusion_bare_chat_blocked_on_std_and_runs_on_pro():
     assert client.calls == 0
     assert get_translation_engine_stats().dump()["paid_blocked"].get("fusion", 0) >= 1
 
-    legacy = TranslationService(engines=[AIEngine(client)])
+    legacy = TranslationService(engines=[AIEngine(client)], free_tier_zero_cost=False)
     observed = await fuse_compare_candidates(
         legacy, text="hi, see you tomorrow", candidates=cands,
         source_lang="en", target_lang="zh", tier="")
