@@ -409,7 +409,7 @@ class TranslationService:
         - ``"pro"``：专业翻译（术语锁定/翻译记忆语义）＝10 Token/千字符，引擎链不设防；
         - ``"certified"``：认证翻译＝优先 DeepL 引擎（独立缓存桶），真由 DeepL 交付
           才计 40 Token/千字符；回落其它引擎按 pro 价 10 计——绝不按未交付的价值收费。
-          任何其它显式非免费档名同样放行全量引擎（fail-open，避免新档被误锁）。
+          其它显式档名按标准档处理（警告 + ``unknown_tier`` 计数），不当成付费档。
         计费只在**新鲜引擎成功**时发生（缓存/翻译记忆命中不计，与字符额度同口径）；
         总闸 licensing.token_ledger.enabled 关（默认）＝全零行为。
         缓存键不含 tier：命中旧译文是零新增调用，不是付费 API。认证档因偏好 deepl
@@ -419,7 +419,8 @@ class TranslationService:
         target = normalize_lang(target_lang) or self.default_target_lang
         source = normalize_lang(source_lang) or detect_language(src_text)
         pref_engine = str(engine or "").strip().lower()
-        tier = str(tier or "").strip().lower()
+        from src.ai.translation_engines import coerce_translation_tier
+        tier = coerce_translation_tier(tier)
         # Token enforce（P6）：钱包耗尽 + enforce 开 → 专业/认证层级降级为标准档
         # （翻译照做，免费引擎链 + 公平使用水表；「永不断线」——降的是层级不是服务）。
         if tier in ("pro", "certified"):

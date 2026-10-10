@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 class TranslationEngineStats:
     __slots__ = ("_lock", "_rows", "_started_at", "_last_ts", "_fallbacks", "_total",
                  "_low_conf", "_conf_switches", "_sem_low", "_paid_blocked",
-                 "_paid_would_block")
+                 "_paid_would_block", "_unknown_tier")
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -34,6 +34,8 @@ class TranslationEngineStats:
         self._paid_blocked: Dict[str, int] = {}
         # legacy（默认）下免费档真的打到了付费引擎：调用照旧发生，只记账，供打开 enforce 前量泄漏。
         self._paid_would_block: Dict[str, int] = {}
+        # translate() 收到未知档名、按标准档处理的次数。不记原文。
+        self._unknown_tier = 0
 
     def record(self, engine: str, *, ok: bool, latency_ms: int = 0) -> None:
         engine = str(engine or "unknown")
@@ -74,6 +76,11 @@ class TranslationEngineStats:
         with self._lock:
             self._paid_blocked[engine] = int(self._paid_blocked.get(engine, 0)) + 1
 
+    def record_unknown_tier(self) -> None:
+        """``translate()`` 把未知档名按标准档处理时 +1。不记原文、不记档名。"""
+        with self._lock:
+            self._unknown_tier += 1
+
     def record_paid_would_block(self, engine: str) -> None:
         """legacy 下免费档真的打到付费引擎时 +1（调用没有取消）。不记译文。"""
         engine = str(engine or "unknown")
@@ -105,6 +112,7 @@ class TranslationEngineStats:
                 "paid_blocked_total": int(sum(self._paid_blocked.values())),
                 "paid_would_block": {k: int(v) for k, v in sorted(self._paid_would_block.items())},
                 "paid_would_block_total": int(sum(self._paid_would_block.values())),
+                "unknown_tier": int(self._unknown_tier),
                 "rows": rows,
             }
 
@@ -126,6 +134,8 @@ class TranslationEngineStats:
             "# TYPE translation_engine_paid_blocked_total counter",
             "# HELP translation_engine_paid_would_block_total Free-tier requests that reached a paid engine while the guard was legacy",
             "# TYPE translation_engine_paid_would_block_total counter",
+            "# HELP translation_engine_unknown_tier_total Unknown tier names coerced to standard",
+            "# TYPE translation_engine_unknown_tier_total counter",
         ]
         with self._lock:
             lines.append(f"translation_engine_fallbacks_total {self._fallbacks}")
@@ -142,6 +152,7 @@ class TranslationEngineStats:
             for name, n in self._paid_would_block.items():
                 lbl = f'engine="{_esc(name)}"'
                 lines.append(f"translation_engine_paid_would_block_total{{{lbl}}} {int(n)}")
+            lines.append(f"translation_engine_unknown_tier_total {int(self._unknown_tier)}")
         return "\n".join(lines) + "\n"
 
     def reset(self) -> None:
@@ -155,6 +166,7 @@ class TranslationEngineStats:
             self._sem_low = 0
             self._paid_blocked.clear()
             self._paid_would_block.clear()
+            self._unknown_tier = 0
 
 
 def _esc(s: str) -> str:

@@ -1163,8 +1163,10 @@ class OpenCCEngine:
 
 # ── 免费档零成本守卫 ────────────────────────────────────────────────────────
 # 免费档 = 有效 tier 落在 FREE_TIERS（缺省 "" / std / free，含钱包耗尽从
-# pro/certified 降下来的 std）。付费档 = pro / certified，以及任何其它显式
-# 非空档名（fail-open：将来新增的付费档不会被误锁成零成本）。
+# pro/certified 降下来的 std）。已知付费档 = pro / certified。
+# ``TranslationService.translate`` 会把其它显式档名收成 std 并记一条警告
+# （未知不当成付费）。直接打 EngineRouter 且传入未知档名仍不设防：新付费档
+# 必须先加进下面的已知集合。
 #
 # 分类以**类**为准，不看桩的 name：测试里名叫 "ai"/"deepl" 的假引擎不是生产类，
 # 不设防。生产类必须登记在下面两张表（棘轮测试钉死，新类不能静默漏网）。
@@ -1178,6 +1180,22 @@ class OpenCCEngine:
 # 显式 legacy / off 才恢复旧链，并在打到付费引擎时记 would_block。
 
 FREE_TIERS = frozenset({"", "std", "free"})
+PAID_TIERS = frozenset({"pro", "certified"})
+_KNOWN_TIERS = FREE_TIERS | PAID_TIERS
+
+
+def coerce_translation_tier(tier: str) -> str:
+    """已知档原样返回。未知非空档名收成 ``std``，打警告并计数。不记原文。"""
+    raw = str(tier or "").strip().lower()
+    if raw in _KNOWN_TIERS:
+        return raw
+    logger.warning("[translate] unknown tier %r treated as std", raw[:40])
+    try:
+        from src.ai.translation_engine_stats import get_translation_engine_stats
+        get_translation_engine_stats().record_unknown_tier()
+    except Exception:
+        logger.debug("[translate] unknown tier metric failed", exc_info=True)
+    return "std"
 _ENFORCE_GUARD_VALUES = frozenset({
     "enforce", "on", "true", "1", "yes", "enable", "enabled",
 })
