@@ -154,13 +154,20 @@ def _remember_conv_translation_tier(
         logger.debug("[translate] 记住会话翻译档失败（忽略）", exc_info=True)
 
 
+_KNOWN_TRANSLATION_TIERS = ("std", "free", "pro", "certified")
+
+
 def _effective_conv_translation_tier(
     request: Request, platform: str, account_id: str, chat_key: str,
     explicit: str,
 ) -> str:
-    """请求里写了档就用它并记住；没写就读会话上的档。都没有 = 标准档。"""
+    """请求里写了已知档就用它并记住；没写就读会话上的档。
+
+    空串不写，避免省略 tier 的旧客户端把专业档清掉。陌生档名不当成付费档，
+    也不覆盖已经钉住的档。
+    """
     raw = str(explicit or "").strip().lower()
-    if raw:
+    if raw in _KNOWN_TRANSLATION_TIERS:
         _remember_conv_translation_tier(
             request, platform, account_id, chat_key, raw)
         return raw

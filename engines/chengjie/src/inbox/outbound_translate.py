@@ -1027,6 +1027,22 @@ async def translate_outbound_text(
         return out
 
 
+def _stored_translation_tier(store: Any, conversation_id: str) -> str:
+    """会话已钉翻译档。空 / 读不到 / 陌生档 = 标准档，不当成付费档。"""
+    cid = str(conversation_id or "").strip()
+    if store is None or not cid or not hasattr(store, "get_conversation"):
+        return ""
+    try:
+        conv = store.get_conversation(cid) or {}
+        raw = str(conv.get("pref_tier") or "").strip().lower()
+    except Exception:
+        logger.debug("[outbound_translate] 读会话翻译档失败 conv=%s", cid, exc_info=True)
+        return ""
+    if raw not in ("", "std", "free", "pro", "certified"):
+        return ""
+    return raw
+
+
 async def _translate_outbound_core(
     item: Dict[str, Any],
     *,
@@ -1143,9 +1159,11 @@ async def _translate_outbound_core(
 
     _attempts = 1
     _exc_failed = False
+    _tier = _stored_translation_tier(store, cid)
     try:
         res = await translation_service.translate(
             text_masked, target_lang=target, source_lang=eff_source, style=style,
+            tier=_tier,
         )
     except Exception:
         # 无兜底纪律（2026-08-17 老板拍板）：翻译失败一律 HOLD 不发——旧「非 CJK
@@ -1227,7 +1245,7 @@ async def _translate_outbound_core(
                 try:
                     _r = await translation_service.retry_once(
                         text_masked, target_lang=target, source_lang=eff_source,
-                        style=style, engine=_eng)
+                        style=style, engine=_eng, tier=_tier)
                 except Exception as _exc:  # noqa: BLE001
                     logger.debug("[xlate] retry step=%s engine=%s 异常", _step, _eng, exc_info=True)
                     err = f"{_eng or 'ai'}:{type(_exc).__name__}"

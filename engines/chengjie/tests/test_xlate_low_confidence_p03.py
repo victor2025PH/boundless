@@ -63,13 +63,13 @@ class _TS:
     def detect_language(self, text):
         return self._detect
 
-    async def translate(self, text, *, target_lang, source_lang, style="chat"):
+    async def translate(self, text, *, target_lang, source_lang, style="chat", tier=""):
         return self.first
 
     def next_engine_after(self, failed, target):
         return self.nxt
 
-    async def retry_once(self, text, *, target_lang, source_lang, style="chat", engine=""):
+    async def retry_once(self, text, *, target_lang, source_lang, style="chat", engine="", tier=""):
         self.retry_calls.append(engine)
         return self.retries.pop(0) if self.retries else _Res("", ok=False, error="ai:empty")
 

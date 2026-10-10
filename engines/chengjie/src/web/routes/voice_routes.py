@@ -501,7 +501,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
         _vt = str(body.get("target_lang") or "").strip().lower()
         if _vt and xlate_svc is not None:
             from src.ai.voice_outbound_xlate import resolve_spoken_text
-            spoken_text, _xl = await resolve_spoken_text(text, _vt, xlate_svc)
+            spoken_text, _xl = await resolve_spoken_text(
+                text, _vt, xlate_svc, tier=str(body.get("translation_tier") or ""))
         fmt_override: Optional[str] = body.get("format") or None
         # Optional: caller passes current UI settings to override saved config
         cfg_override: Optional[Dict[str, Any]] = body.get("voice_cfg_override") or None
@@ -1073,8 +1074,16 @@ def register_voice_routes(app, api_auth, config_manager=None):
             if _vt_raw:
                 try:
                     from src.web.routes.unified_inbox_services import (
+                        _effective_conv_translation_tier,
                         _get_translation_service)
                     _vt_svc = _get_translation_service(request)
+                    body["translation_tier"] = _effective_conv_translation_tier(
+                        request,
+                        str(body.get("platform") or ""),
+                        str(body.get("account_id") or "default"),
+                        str(body.get("chat_key") or ""),
+                        str(body.get("tier") or ""),
+                    )
                 except Exception:
                     _vt_svc = None
             body["target_lang"] = _vt_raw

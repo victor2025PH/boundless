@@ -478,7 +478,12 @@ def register_translate_routes(app, *, api_auth) -> None:
         engine = str(body.get("engine") or "").strip().lower()
         if not engine:
             engine = _resolve_conv_engine(request, platform, account_id, chat_key)
-        tier = str(body.get("tier") or "").strip().lower()
+        # 与单条 /translate 同口径：显式已知档记住，省略不擦掉已钉的付费档。
+        # 视口懒翻不带 tier，钉了专业档的会话按专业档译（可能计 Token）。
+        tier = _effective_conv_translation_tier(
+            request, platform, account_id, chat_key,
+            str(body.get("tier") or ""),
+        )
 
         svc = _get_translation_service(request)
         _MAX_ITEMS = 50

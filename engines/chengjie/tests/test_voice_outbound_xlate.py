@@ -37,9 +37,11 @@ class _Svc:
         self._res = res
         self._boom = boom
         self.calls = 0
+        self.tiers = []
 
     async def translate(self, text, *, target_lang, style="chat", **kw):
         self.calls += 1
+        self.tiers.append(kw.get("tier", ""))
         if self._boom:
             raise RuntimeError("engine down")
         return self._res
@@ -50,10 +52,11 @@ class _Svc:
 
 async def test_translates_and_reports_meta():
     svc = _Svc(_Res(text="こんにちは、ご飯食べた？"))
-    spoken, meta = await resolve_spoken_text("你吃饭了吗", "ja", svc)
+    spoken, meta = await resolve_spoken_text("你吃饭了吗", "ja", svc, tier="pro")
     assert spoken == "こんにちは、ご飯食べた？"
     assert meta["translated"] is True and meta["target_lang"] == "ja"
     assert meta["provider"] == "ollama_mt"
+    assert svc.tiers == ["pro"]
 
 
 async def test_fail_open_on_exception():
@@ -99,6 +102,7 @@ def test_send_voice_wires_spoken_text():
     src = _read("src/web/routes/unified_inbox_send_routes.py")
     seg = src[src.index("async def api_unified_inbox_send_voice"):]
     assert "resolve_spoken_text" in seg, "send-voice 必须先译后念（fail-open 在 helper 内）"
+    assert "tier=_voice_tier" in seg, "译声必须带会话已存翻译档"
     assert "tts.synthesize(\n                    spoken_text" in seg.replace("\r\n", "\n"), \
         "合成必须吃 spoken_text（译声=念译文）"
     assert "target_lang=_vt_target" in seg, "试听复用校验必须带语言维度"
@@ -112,6 +116,8 @@ def test_tts_test_wires_spoken_text():
     src = _read("src/web/routes/voice_routes.py")
     seg = src[src.index("async def _run_tts_preview"):]
     assert "resolve_spoken_text" in seg
+    assert 'tier=str(body.get("translation_tier") or "")' in seg, \
+        "试听必须吃提交时解析好的会话翻译档"
     assert "tts.synthesize(" in seg and "spoken_text, timeout_sec=" in seg, \
         "试听合成必须吃 spoken_text（试听=发送同稿）"
     assert 'target_lang=(_vt if _xl.get("translated") else "")' in seg, \
