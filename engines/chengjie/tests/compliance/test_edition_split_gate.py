@@ -189,6 +189,8 @@ def test_after_pack_enforces_edition_gate():
     js = (BUILD / "after-pack.js").read_text(encoding="utf-8")
     assert "editions.json" in js and "editionLeaks" in js
     assert 'mf.edition === "public"' in js
+    assert "explicitInternal" in js
+    assert 'flavor === "internal"' in js
 
 # ── ⑤ 内部专属行业模板（博彩运营商 gambling_operator，config/presets/internal）────────────
 

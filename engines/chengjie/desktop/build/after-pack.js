@@ -335,9 +335,12 @@ function editionLeaks(res) {
   const seed = path.join(res, "seed-data");
   let mf = null;
   try { mf = JSON.parse(fs.readFileSync(path.join(seed, "seed-manifest.json"), "utf8")); } catch (e) { mf = null; }
-  const flavor = String(process.env.CHATX_FLAVOR || "");
-  const isPublic = flavor === "public" || (mf && mf.edition === "public");
-  if (!isPublic) return out;
+  const flavor = String(process.env.CHATX_FLAVOR || "").trim().toLowerCase();
+  const manifestEdition = mf ? String(mf.edition || "") : "";
+  // 未设 CHATX_FLAVOR = 公开包。只有 flavor=internal，或没设 flavor 且清单写明
+  // edition=internal，才跳过下面的泄漏扫描。dev/full/clean 都不算内部包。
+  const explicitInternal = flavor === "internal" || (!flavor && manifestEdition === "internal");
+  if (explicitInternal) return out;
   if (flavor === "public" && fs.existsSync(seed) && !(mf && mf.edition === "public")) {
     out.push("  · CHATX_FLAVOR=public 但 seed-data 不是公开包种子（先跑 npm run stage:public）");
     return out;
