@@ -37,7 +37,11 @@
 本轮内容治理清理掉的虚构数字 / 高风险表述，门禁扫描 `lib/content.ts`、`lib/landingContent.ts`、
 `lib/matrixxContent.ts`、`lib/chatxContent.ts`、`lib/growthContent.ts`、`lib/downloads.ts`、
 `components/AIChat.tsx`、`lib/bot-knowledge.ts`、`lib/telegram-bot.ts`（顾问人设三消费面，
-2026-08-21 起），命中即 build 失败：
+2026-08-21 起），以及下载页 / 报价页（`lib/order-hero.ts`、`lib/chatx-pricing.ts`、
+`lib/pricing-faq.ts`、`components/PricingPage.tsx`、`components/OrderPanel.tsx`、
+`components/RechargeOrderZone.tsx`、`components/ChatxDownloadSection.tsx`、
+`app/pricing/page.tsx`、`app/en/pricing/page.tsx`、`app/llms.txt/route.ts`，2026-10-10 起），
+命中即 build 失败：
 
 | 禁用子串 | 禁用原因 |
 | --- | --- |
@@ -52,6 +56,7 @@
 > 重大决策仅供参考、低落情绪先共情（与引擎 `companion.bazi` 的安全红线同口径）。
 | `防封` | 暗示对抗平台风控，与「封号自动换号」同族，法务红线 |
 | `顾嘉` / `Gary` | 2026-08-21 顾问改名「小界（Jie）」——与 ChatX 产品内助手、交流群 @小界 同名统一；旧名（含英文名）不许从旧文案复制回潮 |
+| `永不断线` / `用尽自动降级` | 免费档标准翻译走本部署本地模型；本地模型没配好时转人工，不会改用付费引擎。不许再承诺额度用尽后自动换免费引擎且会话翻译永不中断 |
 
 > 注：2026-07-26 清理收口后，`lib/growthContent.ts`、`lib/downloads.ts` 已进
 > `BANNED_TARGET_FILES`。`lib/brand.ts` **刻意不进**：它是品牌层单一事实源，合法包含

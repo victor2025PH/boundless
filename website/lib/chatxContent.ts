@@ -116,8 +116,8 @@ export const CHATX = {
         title: { zh: "登录工作台并接入渠道", en: "Sign in and connect channels" },
         time: { zh: "约 5–10 分钟", en: "~5–10 min" },
         detail: {
-          zh: "用默认管理员账号登录后，在「渠道中心」接入你的聊天账号（Telegram / WhatsApp / Messenger / LINE 等）。**无需填写任何云 API Key**——翻译与智能回复经官网安全通道自动可用。",
-          en: "Sign in with the default admin account and connect chat accounts in Channel Center (Telegram / WhatsApp / Messenger / LINE and more). **No cloud API key to enter** — translation and smart replies work via our secure gateway.",
+          zh: "用默认管理员账号登录后，在「渠道中心」接入官方聊天账号（Telegram、WhatsApp、Messenger、LINE，以及抖音企业号、TikTok 官方客服等）。个人抖音号和个人 TikTok 号不能在智聊里网页登录，个人号获客是智拓；智控是另一套矩阵。**无需填写云 API Key**。AI 回复经官网安全通道；标准翻译走本部署自己的本地模型，本地模型没配好时这条翻译转人工，不会改用付费引擎。",
+          en: "Sign in with the default admin account and connect official chat accounts in Channel Center (Telegram, WhatsApp, Messenger, LINE, plus Douyin enterprise and TikTok official customer service). Personal Douyin and personal TikTok accounts cannot web-login inside ChatX — personal-account outreach is ReachX, and MatrixX is a separate fleet. **No cloud API key to enter.** AI replies use our secure gateway. Standard translation uses this deployment's own local model; if that model is not configured, the line waits for a person instead of switching to a paid engine.",
         },
       },
       {
@@ -168,8 +168,8 @@ export const CHATX = {
       {
         q: { zh: "支持哪些聊天平台？", en: "Which chat platforms are supported?" },
         a: {
-          zh: "Telegram、WhatsApp、Messenger、LINE 等主流平台的消息可汇聚到统一收件箱；各平台的接入方式（协议 / 网页会话）在渠道中心里按向导完成。",
-          en: "Telegram, WhatsApp, Messenger, LINE and more aggregate into the unified inbox; each platform's onboarding (protocol / web session) is wizard-guided in Channel Center.",
+          zh: "Telegram、WhatsApp、Messenger、LINE、Instagram、Zalo、QQ 机器人、微信客服和网页聊天，以及抖音企业号小程序私信、TikTok 官方客服。抖音须客户先开口，24 小时内最多回 6 条；TikTok 同样只回复先开口的用户，48 小时内最多 10 条。个人抖音号和个人 TikTok 号没有这条官方私信接口，不能在智聊里网页登录；个人号获客是智拓 ReachX。智控 MatrixX 是另一套 Telegram 多账号矩阵，不是智聊。",
+          en: "Telegram, WhatsApp, Messenger, LINE, Instagram, Zalo, QQ Bot, WeChat Customer Service, web chat, plus Douyin enterprise mini-program DMs and TikTok official customer service. Douyin replies only after the customer writes first, at most 6 within 24 hours. TikTok likewise replies only after the other person writes first, at most 10 within 48 hours. Personal Douyin and personal TikTok accounts are not this official path and cannot web-login inside ChatX; personal-account outreach is ReachX. MatrixX is a separate Telegram fleet, not ChatX.",
         },
       },
       {
@@ -191,6 +191,22 @@ export const CHATX = {
     ],
   },
 } as const;
+
+/** 下载页三句渠道边界。与 product_facts 对齐：官方号进智聊，个人号是智拓，智控是另一套矩阵。 */
+export const CHATX_CHANNEL_LINES = [
+  {
+    zh: "智聊的抖音和 TikTok 只接官方接口：抖音企业号小程序私信、TikTok 官方客服。个人抖音号和个人 TikTok 号不能在智聊里网页登录。",
+    en: "ChatX connects Douyin and TikTok only through official APIs: Douyin enterprise mini-program DMs, and TikTok official customer service. Personal Douyin and personal TikTok accounts cannot web-login inside ChatX.",
+  },
+  {
+    zh: "个人号获客是智拓 ReachX，邀请制单独评估，不是智聊里的一个按钮。",
+    en: "Personal-account outreach is ReachX, invite-only and assessed separately. It is not a button inside ChatX.",
+  },
+  {
+    zh: "智控 MatrixX 是另一套 Telegram 多账号矩阵，和智聊不是同一个客户端。",
+    en: "MatrixX is a separate Telegram multi-account fleet. It is not the ChatX client.",
+  },
+] as const;
 
 /** 便捷取值：按语言取一段文案。 */
 export function cx(field: Cx, lang: BrandLang): string {
@@ -229,7 +245,7 @@ export function chatxDownloadJsonLd(lang: BrandLang, siteUrl: string): object[] 
     isAccessibleForFree: true,
     featureList: zh
       ? [
-          "全渠道统一收件箱（Telegram / WhatsApp / Messenger / LINE）",
+          "全渠道统一收件箱（含抖音企业号与 TikTok 官方客服；个人号获客是智拓，智控是另一套矩阵）",
           "AI 自动拟稿与自动回复",
           "实时互译（标准档走本部署的本地模型，不调用付费翻译接口）",
           "克隆声语音消息",
@@ -238,7 +254,7 @@ export function chatxDownloadJsonLd(lang: BrandLang, siteUrl: string): object[] 
           "内置自动更新，SHA-256 可校验",
         ]
       : [
-          "Unified omni-channel inbox (Telegram / WhatsApp / Messenger / LINE)",
+          "Unified inbox including Douyin enterprise and TikTok official customer service; personal-account outreach is ReachX, MatrixX is a separate fleet",
           "AI drafting and auto-reply",
           "Live two-way translation (standard tier uses this deployment's local model, not a paid API)",
           "Cloned-voice voice messages",

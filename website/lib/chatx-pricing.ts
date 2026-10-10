@@ -1,7 +1,8 @@
 // 智聊 ChatX / 通译 LingoX「按充值计费」单一真相（2026-08-21 充值唯一化改版）。
 //
 // 体系（2026-08-21 决议：订阅全线停售，只留「免费开始 + 按充值计费」两层）：
-//   免费开始（非 SKU 档位）：下载即用 + 标准翻译永久免费不限量 + 每月 1,000 Token +
+//   免费开始（非 SKU 档位）：下载即用 + 标准翻译走本部署的本地模型（不调用付费接口；
+//   本地模型未配置时转人工）+ 每月 1,000 Token +
 //   注册再送 10,000 体验 Token（1 个聊天账号防薅护栏是唯一上限）。
 //   充值八档（唯一付费通道）：6U 新人包 + 50/100/200/500/1000/5000/10000 USD；
 //   1 USD = 1,500 Token；首笔充值按到账金额向下取档一次性加赠 +5/10/20/30/35/40%
@@ -12,7 +13,7 @@
 //   企业两形态 lead-based 面议（不走自助结算，见 ENTERPRISE_TRACKS）：
 //   企业合作年框（协议价/月结/发票/SLA）+ 企业级私有化部署（一次性实施 + 年授权维保，
 //   本地模型数据不出网——承接旧旗舰版「可选私有化」叙事）。
-//   标准翻译（内置引擎）永久免费不限量（公平使用 2,000,000 字符/日/授权）。
+//   标准翻译走本部署的本地模型，不按字符扣 Token（公平使用 2,000,000 字符/日/授权，超出仅提醒）。
 //   充值实付 Token 12 个月有效（≥500U 档 24 个月）；赠送部分 6 个月且先扣；
 //   存量订阅（停售台账）履约期内扣减顺序仍为 先赠送、再订阅含量、后充值实付。
 //
@@ -46,10 +47,10 @@ export interface TokenRate {
 export const TOKEN_RATES: TokenRate[] = [
   {
     key: "std_translate",
-    action: { zh: "标准翻译（内置引擎）", en: "Standard translation (built-in engine)" },
+    action: { zh: "标准翻译（本部署本地模型）", en: "Standard translation (this deployment's local model)" },
     tokens: 0,
-    unit: { zh: "不限字符", en: "unlimited chars" },
-    note: { zh: "永久免费 · 公平使用 200 万字符/日", en: "Free forever · fair use 2M chars/day" },
+    unit: { zh: "不按字符", en: "no per-character charge" },
+    note: { zh: "不调用付费接口 · 公平使用 200 万字符/日，超出仅提醒", en: "No paid API · fair use 2M chars/day, overage is a reminder only" },
   },
   {
     key: "ai_reply",
@@ -145,7 +146,7 @@ export const LEGACY_CHATX_PLANS: ChatxPlan[] = [
     edition: "trial",
     monthly: 0,
     name: { zh: "免费开始", en: "Free start" },
-    audience: { zh: "下载即用 · 翻译永久免费", en: "Free forever · translation included" },
+    audience: { zh: "下载即用 · 标准翻译走本地模型", en: "Download and go · standard translation uses the local model" },
     blurb: { zh: "全功能开放 + 每月 1,000 Token", en: "All features + 1,000 tokens/mo" },
     feats: { zh: [], en: [] },
     tokensMonthly: 1_000,
@@ -343,8 +344,8 @@ export function chatxPlanRows(lang: Lang): { plan: string; price: string; detail
       plan: zh ? "免费开始" : "Free start",
       price: zh ? "0" : "0",
       detail: zh
-        ? `下载即用 · 标准翻译免费不限量 · 每月 ${CHATX_FREE.tokensMonthly.toLocaleString("en-US")} Token，注册再送 ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")}`
-        : `Download & go · unlimited standard translation · ${CHATX_FREE.tokensMonthly.toLocaleString("en-US")} tokens/mo + ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} on signup`,
+        ? `下载即用 · 标准翻译走本地模型、不调用付费接口 · 每月 ${CHATX_FREE.tokensMonthly.toLocaleString("en-US")} Token，注册再送 ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")}`
+        : `Download and go · standard translation uses the local model, not a paid API · ${CHATX_FREE.tokensMonthly.toLocaleString("en-US")} tokens/mo + ${SIGNUP_BONUS_TOKENS.toLocaleString("en-US")} on signup`,
     },
     {
       plan: zh ? "新人 6U 大礼包" : "Newcomer 6U pack",
@@ -379,10 +380,10 @@ export function translateRows(lang: Lang): { plan: string; price: string; detail
   return [
     {
       plan: zh ? "标准翻译" : "Standard",
-      price: zh ? "永久免费" : "Free forever",
+      price: zh ? "0 字符费" : "No per-character fee",
       detail: zh
-        ? "内置引擎 · 不限字符（公平使用 200 万字符/日）· 所有用户含"
-        : "Built-in engine · unlimited chars (fair use 2M/day) · included for everyone",
+        ? "本部署本地模型 · 不调用付费接口（公平使用 200 万字符/日，超出仅提醒）· 没配好时转人工"
+        : "This deployment's local model · no paid API (fair use 2M/day, overage is a reminder) · a person takes over if it is not set",
       order: "autochat-free",
     },
     {
@@ -446,18 +447,18 @@ export function chatxPlanCardItems(lang: Lang): PlanCardItem[] {
       name: zh ? "免费开始" : "Free start",
       price: "0",
       unit: zh ? "永久免费" : "free forever",
-      desc: zh ? "下载即用 · 翻译永久免费" : "Download & go · translation included",
+      desc: zh ? "下载即用 · 标准翻译走本地模型" : "Download and go · standard translation uses the local model",
       features: zh
         ? [
             "全功能开放 · 与付费用户同款能力",
-            "标准翻译免费 · 不限字符",
+            "标准翻译走本地模型 · 不调用付费接口",
             `每月 ${fmtN(CHATX_FREE.tokensMonthly)} Token（约 ${fmtN(CHATX_FREE.tokensMonthly / aiReply)} 条 AI 回复）`,
             `注册再送 ${fmtN(SIGNUP_BONUS_TOKENS)} 体验 Token`,
             "1 个聊天账号（唯一的防滥用上限）",
           ]
         : [
             "All features unlocked — same as paying users",
-            "Unlimited standard translation",
+            "Standard translation uses the local model, not a paid API",
             `${fmtN(CHATX_FREE.tokensMonthly)} tokens/mo (~${fmtN(CHATX_FREE.tokensMonthly / aiReply)} AI replies)`,
             `${fmtN(SIGNUP_BONUS_TOKENS)} bonus tokens on signup`,
             "1 chat account (the only anti-abuse cap)",
@@ -494,13 +495,13 @@ export function chatxPlanCardItems(lang: Lang): PlanCardItem[] {
             `首充到账 ${fmtN(rechargeFirstTokens(hot))} Token（+${hot.firstBonusPct}%）`,
             `复充 ${fmtN(rechargeBaseTokens(hot))} · 1U = ${fmtN(RECHARGE_TOKENS_PER_USD)}`,
             `实付 ${rechargeValidMonths(hot)} 个月有效`,
-            "用尽自动降级免费引擎，永不断线",
+            "标准翻译走本地模型；没配好就转人工，不改用付费引擎",
           ]
         : [
             `First top-up ${fmtN(rechargeFirstTokens(hot))} tokens (+${hot.firstBonusPct}%)`,
             `Repeat ${fmtN(rechargeBaseTokens(hot))} · 1U = ${fmtN(RECHARGE_TOKENS_PER_USD)}`,
             `Paid tokens valid ${rechargeValidMonths(hot)} months`,
-            "Graceful fallback to free engines — never offline",
+            "Standard translation stays on the local model; if it is not set, a person takes over",
           ],
       highlight: true,
       plan: hot.key,

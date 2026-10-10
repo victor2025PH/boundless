@@ -13,7 +13,7 @@ export function faqItems(zh: boolean): { q: string; a: string }[] {
         },
         {
           q: "Token 用完了会断线吗？",
-          a: "不会。用尽后 AI 回复自动切换到本地免费模型、专业翻译降级为标准翻译（仍然免费不限量），会话永不中断；任意充值一笔立即恢复完整能力。",
+          a: "聊天会话本身不断开。Token 用完后，付费翻译不再调用付费引擎，改走本部署的本地翻译模型；本地模型没配好时，这条翻译转人工，不会偷偷改用付费接口。补一笔充值即恢复专业翻译。",
         },
         {
           q: "为什么不做订阅了？我买过订阅怎么办？",
@@ -55,7 +55,7 @@ export function faqItems(zh: boolean): { q: string; a: string }[] {
         },
         {
           q: "What happens when tokens run out?",
-          a: "Nothing breaks. AI replies fall back to the free local model and pro translation degrades to standard translation (still free and unlimited). Any top-up restores full capability instantly.",
+          a: "The chat itself stays open. When tokens run out, paid translation stops calling paid engines and uses this deployment's local translation model. If that model is not configured, the line waits for a person instead of silently using a paid engine. A top-up restores pro translation.",
         },
         {
           q: "Why no subscriptions anymore? I bought one — what now?",

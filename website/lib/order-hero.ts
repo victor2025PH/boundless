@@ -63,12 +63,12 @@ export const ORDER_HERO: Record<OrderFamily, OrderHeroCopy> = {
         zh: `新人 ${NEWBIE_PACK.price}U = ${fmtN(NEWBIE_PACK.tokens)} Token 双倍到账`,
         en: `Newcomers: ${NEWBIE_PACK.price}U = ${fmtN(NEWBIE_PACK.tokens)} tokens at double rate`,
       },
-      { zh: "标准翻译永久免费 · 不限字符", en: "Standard translation free forever" },
+      { zh: "标准翻译走本地模型 · 不调用付费接口", en: "Standard translation uses the local model, not a paid API" },
       {
         zh: `到账自动开通 ≈${ACTIVATION_MINUTES} 分钟`,
         en: `Auto-activation in ~${ACTIVATION_MINUTES} minutes`,
       },
-      { zh: "用尽自动降级 · 永不断线", en: "Graceful fallback — never offline" },
+      { zh: "本地模型未配好则转人工", en: "If the local model is not set, that line waits for a person" },
     ],
     stats: [
       {
@@ -133,13 +133,13 @@ export const ORDER_HERO: Record<OrderFamily, OrderHeroCopy> = {
 
   lingox: {
     badge: {
-      zh: "标准翻译永久免费 · 不限字符",
-      en: "Standard translation free forever · unlimited characters",
+      zh: "标准翻译走本地模型 · 不按字符扣费",
+      en: "Standard translation uses the local model · no per-character fee",
     },
     titleTop: { zh: "翻译，不要钱了", en: "Translation is now free" },
     titleAccent: { zh: "团队才付坐席费", en: "Teams pay per seat" },
     rotating: [
-      { zh: "0 字符费 · 内置引擎永久免费", en: "Zero per-character fees, forever" },
+      { zh: "0 字符费 · 本地模型，不走付费接口", en: "No per-character fee · local model, not a paid API" },
       { zh: "公平使用 200 万字符 / 日", en: "Fair use: 2M characters per day" },
       {
         zh: `翻译工作台 ${LINGOX_WORKBENCH.monthly} USD/坐席/月`,
