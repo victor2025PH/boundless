@@ -98,6 +98,33 @@ def test_build_backend_writes_stamp_after_success():
     assert "compute_fingerprint" in text
 
 
+def test_i18n_packs_staged_matches_source():
+    """安装包词表是 build_backend._stage_i18n_packs 从源目录机械拷贝的快照。
+
+    源包改了却不重刷，桌面端会带着旧词条。比较时跳过 __pycache__，与生成器一致。
+    """
+    src = _ENGINE / "src" / "web" / "i18n_packs"
+    staged = _BUILD / "i18n-packs-staged"
+
+    def _files(root: Path) -> dict[str, bytes]:
+        out: dict[str, bytes] = {}
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            if "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            out[path.relative_to(root).as_posix()] = path.read_bytes()
+        return out
+
+    live, snap = _files(src), _files(staged)
+    assert set(live) == set(snap), (
+        f"快照文件集与源不一致 only_src={sorted(set(live) - set(snap))} "
+        f"only_staged={sorted(set(snap) - set(live))}"
+    )
+    drifted = [name for name in live if live[name] != snap[name]]
+    assert not drifted, f"快照字节与源不一致: {drifted}"
+
+
 def test_cancel_media_single_definition_in_source():
     """回归钉：unified_inbox 只允许一个 _cancelMedia（双定义＝复制回复带图事故）。"""
     if not _INBOX.is_file():
