@@ -57,6 +57,7 @@ ZH = {
     # ── Q-35 #306：旁注（不改状态）——相册无命中 ──────────────────────
     "inbox.cs.note.album_no_match": "相册没有匹配『{q}』的图 · AI 已改口 · {hhmm}",
     "inbox.cs.note.album_no_match_n": "相册没有匹配『{q}』的图（今天 {n} 次）· AI 已改口 · {hhmm}",
+    "inbox.cs.note.album_no_match_directive": "AI 想发『{q}』的图但相册 / 生图都没货 · 正文承诺已撤 · {hhmm}",
     "inbox.cs.note.album_no_match_t": "客户要图，但这个人设的相册里没有触发词 / AI 建议词能对上这句话——AI 已按「暂时没有合适的照片」口径改口，没有空头承诺。去相册给图补触发词（或采纳 AI 建议词），下一次同样的话就能发出去；补完自动消失",
     "inbox.cs.note.album_go": "去相册补标签",
     "inbox.cs.note.album_go_t": "打开该人设相册的「缺触发词」筛选",
@@ -108,6 +109,7 @@ EN = {
     "inbox.cs.stale": "State expired, refreshing…",
     "inbox.cs.note.album_no_match": "No album photo matches “{q}” · AI rephrased · {hhmm}",
     "inbox.cs.note.album_no_match_n": "No album photo matches “{q}” ({n}× today) · AI rephrased · {hhmm}",
+    "inbox.cs.note.album_no_match_directive": "AI wanted to send a “{q}” photo but album / generation had none · promise retracted · {hhmm}",
     "inbox.cs.note.album_no_match_t": "The customer asked for a photo, but nothing in this persona's album has a trigger word / AI suggestion matching that request — the AI already rephrased (“no suitable photo right now”) instead of promising one. Add trigger words in the album (or adopt the AI suggestions) and the same request will send next time; this note clears on the next match",
     "inbox.cs.note.album_go": "Tag album photos",
     "inbox.cs.note.album_go_t": "Open this persona's album filtered to “missing triggers”",
@@ -158,6 +160,7 @@ ZH_HANT = {
     "inbox.cs.stale": "狀態已過期，正在刷新…",
     "inbox.cs.note.album_no_match": "相簿沒有匹配『{q}』的圖 · AI 已改口 · {hhmm}",
     "inbox.cs.note.album_no_match_n": "相簿沒有匹配『{q}』的圖（今天 {n} 次）· AI 已改口 · {hhmm}",
+    "inbox.cs.note.album_no_match_directive": "AI 想發『{q}』的圖但相簿 / 生圖都沒貨 · 正文承諾已撤 · {hhmm}",
     "inbox.cs.note.album_no_match_t": "客戶要圖，但這個人設的相簿裡沒有觸發詞 / AI 建議詞能對上這句話——AI 已按「暫時沒有合適的照片」口徑改口，沒有空頭承諾。去相簿給圖補觸發詞（或採納 AI 建議詞），下一次同樣的話就能發出去；補完自動消失",
     "inbox.cs.note.album_go": "去相簿補標籤",
     "inbox.cs.note.album_go_t": "開啟該人設相簿的「缺觸發詞」篩選",
