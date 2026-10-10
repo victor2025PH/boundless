@@ -28,7 +28,9 @@
 
 紧急关闭：``compliance.send_rate_gate.enabled: false``。任何异常一律放行（fail-open，
 与 send_guard 同口径：坏掉的护栏不得把全部发送卡死），但会打 warning。放行次数记在
-同一份限速库的 ``send_rate_degraded`` 里，重启还在；库打不开时只记在本进程。
+同一份限速库的 ``send_rate_degraded`` 里，重启还在。库打不开时改记在同目录的
+``.degraded`` 计数文件（只存一个整数），重启还在；文件也写不了时只记在本进程。
+日上限不因此放宽。
 """
 from __future__ import annotations
 
@@ -438,26 +440,93 @@ def get_store(config: Any = None) -> SendRateStore:
             except Exception:
                 logger.warning("[send-rate-gate] 打开 %s 失败，回落内存计数", path, exc_info=True)
                 inst = SendRateStore(None)
+                side = _degraded_sidecar_path(path)
+                if side:
+                    # 内存库重启即丢。降级次数改记旁边的整数文件，不和内存表各记一份。
+                    inst._degraded_sidecar = side
             _INSTANCES[path] = inst
     return inst
+
+
+def _degraded_sidecar_path(db_path: str) -> Optional[str]:
+    """限速库打不开时，降级次数落在同目录 ``<stem>.degraded``。``:memory:`` 没有旁边文件。"""
+    raw = str(db_path or "").strip()
+    if not raw or raw == ":memory:":
+        return None
+    try:
+        return str(Path(raw).with_suffix(".degraded"))
+    except Exception:
+        logger.debug("[send-rate-gate] 降级计数文件路径无效", exc_info=True)
+        return None
+
+
+def _read_degraded_sidecar(path: str) -> int:
+    try:
+        text = Path(path).read_text(encoding="utf-8").strip()
+        if not text:
+            return 0
+        return max(0, int(text))
+    except Exception:
+        return 0
+
+
+def _write_degraded_sidecar(path: str, n: int) -> None:
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_text(str(int(n)), encoding="utf-8")
+    os.replace(tmp, dest)
+
+
+def _unlink_degraded_sidecar(path: str) -> None:
+    for candidate in (path, str(path) + ".tmp"):
+        try:
+            Path(candidate).unlink(missing_ok=True)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "swallowed in _unlink_degraded_sidecar", exc_info=True)
 
 
 _DEGRADED_LOCK = threading.Lock()
 _DEGRADED_COUNT = 0
 
 
+def _store_degraded_sidecar() -> Optional[str]:
+    """当前限速库若是打开失败后的内存回落，返回旁边的计数文件路径。"""
+    store = get_store()
+    side = getattr(store, "_degraded_sidecar", None)
+    return str(side) if side else None
+
+
 def note_degraded() -> int:
     """判定异常、按 fail-open 放行一次。次数写入限速库，重启还在。
 
-    库打不开时退回本进程计数，仍然放行。不改变任何上限。
+    库打不开时改写旁边的 ``.degraded`` 整数文件（先读再加，不从 1 覆盖历史）。
+    文件也写不了时退回本进程计数。仍然放行。不改变任何上限。
+    不在持有 ``_DEGRADED_LOCK`` 时调用 :func:`get_store`（与 reset 的锁序相反会死锁）。
     """
     global _DEGRADED_COUNT
     persisted = None
+    sidecar = None
     try:
-        persisted = int(get_store().bump_degraded())
+        sidecar = _store_degraded_sidecar()
+        if not sidecar:
+            persisted = int(get_store().bump_degraded())
     except Exception:
         persisted = None
+        sidecar = None
     with _DEGRADED_LOCK:
+        if sidecar:
+            try:
+                n = max(_DEGRADED_COUNT, _read_degraded_sidecar(sidecar)) + 1
+                _write_degraded_sidecar(sidecar, n)
+                _DEGRADED_COUNT = n
+                return n
+            except Exception:
+                logger.warning("[send-rate-gate] 降级计数文件写失败，只记本进程", exc_info=True)
+                known = _read_degraded_sidecar(sidecar)
+                _DEGRADED_COUNT = max(_DEGRADED_COUNT, known) + 1
+                return _DEGRADED_COUNT
         if persisted is None:
             _DEGRADED_COUNT += 1
             return _DEGRADED_COUNT
@@ -467,11 +536,19 @@ def note_degraded() -> int:
 
 def degraded_count() -> int:
     global _DEGRADED_COUNT
+    n = None
+    sidecar = None
     try:
-        n = int(get_store().degraded_total())
+        sidecar = _store_degraded_sidecar()
+        if not sidecar:
+            n = int(get_store().degraded_total())
     except Exception:
         n = None
+        sidecar = None
     with _DEGRADED_LOCK:
+        if sidecar:
+            _DEGRADED_COUNT = max(_DEGRADED_COUNT, _read_degraded_sidecar(sidecar))
+            return _DEGRADED_COUNT
         if n is None:
             return _DEGRADED_COUNT
         _DEGRADED_COUNT = max(_DEGRADED_COUNT, n)
@@ -480,8 +557,12 @@ def degraded_count() -> int:
 
 def reset_for_tests() -> None:
     global _DEGRADED_COUNT
+    sidecars: list = []
     with _INST_LOCK:
         for inst in list(_INSTANCES.values()):
+            side = getattr(inst, "_degraded_sidecar", None)
+            if side:
+                sidecars.append(str(side))
             try:
                 inst.reset_degraded()
             except Exception:
@@ -489,6 +570,8 @@ def reset_for_tests() -> None:
                     "swallowed in reset_for_tests", exc_info=True)
             inst.close()
         _INSTANCES.clear()
+    for side in sidecars:
+        _unlink_degraded_sidecar(side)
     with _DEGRADED_LOCK:
         _DEGRADED_COUNT = 0
 
