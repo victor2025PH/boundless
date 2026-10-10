@@ -2,8 +2,9 @@
 """繁体中文 (zh_hant) UI 词包生成器（zh_hant P2，2026-08-27）。
 
 与 vi/th/id 的机翻管线（scripts/i18n_mt.py）不同：简→繁是**确定性转换**不是翻译
-——OpenCC s2twp（简体→台湾正体+台湾用语短语表）一跑即得全量覆盖，零 API 成本、
-零占位符风险（{x} 与 HTML 标签是 ASCII，转换器不碰）。
+——OpenCC s2twp（简体→台湾正体+台湾用语短语表）一跑即得全量覆盖，零 API 成本。
+``{x}`` 占位符是 ASCII，转换器不碰。标签名和 ASCII 属性也不该变；属性里的
+中文（如 title="折叠/展开"）会转成繁体，校验只比对标签骨架。
 
 用法::
 
@@ -18,7 +19,8 @@
 - 来源 = zh 合并视图全量（web_i18n 单体 + 全部 packs，与运行时同机制）。
 - 排除人工 zh_hant 词包已覆盖键（复核转正后 regen 不复活，与 i18n_mt 同约定）。
 - 后处理术语钉 _PINS：s2twp 惯用「臺」，现代软件界面惯用「台」（工作台/平台/后台）。
-- 校验：占位符/HTML 标签与 zh 逐键守恒（理论不可能破，防御转换器升级回归）。
+- 校验：占位符与 HTML 标签骨架与 zh 逐键守恒。属性里的非 ASCII 文案允许
+  简繁转换（psn_js_305 的 title="折叠/展开"），标签名和 ASCII 属性不许变。
 - 缺键兜底方向由 i18n_packs.EXTRA_LANG_BASE 钉为 zh（新键在 regen 前显示简体）。
 
 门禁：tests/test_i18n_zh_hant.py（覆盖率 ≥99% + 转换质量抽检 + 底语言=zh）。
@@ -79,6 +81,20 @@ def convert_value(cc, s: str) -> str:
     return t
 
 
+def _tag_structure(s: str) -> list:
+    """标签骨架。属性值里的非 ASCII 文案去掉后再比，简繁转换不算结构变化。"""
+    return sorted(
+        re.sub(r"[^\x00-\x7f]+", "", tag) for tag in _TAG_RE.findall(s))
+
+
+def _conversion_ok(zh: str, tr: str) -> bool:
+    if zh.strip() and not tr.strip():
+        return False
+    if set(_PH_RE.findall(tr)) != set(_PH_RE.findall(zh)):
+        return False
+    return _tag_structure(tr) == _tag_structure(zh)
+
+
 def _human_covered() -> set:
     from scripts.i18n_mt import _covered_by_human_packs
     return _covered_by_human_packs(_LANG, _PACKS_DIR)
@@ -102,11 +118,10 @@ def run_generate(dry_run: bool = False, packs_dir: Path | None = None,
             continue
         zh = str(zh_view[k])
         tr = convert_value(cc, zh)
-        # 防御校验（转换器不碰 ASCII，理论恒真；防升级回归）
-        if (set(_PH_RE.findall(tr)) != set(_PH_RE.findall(zh))
-                or sorted(_TAG_RE.findall(tr)) != sorted(_TAG_RE.findall(zh))
-                or (zh.strip() and not tr.strip())):
+        if not _conversion_ok(zh, tr):
             stats["invalid"] += 1
+            if len(stats.setdefault("invalid_keys", [])) < 20:
+                stats["invalid_keys"].append(k)
             continue
         out[k] = tr
         if tr == zh:
@@ -117,7 +132,7 @@ def run_generate(dry_run: bool = False, packs_dir: Path | None = None,
     if dry_run:
         print(f"[i18n_hant] dry-run: {target} 将含 {stats['written']} 键 "
               f"(与简体同形 {stats['identical']}, 人工包排除 {stats['skip_human']}, "
-              f"校验拒绝 {stats['invalid']})")
+              f"校验拒绝 {stats['invalid']} {stats.get('invalid_keys') or ''})")
         return stats
 
     lines = [_HEADER.format(created=time.strftime("%Y-%m-%d %H:%M:%S"),

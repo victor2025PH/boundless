@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """繁體中文 (zh_hant) 全量詞條 —— scripts/i18n_hant.py 自動生成，勿手改。
 
-生成: 2026-10-10 00:59:34 · OpenCC s2twp + 術語釘 · 18304 鍵（源 zh 全量 18989）
+生成: 2026-10-10 17:51:54 · OpenCC s2twp + 術語釘 · 18305 鍵（源 zh 全量 18990）
 定位: 簡→繁**確定性轉換**產物（非機翻），缺鍵回落簡體（EXTRA_LANG_BASE）。
 人工修訂請「轉正」挪進人工詞包（zh_hant_<域>.py），regen 不會復活已轉正鍵。
 門禁: tests/test_i18n_zh_hant.py + tests/test_i18n_extra_langs.py。
@@ -22702,6 +22702,8 @@ ZH_HANT = {
     'psn_js_303': '恢復失敗: ',
     # ── psn_js_304 ──
     'psn_js_304': '<div style="color:var(--t3);font-size:.82rem;text-align:center;padding:1.5rem">暫無約束規則，點選下方按鈕新增</div>',
+    # ── psn_js_305 ──
+    'psn_js_305': '<button class="gr-collapse-btn open" onclick="_grToggleCard(this)" title="摺疊/展開">▶</button>',
     # ── psn_js_306 ──
     'psn_js_306': '已啟用',
     # ── psn_js_307 ──
