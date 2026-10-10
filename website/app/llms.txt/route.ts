@@ -31,7 +31,7 @@ const DESCRIBED: Record<string, string> = {
   "": "首页：三系产品总览（智连 / 通达 / 幻境）与「让沟通无界」的品牌主张。",
   "/download/chatx": "智聊 ChatX 桌面客户端下载（Windows）：系统要求、安装步骤、SHA-256 校验与常见问题。",
   "/download": "全部客户端下载入口（智聊 ChatX / 幻境 STUDIO 等）。",
-  "/pricing": "报价决策页：Token 计价表、充值档位与加赠、用量计算器。标准翻译永久免费不限量。",
+  "/pricing": "报价决策页：Token 计价表、充值档位与加赠、用量计算器。标准翻译走本部署的本地模型，不调用付费接口。",
   "/order": "自助下单结算页（USDT / 银行卡），充值到账自动开通。",
   "/compare": "选型指南枢纽：智聊 ChatX 与主流全渠道客服 SaaS 的对比矩阵入口。",
   "/compare/respond-io": "智聊 ChatX vs respond.io：部署与数据主权、AI 拟人化深度、计费模式逐项对比。",
@@ -60,9 +60,9 @@ function facts(): string[] {
   const minTier = RECHARGE_TIERS[0];
   const fmt = (n: number) => n.toLocaleString("en-US");
   return [
-    "**是什么**：智聊 ChatX 是面向跨境卖家/出海团队的全渠道 AI 客服工作台——Telegram、WhatsApp、Messenger、LINE 等平台的消息汇聚到一个收件箱，AI 按你设定的人设自动拟稿、自动回复、实时互译，并能用克隆声发语音。",
+    "**是什么**：智聊 ChatX 是面向跨境卖家/出海团队的全渠道 AI 客服工作台——Telegram、WhatsApp、Messenger、LINE，以及抖音企业号小程序私信、TikTok 官方客服，汇聚到一个收件箱。个人抖音号和个人 TikTok 号不能在智聊里网页登录，个人号获客是智拓 ReachX；智控 MatrixX 是另一套 Telegram 矩阵。AI 按你设定的人设自动拟稿、自动回复、实时互译，并能用克隆声发语音。",
     "**跑在哪**：Windows 10/11 桌面客户端，普通办公电脑即可，**无需独立显卡**；聊天记录与客户资料保存在本机，支持私有化部署（数据不出自己机器）。",
-    `**怎么收费**：免费开始且**不是限时试用**——标准翻译永久免费不限字符（计费费率 ${fmt(tokenRate("std_translate").tokens)} Token）、每月赠 ${fmt(CHATX_FREE.tokensMonthly)} Token，注册再送 ${fmt(SIGNUP_BONUS_TOKENS)} 体验 Token。`,
+    `**怎么收费**：免费开始且**不是限时试用**——标准翻译走本部署的本地模型，不按字符扣 Token，也不调用付费翻译接口（费率表里标准翻译记 ${fmt(tokenRate("std_translate").tokens)} Token）；本地模型没配好时这条翻译转人工。每月赠 ${fmt(CHATX_FREE.tokensMonthly)} Token，注册再送 ${fmt(SIGNUP_BONUS_TOKENS)} 体验 Token。`,
     `**要更多用量**：按 Token 充值，用多少充多少，**无月费、无席位费、不按月活联系人加价**。${minTier.price}U 起充，1U = ${fmt(RECHARGE_TOKENS_PER_USD)} Token，首充按档最高加赠 +${maxBonus}%；新人 ${NEWBIE_PACK.price}U 大礼包 ${fmt(NEWBIE_PACK.tokens)} Token 双倍到账。支持 USDT 与银行卡。`,
     "**不需要自备 API Key**：AI 通道由服务端托管，工作台里不填也看不到任何云厂商密钥。",
     "**合规**：AI 披露语（9 语种）、诚实身份模式、危机识别→干预→热线转介闭环与年报计数导出，默认关、按属地开启（对应 EU AI Act 第 50 条 / 加州 SB 243 / 纽约 §1700）。",
@@ -85,9 +85,9 @@ function build(): string {
   const out: string[] = [
     "# 无界科技 BOUNDLESS · 智聊 ChatX",
     "",
-    "> 跨境卖家/出海团队的全渠道 AI 客服工作台：Telegram / WhatsApp / Messenger / LINE 消息汇聚到一个收件箱，",
-    "> AI 按人设自动拟稿与回复、实时互译、克隆声语音；Windows 桌面客户端免显卡，数据留在本机，支持私有化部署。",
-    "> 免费开始（标准翻译永久免费不限量），要更多 AI 用量按 Token 充值，无月费无席位费。",
+    "> 跨境卖家/出海团队的全渠道 AI 客服工作台：Telegram / WhatsApp / Messenger / LINE，以及抖音企业号、TikTok 官方客服。",
+    "> 个人号获客是智拓；智控是另一套矩阵。AI 按人设自动拟稿与回复、实时互译、克隆声语音；Windows 桌面客户端免显卡，数据留在本机。",
+    "> 免费开始。标准翻译走本部署的本地模型，不调用付费接口；本地模型没配好时转人工。更多 AI 用量按 Token 充值，无月费无席位费。",
     "",
     "BOUNDLESS builds AI software that removes language and communication barriers: an omni-channel AI",
     "customer-service workspace (ChatX), cross-language translation and interpreting, voice cloning and",
