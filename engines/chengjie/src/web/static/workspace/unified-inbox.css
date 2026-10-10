@@ -2799,14 +2799,14 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 .msg-spk-av{width:18px;height:18px;border-radius:50%;color:#fff;font-size:10px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex:none;line-height:18px;letter-spacing:0;}
 .msg-spk-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .msg-channel-card{border-left:3px solid color-mix(in srgb, var(--accent,#1e8cf2) 55%, transparent);padding-left:8px;}
-.slash-panel-hdr{padding:6px 12px;font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
+.slash-panel-hdr{padding:6px 12px;font-size:11px;font-weight:700;color:var(--text-sub);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
 /* P42 内联 AI 副驾补全浮层已下线（遮挡消息原文，2026-08-07）——样式一并移除 */
 .slash-item{padding:9px 14px;cursor:pointer;display:flex;align-items:flex-start;gap:10px;transition:background .1s;}
 .slash-item:hover,.slash-item.active{background:var(--bg-soft);}
 .slash-item-icon{width:28px;height:28px;border-radius:8px;background:#ede9fe;color:#7c3aed;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;}
 .slash-item-label{font-size:13px;font-weight:600;color:var(--text-main);margin-bottom:1px;}
 .slash-item-sub{font-size:11px;color:var(--text-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;}
-.slash-hint{padding:8px 14px;font-size:11px;color:#94a3b8;text-align:center;}
+.slash-hint{padding:8px 14px;font-size:11px;color:var(--text-sub);text-align:center;}
 
 /* ===== P0（2026-07-23）：切会话骨架屏 ===== */
 /* 会话形态占位（左右交替气泡，透明度脉冲）；prefers-reduced-motion 降级为静态。 */

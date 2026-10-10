@@ -545,3 +545,21 @@ def test_gate_detects_violation():
     poisoned["--t3"] = "#cbd5e1"  # 1.5:1 的灾难值
     bad = _run_pairs(_PAIRS_BOTH_THEMES, poisoned, "poisoned")
     assert any("三级文字" in b for b in bad), "篡改 --t3 未被检出，门禁失效"
+
+
+def test_slash_11px_uses_text_sub_on_elevated_panel():
+    """斜杠面板 11px 用 --text-sub。gray3 仍是深底浅字，不改生成表。"""
+    inbox = (_REPO / "src/web/templates/unified_inbox.html").read_text(encoding="utf-8")
+    css = (_REPO / "src/web/static/workspace/unified-inbox.css").read_text(encoding="utf-8")
+    hdr = css.split(".slash-panel-hdr{", 1)[1].split("}", 1)[0]
+    hint = css.split(".slash-hint{", 1)[1].split("}", 1)[0]
+    assert "color:var(--text-sub)" in hdr and "#94a3b8" not in hdr
+    assert "color:var(--text-sub)" in hint and "#94a3b8" not in hint
+    assert 'id="slash-cmd-hint" style="font-size:11px;color:var(--text-sub);"' in inbox
+    tokens = (_REPO / "src/web/static/theme-tokens.css").read_text(encoding="utf-8")
+    assert "--th-ink-gray3:#d1d5db;" in tokens
+    light = _vars_of(_block(_strip_comments(inbox), r":root"))
+    dark = {**light, **_vars_of(_block(_strip_comments(inbox), r'\[data-cp-theme="dark"\]'))}
+    for name, pal in (("light", light), ("dark", dark)):
+        got = contrast("--text-sub", ["--bg-elev"], pal)
+        assert got >= _TEXT_AA, f"{name} --text-sub on --bg-elev is {got:.2f}"
