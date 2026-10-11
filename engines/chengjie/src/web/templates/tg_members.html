@@ -829,7 +829,7 @@
     function clockFmt(ts) {
       var n = Number(ts || 0);
       if (!n) return "";
-      try { return new Date(n * 1000).toLocaleString(); } catch (e) { return ""; }
+      try { return window.wsFmtDateTime(n); } catch (e) { return ""; }
     }
 
     function compareSentence(c) {
@@ -850,13 +850,13 @@
       if (d.hold === "paused") {
         when = t("这个号已急停，冷私聊和群里接话都先停。", "This account is manually stopped. Cold DMs and group replies both wait.");
       } else if (d.hold === "flood") {
-        when = t("冷私聊先停" + (until ? "到?" + until : "一天") + "。群里接话还能发。",
+        when = t("冷私聊先停" + (until ? "到 " + until : "一天") + "。群里接话还能发。",
           "Cold DMs wait" + (until ? " until " + until : " a day") + ". Group replies can continue.");
       } else if (d.hold === "flood_wait") {
-        when = t("发得太密，等到?" + (until || t("那一小段时间", "the short wait")) + " 再发，不用停一整天。",
+        when = t("发得太密，等到 " + (until || t("那一小段时间", "the short wait")) + " 再发，不用停一整天。",
           "Sending was too fast. Wait until " + (until || "the short timer") + ", not a full day.");
       } else if ((d.gap_wait_sec || 0) > 0) {
-        when = t("下一条大约?" + Math.ceil(d.gap_wait_sec / 60) + " 分钟后可以发。",
+        when = t("下一条大约 " + Math.ceil(d.gap_wait_sec / 60) + " 分钟后可以发。",
           "The next one can go in about " + Math.ceil(d.gap_wait_sec / 60) + " min.");
       } else if (d.hours && d.hours.ok === false) {
         when = t("现在不在时段，下一段从 " + (d.hours.start || 0) + ":00 开始。",
@@ -868,7 +868,7 @@
         " 未按目标客户筛选，只是最近说过话的人。",
         " Not filtered to target customers; these are just people who spoke recently.");
       var hash = (d.unhashed > 0)
-        ? t(" 有?" + d.unhashed + " 人还没有私聊凭证，用这个号再提取一次。",
+        ? t(" 有 " + d.unhashed + " 人还没有私聊凭证，用这个号再提取一次。",
             " " + d.unhashed + " people have no chat credential; extract again with this account.")
         : "";
       return when + t(" 今天还剩 " + left + " 条。", " " + left + " left today.") + intent + compareSentence(d.path_compare) + hash;
@@ -1068,7 +1068,7 @@
         : '<div class="osaid">' + t("没抓到 TA 的发言内容", "No message text captured") + "</div>";
       var why = (m.online ? '<span class="pill ok">' + t("在线", "online") + "</span> " : "") +
         (m.gtouch_state === "sent" ? '<span class="pill ok">' + t("刚接过话", "replied in the group") + "</span> " : "") +
-        (m.intent > 0 ? '<span class="pill ok" title="' + t("鎸変汉璁剧殑鎰忓悜鍏抽敭璇嶅懡涓?, "matched the persona's intent keywords") + '">' +
+        (m.intent > 0 ? '<span class="pill ok" title="' + t("按人设的意向关键词命中", "matched the persona's intent keywords") + '">' +
           t("提到 ", "mentioned ") + esc((m.intent_hits || []).join("、")) + "</span> " : "");
       var head = '<div class="ohd"><div><b>' + esc(name || m.user_id) + "</b> " +
         (m.username ? '<span style="color:var(--dim)">@' + esc(m.username) + "</span> " : "") +
@@ -1144,14 +1144,14 @@
         var sec = Number(data.wait_sec || 0);
         var mins = sec ? Math.max(1, Math.ceil(sec / 60)) : 0;
         return t(
-          "发得太密，大约?" + (mins || "几") + " 分钟后再发" + (until ? "（到 " + until + "）" : "") +
+          "发得太密，大约 " + (mins || "几") + " 分钟后再发" + (until ? "（到 " + until + "）" : "") +
             "。人还在队列里，不用停一整天。",
           "Sending was too fast. Try again in about " + (mins || "a few") + " min" +
             (until ? " (until " + until + ")" : "") + ". They stay in the queue; this is not a full-day stop.");
       }
       if (kind === "flood" || kind === "peer_flood") {
         return t(
-          "冷私聊先停" + (until ? "到?" + until : "一天") + "。群里接话还能发。解除急停清不掉这次等待。",
+          "冷私聊先停" + (until ? "到 " + until : "一天") + "。群里接话还能发。解除急停清不掉这次等待。",
           "Cold DMs wait" + (until ? " until " + until : " a day") +
             ". Group replies can continue. Clearing the manual stop does not clear this.");
       }
@@ -1722,13 +1722,13 @@
         if (more) more.textContent = t("今天已接 ", "Replied today ") + (d.used_today || 0) + "/" + (d.cap || 0) +
           t(" · 每群每天最多 ", " · max per group/day ") + (d.group_cap || 0) +
           t(" · 只接 ", " · only messages from the last ") + (d.max_msg_age_hours || 0) + t(" 小时内的发言", " h") +
-          (d.hold === "flood_wait" ? t(" · 短时等待到?", " · short wait until ") + (clockFmt(d.hold_until) || "") : "") +
+          (d.hold === "flood_wait" ? t(" · 短时等待到 ", " · short wait until ") + (clockFmt(d.hold_until) || "") : "") +
           (d.dm_hold === "flood" && !d.hold ? t(" · 冷私聊已停，这里还能发", " · cold DMs are stopped; group replies can continue") : "") +
           ((d.persona || {}).name ? t(" · 人设：", " · persona: ") + d.persona.name : "");
         var rows = d.candidates || [];
         if (!rows.length) {
           box.innerHTML = '<div class="empty">' + (d.intent_configured
-            ? t("杩?", "Nothing to reply to in the last ") + (d.max_msg_age_hours || 48) +
+            ? t("近 ", "Nothing to reply to in the last ") + (d.max_msg_age_hours || 48) +
               t(" 小时没有可接的话。", " h.") +
               ' <a href="#gm-extract" data-gt-goto="extract">' + t("去拉新人", "Pull more people") + "</a>"
             : t("填上意向关键词，这里才会列出可以接的人。", "Fill intent keywords and people to reply to will show up here.") +
@@ -1860,7 +1860,7 @@
       $("gm-out-age-save").addEventListener("click", saveAge);
       $("t-gtouch").textContent = t("在群里接话", "Reply in the group");
       $("t-gtouch-l").textContent = t(
-        "先从这里开始。用上面选的号，在群里公开回复有意向的人刚说的那句（挂在(TA 那条下面）：先帮上忙，过几个小时再私聊、) +
+        "先从这里开始。用上面选的号，在群里公开回复有意向的人刚说的那句（挂在 TA 那条下面）：先帮上忙，过几个小时再私聊。" +
         "冷私聊被停的时候，这里仍然可以发。只逐条点发，不会自动刷屏；每号每天 5 条、每群每天 2 条。",
         "Start here. Using the account picked above, reply publicly to a recent message from someone with intent (threaded under their message), then DM a few hours later. " +
         "This still works when cold DMs are stopped. One confirmation at a time, never an automatic blast; 5 per account and 2 per group per day.");

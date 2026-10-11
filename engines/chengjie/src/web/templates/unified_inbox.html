@@ -7071,7 +7071,7 @@ async function _csAction(btn){
       }
     }
     else if(a==='restore_auto'){
-      if(!confirm(window.T('inbox.cs.restore_auto_confirm'))){ /* 取消不改档 */ }
+      if(!window.confirm(window.T('inbox.cs.restore_auto_confirm'))){ /* 取消不改档 */ }
       else {
         var _csAr=await apiFetch('/api/unified-inbox/automation',{
           method:'POST',headers:{'Content-Type':'application/json'},
@@ -7083,7 +7083,7 @@ async function _csAction(btn){
       }
     }
     else if(a==='mark_human'){
-      if(!confirm(window.T('inbox.botflag.confirm_human'))){ /* 取消不改判定 */ }
+      if(!window.confirm(window.T('inbox.botflag.confirm_human'))){ /* 取消不改判定 */ }
       else {
         var _csBr=await apiFetch('/api/unified-inbox/bot-flag',{
           method:'POST',headers:{'Content-Type':'application/json'},
