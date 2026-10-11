@@ -30,6 +30,15 @@ _LISTED_IN_CLAIMS = (
 )
 
 
+def test_dated_theme_is_draft_only_and_never_auto_publishes():
+    daily = (_REPO / "website/lib/daily-content.ts").read_text(encoding="utf-8")
+    route = (_REPO / "website/app/api/admin/daily/route.ts").read_text(encoding="utf-8")
+    assert "datedDraft: DATED_CAMPAIGN_DRAFT" in daily
+    assert "!post.datedDraft" in route
+    assert "dated_campaign_draft" in route
+    assert 'source: post.datedDraft ? "ai-dated"' in route
+
+
 def test_dated_drafts_are_flagged_and_theme_text_unchanged():
     daily = (_REPO / "website/lib/daily-content.ts").read_text(encoding="utf-8")
     assert "export const DATED_CAMPAIGN_DRAFT = true" in daily

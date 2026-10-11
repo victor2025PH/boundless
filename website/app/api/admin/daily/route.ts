@@ -56,7 +56,8 @@ export async function POST(req: NextRequest) {
   const autoEnv = process.env.DAILY_AUTO_PUBLISH === "1";
   const withImage = body?.image !== false; // default: attach a theme image
   // 防编造闸：重试后仍命中业绩编造检测的稿子，绝不自动上频道，降级为草稿等人审。
-  if (publish && !post.risky && (autoEnv || !notify)) {
+  // 过期活动选题同样只入库，即使 DAILY_AUTO_PUBLISH=1 也不上频道。
+  if (publish && !post.risky && !post.datedDraft && (autoEnv || !notify)) {
     const day = new Date().toISOString().slice(5, 10).replace("-", "");
     // 频道主推智聊 ChatX（2026-08-21 起）：官网按钮深链下载页，转化路径从「逛官网」缩短为「直接下载」。
     const site = { sitePath: "/download/chatx", siteLabel: "💬 免费下载 智聊 ChatX" };
@@ -68,9 +69,14 @@ export async function POST(req: NextRequest) {
   }
 
   // default: store as draft for review (+ optionally ping admins)
-  const draft = await addDraft({ text: post.text, theme: post.theme, source: post.risky ? "ai-risky" : "ai" });
-  if (notify || (publish && post.risky)) await notifyAdmins(post.theme, post.text);
-  return NextResponse.json({ ok: true, draft, held: post.risky ? "fabrication_guard" : undefined });
+  const draft = await addDraft({
+    text: post.text,
+    theme: post.theme,
+    source: post.datedDraft ? "ai-dated" : post.risky ? "ai-risky" : "ai",
+  });
+  if (notify || (publish && (post.risky || post.datedDraft))) await notifyAdmins(post.theme, post.text);
+  const held = post.datedDraft ? "dated_campaign_draft" : post.risky ? "fabrication_guard" : undefined;
+  return NextResponse.json({ ok: true, draft, held, published: false });
 }
 
 export async function DELETE(req: NextRequest) {

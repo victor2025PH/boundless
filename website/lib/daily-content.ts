@@ -95,6 +95,8 @@ export interface DailyPost {
   imagePath: string;
   /** 两次生成都命中编造检测时为 true：调用方不得自动发布，应降级为草稿 */
   risky: boolean;
+  /** 选题是过期活动稿：只入库草稿，绝不自动发布 */
+  datedDraft: boolean;
 }
 
 /** Generate a daily channel post for a given (or today's) theme. HTML-safe.
@@ -151,5 +153,11 @@ export async function generateDailyPost(themeIdx?: number): Promise<DailyPost | 
     ].filter(Boolean);
     retryHint = `\n\n上一稿被驳回（${reasons.join("；")}）。请重写。`;
   }
-  return { theme: picked.theme, text: escapeHtml(text), imagePath: imagePathForTheme(picked.idx), risky };
+  return {
+    theme: picked.theme,
+    text: escapeHtml(text),
+    imagePath: imagePathForTheme(picked.idx),
+    risky,
+    datedDraft: DATED_CAMPAIGN_DRAFT,
+  };
 }
