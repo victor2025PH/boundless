@@ -491,6 +491,18 @@ _HYMT_ZH_NAME = {
 }
 
 
+# 每个部署的免费/标准档本地翻译缺省指向语言机 173 的 vLLM。
+# deploy/machines.json：192.168.0.173 上 ollama :11434 已停，在线的是
+# vLLM chatx :8001（Qwen3-27B AWQ，OpenAI 兼容）。部署可改 base_url / model；
+# 只填了一边时不替它补另一边。要从 order 里拿掉 ollama_mt 才是「本部署不用本地模型」。
+DEFAULT_LOCAL_MT_BASE_URL = "http://192.168.0.173:8001"
+DEFAULT_LOCAL_MT_MODEL = "chatx"
+DEFAULT_LOCAL_MT_API = "openai"
+DEFAULT_LOCAL_MT_PAYLOAD: Dict[str, Any] = {
+    "chat_template_kwargs": {"enable_thinking": False},
+}
+
+
 class OllamaMTEngine:
     """本地 Ollama 上的专用机器翻译模型引擎（默认适配腾讯 Hunyuan-MT）。
 
@@ -1761,6 +1773,30 @@ class EngineRouter:
         )
 
 
+def _local_mt_endpoint_blank(mc: Dict[str, Any]) -> bool:
+    """地址和模型都没给（缺键或空）才用 173 缺省。只给了地址、没给模型则保持不可用。"""
+    if mc.get("base_urls"):
+        return False
+    url = mc.get("base_url", None)
+    model = mc.get("model", None)
+    url_blank = url is None or not str(url).strip()
+    model_blank = model is None or not str(model).strip()
+    return url_blank and model_blank
+
+
+def _resolve_local_mt_cfg(mc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """空配置补上 173 的 vLLM chatx。部署写了自己的地址或模型则原样用。"""
+    out = dict(mc or {})
+    if not _local_mt_endpoint_blank(out):
+        return out
+    out["base_url"] = DEFAULT_LOCAL_MT_BASE_URL
+    out["model"] = DEFAULT_LOCAL_MT_MODEL
+    out.setdefault("api", DEFAULT_LOCAL_MT_API)
+    if not out.get("payload_extra"):
+        out["payload_extra"] = dict(DEFAULT_LOCAL_MT_PAYLOAD)
+    return out
+
+
 def build_engines(translation_cfg: Optional[Dict[str, Any]], ai_client: Optional[Any]) -> List[Any]:
     """按 config.translation.engines 构造引擎列表（顺序即故障转移优先级）。
 
@@ -1786,7 +1822,7 @@ def build_engines(translation_cfg: Optional[Dict[str, Any]], ai_client: Optional
             gc = cfg.get("google") or {}
             out.append(GoogleEngine(gc.get("api_key", ""), timeout=timeout))
         elif name in ("ollama_mt", "hunyuan_mt", "hymt"):
-            mc = cfg.get("ollama_mt") or cfg.get(name) or {}
+            mc = _resolve_local_mt_cfg(cfg.get("ollama_mt") or cfg.get(name) or {})
             _temp = mc.get("temperature")
             # base_urls（列表，双活）优先；否则 base_url（单端点/逗号分隔）
             _urls = mc.get("base_urls") or mc.get("base_url", "")
