@@ -410,13 +410,13 @@ def _persist_authorized(
                 try:
                     _cp.release(cfg, _old_key)
                 except Exception:  # noqa: BLE001
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in _persist_authorized", exc_info=True)
         try:
             from src.ai.persona_voice import ensure_account_default_persona
             ensure_account_default_persona(
                 get_account_registry(), "telegram", res["account_id"], cfg)
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).debug("swallowed in _persist_authorized", exc_info=True)
         if (not used_pool_key and getattr(alloc, "source", "") != "credpool"
                 and (cfg.get("telegram") or {}).get("_hosted_cred")):
             try:
@@ -427,7 +427,7 @@ def _persist_authorized(
                     _cp.Allocation(int(api_id), str(api_hash), "config", "free",
                                    dict(_hp) if isinstance(_hp, dict) else None))
             except Exception:  # noqa: BLE001
-                pass
+                logging.getLogger(__name__).debug("swallowed in _persist_authorized", exc_info=True)
     except Exception:  # noqa: BLE001
         logger.debug("[tg_phone_login] 注册表写入失败", exc_info=True)
 
@@ -451,7 +451,7 @@ def make_provider(
                 if isinstance(live, dict) and live:
                     return live
             except Exception:  # noqa: BLE001
-                pass
+                logging.getLogger(__name__).debug("swallowed in make_provider._live", exc_info=True)
         return fallback
 
     async def _provider(request: Any, platform: str, mode: str, account_id: str,
@@ -481,7 +481,7 @@ def make_provider(
             from src.integrations.credpool_stats import get_credpool_stats
             get_credpool_stats().record_login(bool(device_fp))
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).debug("swallowed in make_provider._provider", exc_info=True)
 
         login = TelegramPhoneLogin(
             api_id, api_hash, sessions_dir, proxy=proxy, device_kwargs=device_fp)
@@ -520,7 +520,7 @@ def make_provider(
                 _cp.release(cfg, used_pool_key)
                 logger.info("[tg_phone_login] 登录未完成（%s），已归还池容量", reason)
             except Exception:  # noqa: BLE001
-                pass
+                logging.getLogger(__name__).debug("swallowed in make_provider._provider._release_if_abandoned", exc_info=True)
 
         async def _poll(session: Any) -> Dict[str, Any]:
             res = login.result()

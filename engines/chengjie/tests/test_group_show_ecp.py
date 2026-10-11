@@ -161,6 +161,18 @@ def test_identity_anchor_comes_first_and_bans_come_last():
         content.rindex(tag) for tag in ("【你是谁】", "【分寸】", "【绝对不要】"))
 
 
+def test_guide_is_introduced_as_the_ai_and_helpers_stay_ordinary():
+    """向导必须被写成公开的 AI。帮手仍是普通群成员，避免旧剧本被改口。"""
+    guide = CastMember(slot="guide", account_id="g", persona_id="p",
+                       display_name="向导")
+    content = project_history_for(guide, [], directive=_directive())[0]["content"]
+    assert "公开的 AI" in content
+    assert "普通群成员" not in content
+    helper = project_history_for(_member(), [], directive=_directive())[0]["content"]
+    assert "普通群成员" in helper
+    assert "公开的 AI" not in helper
+
+
 def test_human_interjection_is_carried_into_the_prompt():
     """真人插话原文必须进 system——当着真人的面继续念剧本是最容易被察觉的假。"""
     content = project_history_for(

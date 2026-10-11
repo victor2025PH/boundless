@@ -58,6 +58,7 @@ def playbook_fingerprint(pb: Any) -> str:
     parts: List[str] = [
         str(getattr(pb, "id", "") or ""),
         str(int(getattr(pb, "soft_ad_level", 0) or 0)),
+        str(getattr(pb, "goal", "") or ""),
     ]
     for b in (getattr(pb, "beats", ()) or ()):
         parts.append("|".join([

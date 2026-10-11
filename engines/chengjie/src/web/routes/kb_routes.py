@@ -43,6 +43,18 @@ def register_kb_routes(app, ctx):
     _require_auth = ctx.require_auth
     _fire_webhook = ctx.fire_webhook
 
+    def _schedule_webhook(*args):
+        """生产 ``_fire_webhook`` 是 coroutine；测试桩可能是同步 lambda。两种都吃。"""
+        import asyncio as _asyncio
+        try:
+            maybe = _fire_webhook(*args)
+            if _asyncio.iscoroutine(maybe):
+                _asyncio.get_running_loop().create_task(maybe)
+        except RuntimeError:
+            pass
+        except Exception:
+            logger.debug("[kb] webhook 调度失败（忽略）", exc_info=True)
+
     # J-9 #184：桌面首装播 3 条停用态格式示例（非桌面 / 已有用户条目 / 已播过 → no-op）。
     # 挂在这里而非 admin.py：kb_* 归 J-9，admin.py 归 J-7/J-8，不越界。
     # P-4 #254（D-P6）：带 cfg 走 system_seed_plan——陪伴域不播（首装 KB 为空，示例改为
@@ -103,12 +115,28 @@ def register_kb_routes(app, ctx):
                 )
         return lines
 
+    def _kinds_in_use():
+        """本机在用的人设 kind（P1-2）：分类表 / 新建模板 / 导入模板按它追加客服 / 销售集。"""
+        try:
+            from src.utils.persona_kind import kinds_in_use
+            return kinds_in_use(getattr(config_manager, "config", None))
+        except Exception:
+            return ()
+
+    def _eff_categories():
+        """当前生效分类表 = 域变体 ∪ 在用 kind 追加集（kb_store.effective_kb_categories）。"""
+        try:
+            from src.utils.kb_store import effective_kb_categories
+            return effective_kb_categories(_kinds_in_use())
+        except Exception:
+            return list(KB_CATEGORIES)
+
     @app.get("/knowledge", response_class=HTMLResponse)
     async def knowledge_page(request: Request):
         _require_auth(request)
         stats = _kb_store.stats()
         return templates.TemplateResponse(request, "knowledge.html", {
-            "categories": KB_CATEGORIES,
+            "categories": _eff_categories(),
             "stats": stats,
         })
 
@@ -125,11 +153,17 @@ def register_kb_routes(app, ctx):
         _api_auth(request)
         entries = _kb_store.list_entries(
             category=category, enabled_only=enabled_only, search=search, source=source)
+        trans: dict = {}
+        with _kb_store._conn() as c:
+            for r in c.execute("SELECT entry_id, lang, auto_translated FROM kb_translations"):
+                trans.setdefault(r[0], {})[r[1]] = {"auto_translated": r[2]}
         for e in entries:
+            e.pop("embedding", None)
             try:
                 e["triggers"] = json.loads(e.get("triggers", "[]"))
             except Exception:
                 e["triggers"] = []
+            e["translations"] = trans.get(e["id"]) or None
         return {"entries": entries, "total": len(entries)}
 
     @app.post("/api/kb/entries/purge-source")
@@ -173,8 +207,11 @@ def register_kb_routes(app, ctx):
         _api_auth(request)
         from src.utils.kb_store import new_entry_templates, system_seed_plan
         plan = system_seed_plan(config_manager)
+        _kinds = _kinds_in_use()
         return {"business_domain": plan["business_domain"],
-                "templates": new_entry_templates(plan["business_domain"], KB_CATEGORIES)}
+                "kinds": list(_kinds),
+                "templates": new_entry_templates(plan["business_domain"], _eff_categories(),
+                                                 kinds=_kinds)}
 
     @app.post("/api/kb/entries/purge-legacy-seeds")
     async def api_kb_purge_legacy_seeds(request: Request):
@@ -271,7 +308,10 @@ def register_kb_routes(app, ctx):
     async def api_kb_health(request: Request, days: int = 7):
         """KB 自检（J-9 #184）：条目分来源计数 / 向量化数 / 7 天注入命中数 / 最近命中时刻。"""
         _api_auth(request)
-        return _kb_store.health(days=days)
+        out = _kb_store.health(days=days)
+        if isinstance(out, dict):
+            out["embedding"] = _embed_health()
+        return out
 
     @app.get("/api/kb/entries/{entry_id}")
     async def api_kb_get_entry(request: Request, entry_id: str):
@@ -330,14 +370,10 @@ def register_kb_routes(app, ctx):
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "kb_add_entry", entry_id)
-        import asyncio as _asyncio
-        try:
-            _asyncio.get_running_loop().create_task(_fire_webhook(
-                "kb_change", actor, data.get("title", entry_id),
-                f"新增知识条目: {data.get('title', entry_id)}"
-            ))
-        except RuntimeError:
-            pass
+        _schedule_webhook(
+            "kb_change", actor, data.get("title", entry_id),
+            f"新增知识条目: {data.get('title', entry_id)}")
+        _embed_entry_bg(entry_id)   # P1-3：保存即向量化这一条（best-effort）
         return {"id": entry_id, "ok": True,
                 "warnings": conflict_warnings if conflict_warnings else None}
 
@@ -362,14 +398,15 @@ def register_kb_routes(app, ctx):
         ok = _kb_store.update_entry(entry_id, data)
         if audit_store:
             audit_store.log(actor, "kb_update_entry", entry_id)
-        import asyncio as _asyncio
-        try:
-            _asyncio.get_running_loop().create_task(_fire_webhook(
-                "kb_change", actor, data.get("title", entry_id),
-                f"更新知识条目: {data.get('title', entry_id)}"
-            ))
-        except RuntimeError:
-            pass
+        _schedule_webhook(
+            "kb_change", actor, data.get("title", entry_id),
+            f"更新知识条目: {data.get('title', entry_id)}")
+        # P1-3：改了匹配面（触发词 / 标题 / 场景 / 回复）→ 旧向量已过期，后台重算这一条
+        if ok and any(k in data for k in ("triggers", "title", "scenario", "steps", "example_reply_zh")):
+            _embed_entry_bg(entry_id)
+        # 单条启用：停用期间不算覆盖率，启用后补向量（有失败走队列重试 + 健康页可见）
+        if ok and "enabled" in data and bool(data.get("enabled")):
+            _embed_queue_request("enable")
         return {"ok": ok,
                 "warnings": conflict_warnings if conflict_warnings else None}
 
@@ -417,14 +454,9 @@ def register_kb_routes(app, ctx):
         actor = request.session.get("username", "web_admin")
         if audit_store:
             audit_store.log(actor, "kb_delete_entry", entry_id)
-        import asyncio as _asyncio
-        try:
-            _asyncio.get_running_loop().create_task(_fire_webhook(
-                "kb_change", actor, title_before,
-                f"删除知识条目: {title_before}"
-            ))
-        except RuntimeError:
-            pass
+        _schedule_webhook(
+            "kb_change", actor, title_before,
+            f"删除知识条目: {title_before}")
         return {"ok": True}
 
     # ---------- 错误码 ----------
@@ -575,10 +607,11 @@ def register_kb_routes(app, ctx):
 
     # ── 导出 / 导入（Phase 8）----------
     @app.get("/api/kb/export")
-    async def api_kb_export(request: Request, fmt: str = "json"):
-        """导出启用的知识库为 JSON（fmt=json）或 YAML（fmt=yaml，需 PyYAML）"""
+    async def api_kb_export(request: Request, fmt: str = "json", all: int = 0):
+        """导出启用的知识库为 JSON（fmt=json）或 YAML（fmt=yaml，需 PyYAML）；
+        all=1 含停用条目（完整备份，enabled 原样导回）"""
         _api_auth(request)
-        data = _kb_store.export_all()
+        data = _kb_store.export_all(include_disabled=bool(all))
         ts = time.strftime("%Y%m%d_%H%M%S")
         if fmt == "yaml":
             try:
@@ -603,28 +636,112 @@ def register_kb_routes(app, ctx):
     async def api_kb_import(request: Request):
         """
         批量导入知识库。
-        Body: {data: <export dict>, mode: "skip"|"update"}
+        Body: {data: <export dict>, mode: "skip"|"update", dry_run?, skip_examples?}
+          或 {text: "<JSON/YAML 原文>", format: "json"|"yaml", ...}（YAML 由服务端解析）
         """
         _api_auth(request)
         body = await request.json()
-        data = body.get("data") or body   # 支持直接发 export dict 或包装格式
+        if isinstance(body, dict) and isinstance(body.get("text"), str):
+            try:
+                if str(body.get("format") or "").lower() in ("yaml", "yml"):
+                    import yaml as _yaml
+                    data = _yaml.safe_load(body["text"])
+                else:
+                    data = json.loads(body["text"])
+            except Exception:
+                raise HTTPException(status_code=400, detail=tr(request, "err.kb.import_bad_format"))
+        else:
+            data = body.get("data") or body   # 支持直接发 export dict 或包装格式
         mode = body.get("mode", "skip")
+        dry_run = bool(body.get("dry_run"))
         # 安全检查：必须含 entries/error_codes/rules 键之一
-        if not any(k in data for k in ("entries", "error_codes", "rules", "version")):
+        if not isinstance(data, dict) or not any(
+                k in data for k in ("entries", "error_codes", "rules", "version")):
             raise HTTPException(status_code=400, detail=tr(request, "err.kb.import_bad_format"))
-        result = _kb_store.import_from_data(data, mode=mode)
-        actor = request.session.get("username", "web_admin")
-        if audit_store:
+        fmt = "yaml" if str(body.get("format") or "").lower() in ("yaml", "yml") else "json"
+        result = _kb_store.import_from_data(data, mode=mode, dry_run=dry_run,
+                                            skip_examples=bool(body.get("skip_examples")),
+                                            batch=_batch_meta(request, body, fmt))
+        result["unknown_categories"] = _unknown_categories(result.get("categories"))
+        if audit_store and not dry_run:
+            actor = request.session.get("username", "web_admin")
             audit_store.log(actor, "kb_import",
                             f"added={result['added']},updated={result['updated']}")
+        if not dry_run and (result.get("added") or result.get("updated")):
+            result["embed_scheduled"] = _embed_queue_request("import")   # 导入即后台向量化
         return result
 
+    def _unknown_categories(categories) -> List[str]:
+        known = set(_eff_categories())
+        return [c for c in (categories or []) if c not in known][:10]
+
+    def _batch_meta(request: Request, body: dict, fmt: str) -> dict:
+        return {"filename": str(body.get("filename") or ""), "fmt": fmt,
+                "operator": request.session.get("username", "web_admin")}
+
+    @app.get("/api/kb/import-batches")
+    async def api_kb_import_batches(request: Request):
+        """导入历史（最近 20 批），供「导入记录」面板整批撤销。"""
+        _api_auth(request)
+        return {"ok": True, "batches": _kb_store.list_import_batches()}
+
+    @app.post("/api/kb/import-batches/{batch_id}/undo")
+    async def api_kb_import_batch_undo(batch_id: str, request: Request):
+        """整批撤销一次导入。Body: {force?: bool}——导入后被改过的条目默认保留。"""
+        _api_auth(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        actor = request.session.get("username", "web_admin")
+        res = _kb_store.undo_import_batch(batch_id, force=bool((body or {}).get("force")),
+                                          editor=actor)
+        if not res.get("ok"):
+            code = 404 if res.get("reason") == "not_found" else 409
+            raise HTTPException(status_code=code,
+                                detail=tr(request, f"err.kb.undo_{res.get('reason')}"))
+        if audit_store:
+            audit_store.log(actor, "kb_import_undo",
+                            f"batch={batch_id},deleted={res['deleted']},"
+                            f"restored={res['restored']},kept={len(res['kept'])}")
+        return res
+
+    @app.get("/api/kb/import-template")
+    async def api_kb_import_template(request: Request, fmt: str = "xlsx"):
+        """导入模板下载（xlsx / csv / json）。示例行与「新建条目」模板 chip 同源（按业务域），
+        标题带「示例：」前缀，导入时默认跳过。"""
+        _api_auth(request)
+        from src.utils import kb_sheet_io as sio
+        from src.utils.kb_store import system_seed_plan
+        try:
+            domain = system_seed_plan(config_manager)["business_domain"]
+        except Exception:
+            domain = None
+        examples = sio.template_examples(domain, _eff_categories(), kinds=list(_kinds_in_use()))
+        if fmt == "csv":
+            return Response(
+                sio.build_csv_template(examples).encode("utf-8"),
+                media_type="text/csv; charset=utf-8",
+                headers={"Content-Disposition": 'attachment; filename="kb_import_template.csv"'},
+            )
+        if fmt == "json":
+            return Response(
+                json.dumps(sio.build_json_template(examples), ensure_ascii=False, indent=2),
+                media_type="application/json",
+                headers={"Content-Disposition": 'attachment; filename="kb_import_template.json"'},
+            )
+        return Response(
+            sio.build_xlsx_template(examples),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": 'attachment; filename="kb_import_template.xlsx"'},
+        )
+
     @app.get("/api/kb/export-csv")
-    async def api_kb_export_csv(request: Request):
-        """导出知识条目为 CSV（含 BOM，Excel 可直接打开）"""
+    async def api_kb_export_csv(request: Request, all: int = 0):
+        """导出知识条目为 CSV（含 BOM，Excel 可直接打开）；all=1 含停用条目 + 启用列"""
         _api_auth(request)
         ts = time.strftime("%Y%m%d_%H%M%S")
-        content = _kb_store.export_csv()
+        content = _kb_store.export_csv(include_disabled=bool(all))
         return Response(
             content.encode("utf-8"),
             media_type="text/csv; charset=utf-8",
@@ -635,20 +752,39 @@ def register_kb_routes(app, ctx):
     @app.post("/api/kb/import-csv")
     async def api_kb_import_csv(request: Request):
         """
-        从 CSV 文本导入知识条目。
-        Body: {csv: "<csv text>", mode: "skip"|"update"}
+        从表格导入知识条目（表头中英文都认，空单元格不写入）。
+        Body: {csv: "<csv text>" | xlsx_b64: "<base64>", mode: "skip"|"update",
+               dry_run?: bool, skip_examples?: bool（默认 true，跳过「示例：」开头的行）}
         """
         _api_auth(request)
         body = await request.json()
         csv_text = body.get("csv", "")
+        xlsx_b64 = body.get("xlsx_b64", "")
         mode     = body.get("mode", "skip")
-        if not csv_text:
+        dry_run  = bool(body.get("dry_run"))
+        skip_ex  = body.get("skip_examples", True) is not False
+        if not csv_text and not xlsx_b64:
             raise HTTPException(status_code=400, detail=tr(request, "err.kb.csv_empty"))
-        result = _kb_store.import_from_csv(csv_text, mode=mode)
-        actor = request.session.get("username", "web_admin")
-        if audit_store:
+        if xlsx_b64:
+            import base64
+            try:
+                raw = base64.b64decode(xlsx_b64)
+                result = _kb_store.import_from_xlsx(raw, mode=mode, dry_run=dry_run,
+                                                    skip_examples=skip_ex,
+                                                    batch=_batch_meta(request, body, "xlsx"))
+            except Exception:
+                raise HTTPException(status_code=400, detail=tr(request, "err.kb.import_bad_format"))
+        else:
+            result = _kb_store.import_from_csv(csv_text, mode=mode, dry_run=dry_run,
+                                               skip_examples=skip_ex,
+                                               batch=_batch_meta(request, body, "csv"))
+        result["unknown_categories"] = _unknown_categories(result.get("categories"))
+        if audit_store and not dry_run:
+            actor = request.session.get("username", "web_admin")
             audit_store.log(actor, "kb_import_csv",
                             f"added={result['added']},updated={result['updated']}")
+        if not dry_run and (result.get("added") or result.get("updated")):
+            result["embed_scheduled"] = _embed_queue_request("import_csv")   # 导入即后台向量化
         return result
 
     # ── P1-2 冷启动向导：空 KB 一键播种场景起步 FAQ 包 ----------
@@ -657,15 +793,33 @@ def register_kb_routes(app, ctx):
         """KB 冷启动现状 + 可选起步包列表（供向导渲染）。"""
         _api_auth(request)
         from src.utils.kb_starter import kb_readiness, list_starter_packs
+        from src.utils.vertical_pack import list_packs
         return {"ok": True, "readiness": kb_readiness(_kb_store),
-                "packs": list_starter_packs()}
+                "packs": list_starter_packs(),
+                "vertical_packs": list_packs(include_internal=None)}
 
     @app.post("/api/kb/seed-pack")
     async def api_kb_seed_pack(request: Request):
-        """播种某场景起步包到 KB（按标题去重）。Body: {domain, dedup?}"""
+        """播种某场景起步包到 KB（按标题去重）。
+
+        Body: {domain, dedup?} 走原起步包（未知域仍回落 general）。
+        Body 另带 vertical_pack 时改种垂直模板包（dry_run 预览；占位符未填的条目不写入）。
+        """
         _api_auth(request)
         from src.utils.kb_starter import kb_readiness, seed_starter_pack
         body = await request.json()
+        if str(body.get("vertical_pack") or "").strip():
+            from src.utils.vertical_pack import handle_seed_request
+            report = handle_seed_request(_kb_store, body)
+            actor = request.session.get("username", "web_admin")
+            if audit_store and report.get("ok") and report.get("apply"):
+                audit_store.log(
+                    actor, "kb_seed_pack",
+                    "vertical_pack=%s,added=%s,skipped=%s" % (
+                        report.get("pack_id"), report.get("added"), report.get("skipped")))
+            if report.get("ok"):
+                report["readiness"] = kb_readiness(_kb_store)
+            return report
         domain = str(body.get("domain") or "general")
         dedup = bool(body.get("dedup", True))
         try:
@@ -729,6 +883,8 @@ def register_kb_routes(app, ctx):
         if audit_store:
             audit_store.log(actor, "kb_batch_update",
                             f"ids={len(ids)},fields={list(updates.keys())}")
+        if count and "enabled" in updates and bool(updates.get("enabled")):
+            _embed_queue_request("batch_enable")   # 批量启用 → 后台补向量
         return {"ok": True, "count": count}
 
     @app.get("/api/kb/usage-ranking")
@@ -808,83 +964,42 @@ def register_kb_routes(app, ctx):
         与 ``ai_client.embed`` 同源：优先用独立嵌入端点 ``ai.embedding_base_url``
         （+ ``embedding_api_key`` / ``embedding_model``，如 LAN bge-m3 / 本机 Ollama），
         使 KB 向量与情景记忆向量落在**同一向量空间**；未配独立端点才回落对话端点。
-        历史坑：曾固定读 ``ai.base_url``（DeepSeek 对话端点、无 embedding 能力）→ KB
-        embed-all 打错端点。
+        端点选择与请求体收在 ``src.utils.kb_embed_job.call_embedding_api``（CLI 共用）。
         """
-        import httpx as _httpx
-        ai_cfg = config_manager.config.get("ai", {})
-        if not texts:
-            return []
-        emb_base = (ai_cfg.get("embedding_base_url") or "").strip().rstrip("/")
-        if emb_base:
-            base_url = emb_base if emb_base.endswith("/v1") else emb_base + "/v1"
-            api_key = (ai_cfg.get("embedding_api_key") or ai_cfg.get("api_key") or "ollama").strip()
-            model = ai_cfg.get("embedding_model", "bge-m3")
-        else:
-            base_url = (ai_cfg.get("base_url", "https://api.deepseek.com")).rstrip("/")
-            api_key = ai_cfg.get("api_key", "")
-            model = ai_cfg.get("embedding_model", "text-embedding-v2")
-        if not api_key:
-            api_key = "ollama"  # 本地 Ollama 无需鉴权，占位即可
-        try:
-            async with _httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    f"{base_url}/embeddings",
-                    headers={"Authorization": f"Bearer {api_key}",
-                             "Content-Type": "application/json"},
-                    json={"model": model, "input": texts},
-                )
-                data = resp.json()
-                items = sorted(data["data"], key=lambda x: x["index"])
-                return [item["embedding"] for item in items]
-        except Exception as _e:
-            logger.warning("Embedding API 调用失败: %s", _e)
-            return []
+        from src.utils.kb_embed_job import call_embedding_api
+        return await call_embedding_api(config_manager.config.get("ai", {}) or {}, texts)
 
     def _build_embed_text(entry: dict) -> str:
-        """将条目字段拼接成用于向量化的文本（字段权重体现在顺序与重复）"""
-        triggers = entry.get("triggers", "[]")
-        if isinstance(triggers, str):
-            try:
-                triggers = " ".join(json.loads(triggers))
-            except Exception:
-                pass
-        parts = [
-            str(triggers) * 2,              # 触发词权重加倍
-            entry.get("title", "") * 1,
-            entry.get("scenario", ""),
-            entry.get("steps", ""),
-            entry.get("example_reply_zh", ""),
-        ]
-        return " ".join(p for p in parts if p).strip()[:800]  # 截断防超 token
+        """条目 → 向量化文本；唯一口径在 ``kb_embed_job.build_embed_text``（预热 / CLI 共用）。"""
+        from src.utils.kb_embed_job import build_embed_text
+        return build_embed_text(entry)
 
     async def _run_embed_all():
-        """后台任务：增量向量化所有未处理条目（批量 20 条/次）"""
-        pending = _kb_store.get_entries_without_embedding()
+        """后台任务：增量向量化所有「启用且无向量」的条目（批 20，批失败逐条重试）。"""
+        from src.utils.kb_embed_job import embed_pending_entries
+        pending_n = len(_kb_store.get_entries_without_embedding())
         _embed_progress.update({
-            "running": True, "total": len(pending),
-            "done": 0, "failed": 0, "msg": f"开始向量化 {len(pending)} 条…"
+            "running": True, "total": pending_n,
+            "done": 0, "failed": 0, "msg": f"开始向量化 {pending_n} 条…"
         })
-        batch_size = 20
-        for i in range(0, len(pending), batch_size):
-            batch = pending[i: i + batch_size]
-            texts  = [_build_embed_text(e) for e in batch]
-            vectors = await _call_embed_api(texts)
-            if not vectors or len(vectors) != len(batch):
-                _embed_progress["failed"] += len(batch)
-                _embed_progress["msg"] = f"第 {i} 批 Embedding API 调用失败"
-            else:
-                for entry, vec in zip(batch, vectors):
-                    _kb_store.set_single_embedding(entry["id"], vec)
-                _embed_progress["done"] += len(batch)
-                _embed_progress["msg"] = (
-                    f"已完成 {_embed_progress['done']}/{_embed_progress['total']}"
-                )
-        _embed_progress["running"] = False
-        _embed_progress["msg"] = (
-            f"完成！成功 {_embed_progress['done']} 条，"
-            f"失败 {_embed_progress['failed']} 条"
-        )
+
+        def _on_progress(st: dict) -> None:
+            _embed_progress["done"] = st.get("done", 0)
+            _embed_progress["failed"] = st.get("failed", 0)
+            _embed_progress["msg"] = f"已完成 {st.get('done', 0)}/{pending_n}"
+
+        try:
+            st = await embed_pending_entries(_kb_store, _call_embed_api, progress=_on_progress)
+            _embed_progress["done"] = st["done"]
+            _embed_progress["failed"] = st["failed"]
+            _embed_progress["msg"] = (
+                f"完成！成功 {st['done']} 条，失败 {st['failed']} 条"
+            )
+        except Exception as _e:
+            logger.warning("[kb] embed-all 任务异常: %s", _e)
+            _embed_progress["msg"] = f"向量化异常：{type(_e).__name__}"
+        finally:
+            _embed_progress["running"] = False
 
     @app.post("/api/kb/embed-all")
     async def api_kb_embed_all(request: Request, background_tasks: BackgroundTasks):
@@ -902,6 +1017,91 @@ def register_kb_routes(app, ctx):
         _api_auth(request)
         cov = _kb_store.embedding_coverage()
         return {**_embed_progress, "coverage": cov}
+
+    async def _embed_entry_now(entry_id: str) -> bool:
+        """向量化单条（P1-3 保存即向量化的执行体）。失败静默——「向量化」按钮仍是兜底。"""
+        try:
+            entry = _kb_store.get_entry(entry_id)
+            if not entry:
+                return False
+            vecs = await _call_embed_api([_build_embed_text(entry)])
+            if not vecs:
+                return False
+            _kb_store.set_single_embedding(entry_id, vecs[0])
+            return True
+        except Exception:
+            logger.debug("[kb] 单条向量化失败（忽略）id=%s", entry_id, exc_info=True)
+            return False
+
+    def _auto_embed_enabled() -> bool:
+        """保存即向量化的前提：有可用的嵌入端点。
+
+        独立嵌入端点 ``ai.embedding_base_url``、官网网关（``ai.base_url`` 含 ``/api/ai/v1``，
+        有 /embeddings 中继）、或显式 ``knowledge_base.auto_embed: true`` 任一满足。
+        裸 DeepSeek 对话端点没有 embedding 能力——那样每次保存都白打一枪还刷 warning。
+        """
+        try:
+            cfg = getattr(config_manager, "config", None) or {}
+            kb_cfg = cfg.get("knowledge_base") or {}
+            if "auto_embed" in kb_cfg:
+                return bool(kb_cfg.get("auto_embed"))
+            ai_cfg = cfg.get("ai") or {}
+            if str(ai_cfg.get("embedding_base_url") or "").strip():
+                return True
+            return "/api/ai/v1" in str(ai_cfg.get("base_url") or "")
+        except Exception:
+            return False
+
+    def _embed_entry_bg(entry_id: str) -> None:
+        """保存 / 更新后在事件循环里后台向量化这一条；没有循环（测试同步调用）/ 无端点就跳过。"""
+        import asyncio as _asyncio
+        try:
+            if not _auto_embed_enabled():
+                return
+            _asyncio.get_running_loop().create_task(_embed_entry_now(str(entry_id)))
+        except RuntimeError:
+            pass
+        except Exception:
+            logger.debug("[kb] 单条向量化调度失败（忽略）", exc_info=True)
+
+    # ── 导入 / 启用即向量化（2026-10-08 智语）：后台补齐「启用且无向量」，失败自动退避重试，
+    #    状态落 kb_meta，健康页可见、可手动重试。见 src/utils/kb_embed_queue.py
+    from src.utils.kb_embed_queue import KbEmbedQueue, health as _kb_embed_health
+    _embed_queue = KbEmbedQueue(_kb_store, lambda texts: _call_embed_api(texts),
+                                enabled_fn=_auto_embed_enabled)
+    try:
+        app.state.kb_embed_queue = _embed_queue
+    except Exception:
+        pass
+
+    def _embed_queue_request(reason: str) -> bool:
+        try:
+            return bool(_embed_queue.request(reason))
+        except Exception:
+            logger.debug("[kb] 向量化队列调度失败（忽略）", exc_info=True)
+            return False
+
+    def _embed_health() -> dict:
+        try:
+            return _kb_embed_health(_kb_store, _embed_queue, enabled=_auto_embed_enabled())
+        except Exception:
+            logger.debug("[kb] 向量健康读取失败（忽略）", exc_info=True)
+            return {}
+
+    @app.get("/api/kb/embed-health")
+    async def api_kb_embed_health(request: Request):
+        _api_auth(request)
+        return _embed_health()
+
+    @app.post("/api/kb/embed-retry")
+    async def api_kb_embed_retry(request: Request):
+        """健康页「重试」：立刻后台补向量（失败照常退避重试）。"""
+        _api_auth(request)
+        scheduled = _embed_queue_request("manual_retry")
+        if audit_store:
+            actor = request.session.get("username", "web_admin")
+            audit_store.log(actor, "kb_embed_retry", f"scheduled={scheduled}")
+        return {"ok": scheduled, "embedding": _embed_health()}
 
     @app.post("/api/kb/entries/{entry_id}/embed")
     async def api_kb_embed_single(request: Request, entry_id: str):
@@ -1247,6 +1447,7 @@ def register_kb_routes(app, ctx):
                 "SELECT query, cnt FROM kb_miss_log ORDER BY cnt DESC LIMIT 8"
             ).fetchall() if _miss_table_exists(c) else []
         return {
+            "embedding": _embed_health(),
             "stats": stats,
             "top_used": [dict(r) for r in top_used],
             "never_used": never_used,
@@ -1387,7 +1588,10 @@ def register_kb_routes(app, ctx):
     async def api_kb_maintenance_advice(request: Request):
         """返回知识库健康诊断报告（健康分 + 可操作建议列表）"""
         _api_auth(request)
-        return _kb_store.get_maintenance_advice()
+        out = _kb_store.get_maintenance_advice()
+        if isinstance(out, dict):
+            out["embedding"] = _embed_health()   # 健康页：启用条目向量覆盖率 + 黄/绿灯 + 最近任务
+        return out
 
     # ── 报告 / 图片静态 / AI生成 / 导出MD / 统计 / 手动翻译 / 沙盒AI / 建议（批 5L）----------
     @app.get("/api/kb/report")
@@ -1510,16 +1714,16 @@ def register_kb_routes(app, ctx):
         return {"ok": True, "entry": entry, "topic": topic, "category": category}
 
     @app.get("/api/kb/export-markdown")
-    async def api_kb_export_markdown(request: Request):
-        """生成可读的 Markdown 格式知识库文档（按分类组织）"""
+    async def api_kb_export_markdown(request: Request, all: int = 0):
+        """生成可读的 Markdown 格式知识库文档（按分类组织）；all=1 含停用条目（标题标注）"""
         _api_auth(request)
         import re as _re
 
         with _kb_store._conn() as c:
             entries = c.execute(
                 "SELECT category, title, triggers, scenario, steps, principles, "
-                "example_reply_zh, forbidden, use_count "
-                "FROM kb_entries WHERE enabled=1 "
+                "example_reply_zh, forbidden, use_count, enabled "
+                f"FROM kb_entries {'' if all else 'WHERE enabled=1 '}"
                 "ORDER BY category, use_count DESC, title"
             ).fetchall()
 
@@ -1542,7 +1746,7 @@ def register_kb_routes(app, ctx):
                 triggers = []
             trigger_str = " / ".join(f"`{t}`" for t in triggers[:6]) if triggers else "—"
 
-            lines.append(f"### {e['title']}")
+            lines.append(f"### {e['title']}" + ("" if e.get("enabled") else "（已停用）"))
             lines.append(f"\n**触发词**：{trigger_str}")
             if e.get("scenario"):
                 lines.append(f"\n**使用场景**：{e['scenario']}")

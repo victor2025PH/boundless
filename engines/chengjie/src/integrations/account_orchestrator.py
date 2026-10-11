@@ -41,7 +41,20 @@ _mirror_fail_total = 0
 def _sent_by_for_origin(origin: Any) -> str:
     """出站 origin → messages.sent_by：manual（坐席工作台）=agent；其余（自动回复/主动触达/
     自动语音/群演等自动链）=ai。接力记忆四期：镜像行落库即带发送方。"""
-    return "agent" if str(origin or "auto") == "manual" else "ai"
+    o = str(origin or "auto")
+    if o in ("script", "system"):   # P0-4：脚本演练 / 系统通知单独归因，不算 AI 发言
+        return o
+    # 与智安发送限速闸同口径（src/compliance/send_rate_gate）：请求头 X-Send-Origin: script /
+    # body origin=script 置位的 await 链 → 镜像出站一律 script（优先于 manual，同 classify_origin）
+    try:
+        from src.compliance.send_rate_gate import in_script_scope
+        if in_script_scope():
+            return "script"
+    except Exception:
+        pass
+    if o == "manual":
+        return "agent"
+    return "ai"
 
 
 def _warn_mirror_fail(platform: str, account_id: str, chat_key: str, *, kind: str) -> None:
@@ -54,8 +67,10 @@ def _warn_mirror_fail(platform: str, account_id: str, chat_key: str, *, kind: st
     _mirror_fail_total += 1
     now = time.monotonic()
     key = str(platform or "?")
-    last = _mirror_fail_last_warn.get(key, 0.0)
-    if now - last < _MIRROR_FAIL_WARN_GAP_SEC:
+    # 缺键 = 该平台从未告警。不能回落 0：monotonic 从开机算起，开机 10 分钟内
+    # 第一条失败会被节流成 debug。
+    last = _mirror_fail_last_warn.get(key)
+    if last is not None and now - last < _MIRROR_FAIL_WARN_GAP_SEC:
         logger.debug("[orchestrator] 出站回写收件箱失败 %s:%s chat=%s kind=%s（节流）",
                      platform, account_id, chat_key, kind, exc_info=True)
         return

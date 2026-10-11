@@ -63,9 +63,12 @@ ai:
   timeout: 60                       # 读超时 ≥ 官网网关 chat 预算 55s + 余量（Q-14 #262；30s 时 2.4% 调用被客户端先放弃 → 本轮沉默）
   prompt_budget_tokens: 12000       # 系统提示 + 注入 + few-shot + 历史合计上限；超了按 历史(保底6条) → few-shot → 注入尾段 → 保底历史 裁，人设/硬规则永不砍；0 = 不裁。6000 时每轮都在裁（一轮完整装配 10-12k）
   # ChatX 27B：与办公室同一产品。干净包零 RFC1918；打官网 /api/ai/v1 model=chatx。
-  # 聊天主链不拿它顶话（chat_fallback: false）；目录 / 无限制档走这条。
+  # 聊天主链不拿它顶话（chat_fallback: false）。
+  # 2026-10-09：feature_registry 仍把 ai.fallback.enabled 标成 C 类（原因码 lan，
+  # 禁入客户种子）。地址虽然已经是官网网关，分级没改之前种子必须关着，
+  # 否则客户机被当成「开了 LAN 兜底」。要默认开，先改分级再动这里。
   fallback:
-    enabled: true
+    enabled: false
     base_url: https://bd2026.cc/api/ai/v1
     model: chatx
     timeout: 90
@@ -89,11 +92,18 @@ web_admin:
   port: 18799                       # 桌面壳 launcher 经 AITR_WEB_PORT 覆盖（与 config.json 默认对齐）
   auth_token: admin                 # 桌面壳 launcher 经 AITR_WEB_TOKEN 覆盖（与 config.json 默认对齐）
 
-# 翻译：只填 ai.* 即可用（首启向导保存 Key 后「翻译生效」的最短路径）
+# 翻译：免费/标准档默认 enforce，先走本地模型。种子不写办公室内网地址。
+# base_url 与 model 都空时，引擎补语言机 173 的 vLLM chatx（:8001）。
+# 要换模型就两个都写上；不用本地模型就把 ollama_mt 从 order 拿掉。
+# 没结果时标准档转人工，不改打付费引擎。
 translation:
+  free_tier_zero_cost: enforce
   engines:
-    order: ["ai"]
+    order: ["ollama_mt", "opencc", "ai"]
     timeout_sec: 8
+    ollama_mt:
+      base_url: ""
+      model: ""
 
 # 统一收件箱持久层（安全默认开；与 example 对齐）
 inbox:
@@ -389,6 +399,10 @@ platform_login:
     protocol_enabled: true
     modes: ["protocol", "device"]
     default: "protocol"
+    # LINE 出站媒体（发图/语音）：老板例外 2026-09-24 公共包默认开，存量安装由
+    # feature_registry A 类基线补齐；代码默认 False，用户显式 false 永远尊重。
+    media:
+      outbound: true
     # LINE 协议扫码（okline 逆向库）随包分发。okline 靠持久 Node 桥跑 LTSM WASM 算 X-Hmac：
     # 客户**无需装 Node** —— PATH 上没有真 node 时自动回落随包 Electron（壳注入
     # AITR_ELECTRON_NODE，见 desktop/backend-launcher.js + line_protocol_login.
@@ -422,6 +436,17 @@ assistant:
     enabled: true
   vision:
     enabled: true   # 报障截图 VLM 摘要：best-effort（托管识图网关可达即工作，掉线静默）
+
+# 内部功能显隐（老板决策 2026-10-01「内测用户都可以使用全功能」，1.0.104）：
+# 五个纯软件、随包即跑的界面入口出厂即开（与 feature_registry A 类镜像；开发者工具
+# 「内部功能显隐」仍可逐键关）。matrix_nav / group_show 刻意不写＝缺省隐藏：它们打开的
+# 是真机矩阵（LINE/Messenger/WhatsApp RPA，需安卓真机）导航面，桌面包不带＝死入口。
+ui_visibility:
+  group_extract: true     # 群成员提取：收件箱右栏工具箱卡 → /tools/tg-members
+  manual_console: true    # 人工操作台：桌面壳官方网页版页签条 + 「打开官方网页版/原生页」
+  team_collab: true       # 团队协作副驾卡
+  ai_settings: true       # AI 提示词 & 行为配置卡 / 人工客服转接卡 / 侧栏「人工转接」
+  cockpit: true           # 工作台顶栏「待人工」入口
 
 # 首启体验档：桌面装完直接能用（10 万字符尝鲜、无时间窗、用完即止），不要求注册；
 # 注册后经官网领满 100 万（无期限，规格在 chatx_fulfillment.TRIAL_SPEC）。

@@ -79,7 +79,7 @@ class DesktopInputLock:
             try:
                 ctypes.windll.kernel32.ReleaseMutex(ctypes.c_void_p(self._handle))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in DesktopInputLock.release", exc_info=True)
             self._owned = False
         self._local.release()
 

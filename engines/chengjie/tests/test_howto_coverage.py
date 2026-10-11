@@ -27,8 +27,9 @@ from __future__ import annotations
 from typing import Dict, Set, Tuple
 
 # 当前缺口天花板：**只降不升**。补完一批 how-to 就把这个数字调低（并在 PR 里
-# 让 diff 说话）。2026-08-27 基线 34 → 第一批补 12 条后 23 → 第二批补 13 条后 10。
-HOWTO_GAP_CEILING = 10
+# 让 diff 说话）。2026-08-27 基线 34 → 第一批补 12 条后 23 → 第二批补 13 条后 10
+# → 2026-10-07 群脉导播台补上按目标聊天的用法后 9。
+HOWTO_GAP_CEILING = 9
 
 
 def _nav_paths() -> Dict[str, str]:
@@ -89,7 +90,8 @@ def test_howto_paths_point_at_real_pages():
     """
     nav = set(_nav_paths())
     # 已核实存在、但不在侧栏的子页面白名单（新增前请先确认页面真的能打开）
-    known_subpages = {"/dashboard", "/workspace/drafts"}
+    # /tools/tg-members：群成员提取管理台（group_members_routes GET，收件箱工具箱卡深链）
+    known_subpages = {"/dashboard", "/workspace/drafts", "/tools/tg-members"}
     bad = []
     for p in sorted(_howto_paths()):
         if p in nav or p in known_subpages:

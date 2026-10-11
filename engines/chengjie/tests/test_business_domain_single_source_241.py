@@ -160,6 +160,22 @@ def test_describe_line_shape():
     assert bdm.business_domain_label("sales", "en") == "Sales"
 
 
+def test_business_domain_view_and_apply():
+    """P1-5：读视图 + 写 overlay 刷新 active——自动回复设置页与开发者页共用。"""
+    view = bdm.business_domain_view({"business_domain": "companion"})
+    assert view["ok"] and view["business_domain"] == "companion"
+    assert view["explicit"] == "companion"
+    ids = [o["id"] for o in view["options"]]
+    assert ids == ["companion", "sales"]
+    cm = _CM({"business_domain": "companion"})
+    v, ok = bdm.apply_business_domain(cm, "sales")
+    assert ok and v == "sales"
+    assert cm.config["business_domain"] == "sales"
+    assert bdm.active_business_domain() == "sales"
+    v2, ok2 = bdm.apply_business_domain(cm, "nope")
+    assert (v2, ok2) == ("", False)
+
+
 # ── A2 域包装配层：hook 类 + KB 分类变体随业务域 ────────────────────────────
 
 class _Skill:
@@ -592,7 +608,11 @@ def test_card_and_report_payloads_carry_business_domain():
     client = _build_client({"business_domain": "companion"})
     store = get_goal_store(":memory:")
     d0 = client.get(f"/api/goals/for-conversation?conversation_id={CONV}").json()
-    assert d0 == {"goal": None, "last": None}        # 无目标：旧契约原样（卡片此时不渲染画像/达成表单）
+    # 无目标：goal/last 仍是空，卡片不渲染画像。后来加的 default_goal /
+    # discovery_paused / stage_plan 是附加字段，旧客户端忽略。
+    assert d0["goal"] is None and d0["last"] is None
+    assert d0["default_goal"] is None and d0["discovery_paused"] is False
+    assert isinstance(d0.get("stage_plan"), dict)
     g = store.create_goal(conversation_id=CONV, platform="telegram", account_id="a1",
                           chat_key="100", template="profile_discovery",
                           params={"slots": "age,family_status"}, autonomy="auto", deadline_days=10)

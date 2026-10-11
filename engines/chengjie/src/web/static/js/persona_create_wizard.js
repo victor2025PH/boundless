@@ -28,6 +28,7 @@
       nameFb: '陪聊闺蜜',
       descFb: '温柔治愈系私聊，会倾听会接住情绪',
       persona: {
+        kind: 'companion',   // P0-1 工作类型：陪聊——知识库按闲聊闸（默认不查，kb_access 可开）
         role: '温柔陪聊 / 治愈系闺蜜',
         personality: {
           traits: ['温柔细腻', '会倾听', '慢热但真诚', '偶尔撒娇'],
@@ -52,6 +53,7 @@
       nameFb: '商务顾问',
       descFb: '先结论后步骤，订单/付款/商务对接',
       persona: {
+        kind: 'sales',       // P0-1：商务对接按销售——知识库必查、事实优先
         role: '客户成功顾问',
         personality: {
           traits: ['干练', '条理清晰', '守时靠谱', '有分寸'],
@@ -76,6 +78,7 @@
       nameFb: '专业客服',
       descFb: '售后排查，先共情再解决，不争执',
       persona: {
+        kind: 'support',     // P0-1：客服——知识库必查；查无按固定话术、二次追问转人工
         role: '售后支持专员',
         personality: {
           traits: ['耐心', '稳定', '靠谱', '复述确认'],
@@ -100,6 +103,8 @@
       nameFb: '知性导师',
       descFb: '循循善诱的学习陪伴，启发式提问',
       persona: {
+        kind: 'companion',   // P0-1：导师按陪聊闸，但显式放开知识库（课程 FAQ 可命中）
+        kb_access: true,
         role: '学习陪伴导师',
         personality: {
           traits: ['博学', '循循善诱', '鼓励式', '有幽默感'],
@@ -124,6 +129,7 @@
       nameFb: '电商导购',
       descFb: '懂产品会推荐，热情但不油腻',
       persona: {
+        kind: 'sales',       // P0-1：销售——知识库必查（产品 / 价格 / 活动）
         role: '私域导购顾问',
         personality: {
           traits: ['热情不油腻', '懂产品', '会推荐', '有分寸'],

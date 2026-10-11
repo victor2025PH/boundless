@@ -99,6 +99,7 @@ def state_path(config_manager: Any) -> Optional[Path]:
             return None
         return Path(cp).parent / STATE_FILENAME
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in state_path", exc_info=True)
         return None
 
 

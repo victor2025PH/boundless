@@ -93,3 +93,34 @@ def test_endpoints_503_without_service():
     c, _ = _client(with_service=False)
     assert c.get("/api/drafts").status_code == 503
     assert c.get("/api/drafts/stats").status_code == 503
+
+
+def test_list_enriches_kb_decision_from_registry():
+    """P0-5：起草链按会话登记的知识库决策随 /api/drafts 行回给草稿条；无登记不带字段。"""
+    from src.utils import kb_policy as kp
+    kp._reset_for_tests()
+    try:
+        c, store = _client()
+        # inbox 自发草稿一条（真实 reply_drafts 行），会话 id 与登记键一致
+        cid = "telegram:8414394703:7380618071"
+        store.upsert_draft({
+            "source_kind": "inbox", "source_id": cid, "conversation_id": cid,
+            "platform": "telegram", "account_id": "8414394703", "chat_key": "7380618071",
+            "peer_text": "那都有什么活动", "draft_text": "这个我这边还没有确切信息",
+            "status": "pending", "autopilot_level": "L1", "risk_level": "low",
+        })
+        d = kp.resolve_kb_policy(
+            persona={"role": "售后支持专员", "tags": ["客服"]}, intent="direct_chat",
+            text="那都有什么活动", config={"domain": "conversion"})
+        d.hit, d.refs, d.nohit_n = False, 0, 1
+        kp.note_decision(cid, d)
+        rows = c.get("/api/drafts?status=pending&limit=10").json()["drafts"]
+        mine = [r for r in rows if r.get("conversation_id") == cid]
+        assert mine and mine[0]["kb_decision"]["mode"] == "must"
+        assert mine[0]["kb_decision"]["hit"] is False and mine[0]["kb_decision"]["kind"] == "support"
+        # LINE 平台稿无登记 → 不带字段
+        line = [r for r in rows if r.get("draft_id") == "line_pending:line-a:11"]
+        assert line and "kb_decision" not in line[0]
+        store.close()
+    finally:
+        kp._reset_for_tests()

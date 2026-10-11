@@ -70,6 +70,7 @@ def _parse_iso(s: str) -> Optional[float]:
             dt = dt.replace(tzinfo=_dt.timezone.utc)
         return dt.timestamp()
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _parse_iso", exc_info=True)
         return None
 
 

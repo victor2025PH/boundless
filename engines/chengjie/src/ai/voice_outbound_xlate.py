@@ -24,9 +24,12 @@ logger = logging.getLogger(__name__)
 
 
 async def resolve_spoken_text(
-    text: str, target_lang: str, translate_service: Any,
+    text: str, target_lang: str, translate_service: Any, *, tier: str = "",
 ) -> Tuple[str, Dict[str, Any]]:
     """(原文, 目标语, TranslationService) → (spoken 文本, meta)。
+
+    ``tier`` 与文本出站同一条会话翻译档（空 = 标准档）。试听和发送必须传入
+    同一个值，否则坐席听到的稿和客户听到的稿会分叉。
 
     meta = {translated, target_lang, source_lang, provider, reason}；
     未译时 spoken==原文且 reason 说明原因（no_target/identity/translate_failed…）。
@@ -48,7 +51,7 @@ async def resolve_spoken_text(
         return src_text, meta
     try:
         res = await translate_service.translate(
-            src_text, target_lang=tl, style="chat")
+            src_text, target_lang=tl, style="chat", tier=str(tier or ""))
     except Exception:
         logger.debug("[tts] xlate 翻译异常（回落念原文）", exc_info=True)
         meta["reason"] = "translate_error"

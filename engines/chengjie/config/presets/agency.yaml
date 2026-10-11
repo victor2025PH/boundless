@@ -1,0 +1,88 @@
+# 场景预设：代运营多品牌私信承接（一品牌一人设一知识库 + 统一收件箱）
+# ─────────────────────────────────────────────────────────────────────
+# 适用：代运营公司替多个客户品牌接待私信；品牌之间严格隔离，不暴露代运营方。
+# 垂直模板包（人设 / 知识库种子 / STOP 文案 / 待人工 SOP）：config/presets/packs/agency/
+# 开局只需填 3 处：① ai.api_key ② ai.base_url/model（或换 provider）③ 若用 TG 再填 telegram。
+# 填完运行：python main.py --check   应为 0 错误。
+# ─────────────────────────────────────────────────────────────────────
+
+domain: general
+
+# AI 大脑（DeepSeek 示例；本地 Ollama 见注释）
+ai:
+  provider: openai_compatible        # gemini | openai_compatible
+  api_key: "YOUR_API_KEY"            # ← 必填：对应 provider 的 key（本地 Ollama 填 ollama）
+  base_url: "https://api.deepseek.com"  # ← openai_compatible 必填（Ollama: http://127.0.0.1:11434/v1）
+  model: "deepseek-flash"         # ← 模型名（DeepSeek 已废弃 deepseek-chat 旧名）
+  temperature: 0.7
+  max_tokens: 1024
+  timeout: 30
+  max_conversation_history: 16
+
+# Telegram 可留占位（不用 TG 时忽略；纯网页客服当前仍需占位以通过启动校验）
+telegram:
+  api_id: "YOUR_API_ID"
+  api_hash: "YOUR_API_HASH"
+  phone_number: "+8612345678900"
+  session_name: agency_bot
+  process_private: true
+
+skills:
+  enabled: [greeting, small_talk, complaint]
+
+# 网页聊天 Widget（官网嵌 <script src=".../chat/embed.js">）
+web_chat:
+  enabled: true
+  account_id: web
+  default_mode: auto_ai
+  greeting: "你好～有什么可以帮您？"
+  title: "在线客服"
+  theme_color: "#2563eb"
+  token_secret: ""                   # 建议设随机串（留空回退 web_admin.secret_key）
+  rate_limit_per_min: 20
+  prechat:
+    enabled: true
+    required: false
+    fields:
+      - {key: name,  label: "称呼",   type: text,  required: false}
+      - {key: email, label: "邮箱",   type: email, required: false}
+
+# 统一收件箱 + 自动草稿（low→自动发，medium→坐席审批）
+inbox:
+  enabled: true
+  auto_draft:
+    enabled: true
+    automation_mode: auto_ai
+  sla_warn_sec: 1800
+  sla_crit_sec: 7200
+
+# 坐席工作台：打开外语会话时自动把客户消息译为中文
+workspace:
+  auto_translate_inbound:
+    enabled: true
+    target_lang: zh
+
+# 多语种翻译（记忆 + 术语库；多引擎按需加 deepl/google key）
+translation:
+  memory:
+    enabled: true
+  glossary:
+    enabled: true
+    protect: ["SKU", "LINE", "WhatsApp"]
+
+
+web_admin:
+  site_name: 代运营私信工作台
+  host: 127.0.0.1
+  port: 18787
+  auth_token: "YOUR_ADMIN_TOKEN"     # ← 建议改随机串
+  secret_key: "YOUR_FLASK_SECRET_KEY" # ← 建议改随机串
+
+logging:
+  level: INFO
+  file: logs/app.log
+
+# 合规 · AI 身份：被真诚问到时如实说一句是 AI 助手，再回到话题（诚实档默认开）
+compliance:
+  disclosure:
+    honest_identity: true

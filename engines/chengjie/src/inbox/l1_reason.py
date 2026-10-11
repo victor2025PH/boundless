@@ -28,6 +28,7 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -99,7 +100,7 @@ def _lang_unknown(text: str, conv: Optional[Dict[str, Any]], store: Any = None) 
         if plan:
             return not bool(plan.get("peer_known"))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _lang_unknown", exc_info=True)
     lang = str((conv or {}).get("language") or "").strip().lower()
     if lang and lang != "unknown":
         return False

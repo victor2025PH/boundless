@@ -51,3 +51,18 @@ def test_order_hook_webhook_exempt_from_csrf(client):
         pass
     assert detail != "CSRF token missing or invalid", \
         "order-hook 被 CSRF 中间件拦截，webhook 无法到达路由（豁免口回退）"
+
+
+def test_cta_convert_webhook_exempt_from_csrf(client):
+    """官网回传 /api/cta/convert 用 X-CTA-Secret，不带会话 cookie。
+
+    不豁免的话，中间件先回 CSRF 403，向导场永远记不上。
+    """
+    r = client.post("/api/cta/convert", json={"telegram": "Alice", "feature": "matrixx"})
+    body = {}
+    try:
+        body = r.json() or {}
+    except Exception:
+        pass
+    assert str(body.get("detail") or "") != "CSRF token missing or invalid"
+    assert body.get("reason") in {"webhook_secret_not_configured", "unauthorized", "inbox_not_ready"}

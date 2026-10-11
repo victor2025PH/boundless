@@ -64,7 +64,7 @@ def _b64_file(path: str) -> str:
         if p.is_file() and p.stat().st_size > 0:
             return base64.b64encode(p.read_bytes()).decode("ascii")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _b64_file", exc_info=True)
     return ""
 
 
@@ -465,7 +465,7 @@ def _resolve_translation_service(app):
             try:
                 st.translation_service = svc
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in _resolve_translation_service", exc_info=True)
         return svc
     except Exception:
         logger.debug("[voice/live] 取/建 translation_service 失败", exc_info=True)
@@ -550,7 +550,7 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
             if config_manager and hasattr(config_manager, "config"):
                 return config_manager.config or {}
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_live_routes._full_cfg", exc_info=True)
         return {}
 
     def _episodic_store(request_app):
@@ -754,7 +754,7 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
             try:
                 await ws.send_text(dumps_event({"type": EV_ERROR, "error": "relay_ended"}))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_voice_live_routes.voice_live", exc_info=True)
         finally:
             stats.ended(_end_reason, was_connected=True,
                         duration_sec=max(0.0, time.time() - _call_t0))
@@ -764,7 +764,7 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
             try:
                 await ws.close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_voice_live_routes.voice_live", exc_info=True)
 
     # ── 试拨页（运营自测；公网暴露请置于同等鉴权/代理后）──
     @app.get("/ops/voice-call")
@@ -877,7 +877,7 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
                     # 与通话开场白同口径清洗（保证完整句，不吊半句）——前端展示/试听都拿到能直接说出口的整句
                     opener = build_opener_text(full, "zh")
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_voice_live_routes.voice_personas", exc_info=True)
                 avatar_url = ""
                 try:
                     # 必须按 __file__ 推绝对路径：相对路径按**进程 CWD** 解析，而双实例
@@ -886,7 +886,7 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
                     if pid and (_PERSONA_AVATAR_DIR / f"{pid}.png").is_file():
                         avatar_url = f"/static/persona_avatars/{pid}.png"
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_voice_live_routes.voice_personas", exc_info=True)
                 items.append({
                     "id": pid,
                     "name": s.get("name") or pid,
@@ -925,7 +925,7 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
         try:
             _REF_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_live_routes.upload_persona_voice", exc_info=True)
         tmp = _REF_AUDIO_DIR / f".upload_{pid}.tmp"
         health = {"grade": "unknown", "score": 0, "summary": "", "issues": [], "hints": []}
         try:
@@ -958,7 +958,7 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
             _st = dest.stat()
             _REF_HEALTH_CACHE[str(dest)] = (_st.st_mtime, _st.st_size, health)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_live_routes.upload_persona_voice", exc_info=True)
         meta = reference_audio_meta(pid)
         meta["health"] = health
         return JSONResponse({"ok": True, "persona_id": pid, **meta})
@@ -979,7 +979,7 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
                     f.unlink(missing_ok=True)
                     removed.append(f.name)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_voice_live_routes.delete_persona_voice", exc_info=True)
             _REF_NORM_CACHE.pop(str(f), None)
             _REF_HEALTH_CACHE.pop(str(f), None)
         return JSONResponse({"ok": True, "persona_id": pid, "removed": removed,
@@ -1110,7 +1110,7 @@ def register_voice_live_routes(app, *, api_auth=None, config_manager=None) -> No
             preview_dir.mkdir(parents=True, exist_ok=True)
             voice_cfg["out_dir"] = str(preview_dir)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_live_routes.voice_preview", exc_info=True)
         try:
             from src.ai.tts_pipeline import TTSPipeline
             tts = TTSPipeline(voice_cfg)

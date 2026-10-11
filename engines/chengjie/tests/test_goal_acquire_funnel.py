@@ -332,9 +332,12 @@ def test_real_catalog_file_loads_with_website_plan_keys():
     ids = {p["id"] for p in data["products"]}
     assert {"chatx", "lingox"} <= ids
     plan_keys = {pl["key"] for p in data["products"] for pl in p["plans"]}
-    # 与 website/lib/order-lines.ts 的 offer id 对齐（改那边要同步这里）
-    assert {"autochat-entry", "autochat-team", "autochat-flagship",
-            "translate-team", "translate-pro", "translate-charpack"} <= plan_keys
+    # 与 website/lib/order-lines.ts 的现行 offer id 对齐（改那边要同步这里）
+    assert {"recharge-newbie-6", "recharge-50", "recharge-200",
+            "translate-workbench"} <= plan_keys
+    # 2026-08-19/21 停售的订阅键不得再作为下单深链外发
+    assert not plan_keys & {"autochat-entry", "autochat-team", "autochat-flagship",
+                            "translate-team", "translate-pro", "translate-charpack"}
     assert data["site"]["base_url"].startswith("https://")
 
 

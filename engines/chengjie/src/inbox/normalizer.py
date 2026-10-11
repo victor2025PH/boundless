@@ -11,10 +11,12 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Optional
 
 from src.ai.translation_service import detect_language
+from src.inbox.session_lang import refine_latin_language
 
 #: 极短拉丁客套词（小写）：语言证据不足，不参与会话语言投票
 _TRIVIAL_LATIN = frozenset({
@@ -39,8 +41,12 @@ def detect_inbound_language(raw: str) -> str:
         low = t.lower().rstrip(".!?~ ")
         letters = sum(1 for c in low if c.isalpha())
         if low in _TRIVIAL_LATIN or letters < 4:
-            return "unknown"
-    return detect_language(t)
+            # P1-5（2026-10-08）：「po」「Sige」这类他加禄短词是明确证据，不按「OK」处理；
+            # 其余极短 ASCII 仍 unknown（「OK」翻会话语言的护栏不变）。
+            lang, _ = refine_latin_language(t, "unknown")
+            return "tl" if lang == "tl" else "unknown"
+    # tl / Taglish / 宿务补强 + 「中文夹英文词」判 zh（session_lang 单一实现）
+    return refine_latin_language(t, detect_language(t))[0]
 
 # 统一收件箱草稿/审批的 4 档自动化模式（与 unified_inbox 前端一致）
 SEND_MODES = ["manual", "review", "multi_choice", "auto_ai"]
@@ -199,7 +205,7 @@ def infer_chat_type(
             if bool(src.get("is_group")):
                 return "group"
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).debug("swallowed in infer_chat_type", exc_info=True)
     pt = str(src.get("peer_type") or "").strip().lower()
     if pt in _GROUP_SOURCE_TYPES:
         return "group"
@@ -215,7 +221,7 @@ def infer_chat_type(
             if bool(src.get("is_group_thread")):
                 return "group"
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).debug("swallowed in infer_chat_type", exc_info=True)
     for _k in ("participants_count", "participant_count", "participantCount"):
         if _k not in src:
             continue
@@ -536,6 +542,9 @@ def store_row_to_chat(
         # 折叠到底部、不计未读；自动化排除在 ingest 侧（同一 is_self_chat 判据）。
         "self_chat": _self_chat,
         "language": language,
+        # 库里记下的会话语言（投票/回填的那一列）。``language`` 仍是末条现场检测，
+        # 两者可以不同：末条是表情时现场是 unknown，库里可能已经有 tl。
+        "session_language": str(row.get("language") or "unknown"),
         "last_message": last_msg_obj,
         "messages": [last_msg_obj] if last_msg_obj else [],
         "message_count": int(message_count or 0),
@@ -694,4 +703,4 @@ try:
             _PLATFORM_MSG_ID_FIELDS.setdefault(_spec.id, tuple(_spec.msg_id_fields))
     del _spec
 except Exception:  # 注册表不可用时保持旧行为（回落 title()）
-    pass
+    logging.getLogger(__name__).debug("swallowed in module", exc_info=True)

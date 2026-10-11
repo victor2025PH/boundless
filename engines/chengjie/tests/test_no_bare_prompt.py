@@ -39,7 +39,8 @@ _BARE_PROMPT = re.compile(r"(?<![\w.$])prompt\s*\(\s*[^)\s]")
 _LEDGER: dict[str, int] = {
     "src/web/templates/_channel_body_messenger.html": 3,
     "src/web/templates/dashboard.html": 3,
-    "src/web/templates/draft_review.html": 1,
+    # 2026-10-09：draft_review.html 最后一处裸 prompt( 已换成 AITRNotify.prompt，
+    # 实测 0。不在台账即天花板 0。不留 1，否则债务被藏起来。
     "src/web/templates/ops_overview.html": 1,
     "src/web/templates/singing.html": 1,
     "src/web/templates/unified_inbox.html": 6,

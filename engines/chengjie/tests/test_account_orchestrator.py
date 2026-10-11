@@ -464,3 +464,36 @@ async def test_mark_read_typing_record_per_platform_metrics(registry):
     assert snap["telegram"]["typing_fail"] == 1
     orch._WORKER_FACTORIES.pop("telegram:protocol", None)
     hm.reset()
+
+
+def test_registry_runtime_mode_maps_telegram_phone_to_protocol():
+    from src.web.routes.unified_inbox_login_routes import registry_runtime_mode
+    assert registry_runtime_mode("telegram", "phone") == "protocol"
+    assert registry_runtime_mode("Telegram", "PHONE") == "protocol"
+    assert registry_runtime_mode("telegram", "protocol") == "protocol"
+    assert registry_runtime_mode("line", "phone") == "phone"
+    assert registry_runtime_mode("whatsapp", "") == "device"
+
+
+async def test_phone_login_persist_stays_protocol_and_sync_starts(registry):
+    """验证码向导形态是 phone；注册表必须落 protocol，sync 才能拉起，侧边栏才有号。
+
+    复现旧事故：provider 已写 protocol，路由再按 sess.mode upsert。映射前会盖成 phone，
+    worker_supported 为假，编排器不接管，聊天页 platform_status 为空。
+    """
+    from src.web.routes.unified_inbox_login_routes import registry_runtime_mode
+    registry.upsert("telegram", "4242", mode="protocol", status="online")
+    registry.upsert(
+        "telegram", "4242",
+        mode=registry_runtime_mode("telegram", "phone"),
+        status="online",
+    )
+    row = registry.get("telegram", "4242")
+    assert row["mode"] == "protocol"
+    assert orch.worker_supported("telegram", row["mode"]) is True
+    assert orch.worker_supported("telegram", "phone") is False
+    o = AccountOrchestrator(registry=registry)
+    await o.sync()
+    keys = {a["key"] for a in o.status()["accounts"]}
+    assert account_key("telegram", "4242") in keys
+    assert o.status()["by_state"].get("running") == 1

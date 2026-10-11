@@ -106,7 +106,7 @@ def tiktok_cfg(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         enabled = enabled or bool((((config or {}).get("platform_login") or {}).get("official")
                                    or {}).get(PLATFORM, {}).get("enabled", False))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in tiktok_cfg", exc_info=True)
     try:
         tol = float(blk.get("signature_tolerance_sec") or DEFAULT_SIGNATURE_TOLERANCE_SEC)
     except (TypeError, ValueError):
@@ -220,14 +220,14 @@ class TikTokStateStore:
             try:
                 os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TikTokStateStore.__init__", exc_info=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TikTokStateStore.__init__", exc_info=True)
         self._conn.executescript(_DDL)
         # 老库补列（骨架期建的 peer_ctx 没有 ref）
         try:
@@ -235,7 +235,7 @@ class TikTokStateStore:
             if "ref" not in cols:
                 self._conn.execute("ALTER TABLE peer_ctx ADD COLUMN ref TEXT NOT NULL DEFAULT ''")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TikTokStateStore.__init__", exc_info=True)
         self._conn.commit()
 
     @staticmethod
@@ -306,7 +306,7 @@ class TikTokStateStore:
         try:
             self._conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TikTokStateStore.close", exc_info=True)
 
 
 _STORE: Optional[TikTokStateStore] = None
@@ -605,7 +605,7 @@ async def complete_oauth(code: str, *, config: Optional[Dict[str, Any]], redirec
         from src.integrations.platform_session_health import get_platform_session_health
         get_platform_session_health().record(PLATFORM, open_id, "authorized")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in complete_oauth", exc_info=True)
     return {"ok": True, "open_id": open_id, "scope": meta["scope"], "username": meta.get("username", ""),
             "display_name": meta.get("display_name", ""), "region": meta.get("region", ""),
             "access_expires_at": meta["access_expires_at"], "refresh_expires_at": meta.get("refresh_expires_at", 0.0)}

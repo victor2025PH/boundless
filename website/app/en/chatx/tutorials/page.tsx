@@ -43,7 +43,7 @@ export default function ChatxTutorialsPageEn() {
           </Link>
           <Link href="/en/pricing" className="glass rounded-2xl border border-white/10 p-5 transition hover:border-neon-cyan/40">
             <div className="text-sm font-semibold text-white">Rates & top-up tiers</div>
-            <p className="mt-1 text-xs leading-relaxed text-slate-400">Standard translation is free forever; Tokens are pay-as-you-go with no monthly or seat fees.</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">Standard translation uses the local model; if it is not set, a person takes the line. Tokens are pay-as-you-go with no monthly or seat fees.</p>
             <span className="mt-3 inline-block text-xs text-neon-cyan">→ Pricing</span>
           </Link>
           <Link href="/en/videos" className="glass rounded-2xl border border-white/10 p-5 transition hover:border-neon-cyan/40">

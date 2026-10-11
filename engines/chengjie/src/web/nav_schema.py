@@ -88,6 +88,7 @@ NAV_ICONS = {
     "key": _STROKE % '<circle cx="7.5" cy="15.5" r="3.5"/><path d="M10.2 13.2L21 3"/><path d="M16 3h5v5"/>',
     # 2026-08-28 实施81：报障工单处置台（bug_tickets）专属图标（可见项图标去重门禁）
     "bug": _STROKE % '<rect x="8" y="6" width="8" height="12" rx="4"/><path d="M12 6V3M8 9H4M8 13H4M8 17H5M16 9h4M16 13h4M16 17h3M9 6a3 3 0 016 0"/>',
+    "extract": _STROKE % '<path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M16 11h6"/>',
 }
 
 # ── 菜单项 ───────────────────────────────────────────────────────────────────
@@ -99,6 +100,11 @@ NAV_ITEMS = {
                       external=True, label_key="workspace_inbox", label_zh="坐席工作台",
                       help="nav_unified_inbox",
                       cmd_keys="unified inbox 统一 收件箱 消息 聊天 多平台 坐席 工作台 workspace"),
+    # 群成员提取：所有登录用户的左侧菜单项。不进 SIMPLE_MORE 常量（≤7 棘轮），
+    # 由 _with_simple_tg_members 在渲染时塞进简洁「更多」。
+    "tg_members": dict(key="tg_members", path="/tools/tg-members", icon="extract",
+                       simple=True, label_key="gm_nav", label_zh="群成员提取",
+                       cmd_keys="telegram tg members 群成员 提取 拉群 成员库 extract"),
     "cases": dict(key="cases", path="/cases", icon="file-text", badge="badge-cases",
                   label_key="cases", label_zh="案例跟进", help="nav_cases",
                   cmd_keys="cases 案例 待处理 待处理案例 跟进 case"),
@@ -148,7 +154,10 @@ NAV_ITEMS = {
                          cmd_keys="whatsapp wa rpa 自动化 自动聊天 模板 渠道中心 "
                                   "真机矩阵 matrix"),
     # 群脉 CrowdX 导播台：多号群戏剧本库 + 离线排练（dry-run，不发真消息）
+    # simple=True：简洁模式 Ctrl+K 能搜到。侧栏「更多」不写进 SIMPLE_MORE
+    # （那张表有 ≤7 棘轮），由 _with_simple_group_show 在开关打开时再塞一行。
     "group_show": dict(key="group_show", path="/group-show", icon="film",
+                       simple=True,
                        label_key="gs_nav", label_zh="群脉导播台",
                        cmd_keys="group show crowdx 群脉 导播 导播台 群戏 剧本 排练 炒群"),
     # ai_studio 已解散（2026-08-01）：5 个 tab 中 3 个是兄弟页面套壳，独有能力
@@ -374,7 +383,8 @@ NAV_GROUPS_FULL = [
     # 单独成组——无域包的部署会渲染出空分组标题。
     dict(label_key="section_workbench", label_zh="工作台",
          note_key="section_note_workbench", note_zh="今天要处理的事",
-         items=["workspace", "cases", "care", "relations_health", DOMAIN_SENTINEL]),
+         items=["workspace", "cases", "care", "relations_health", "tg_members",
+                DOMAIN_SENTINEL]),
     # 真机矩阵（原「渠道自动化」，2026-08-03 更名）：矩阵总览 + 四渠道 + 群脉导播
     # ——群脉指挥的就是同一批矩阵账号，归组随矩阵。
     dict(label_key="section_channels", label_zh="真机矩阵",
@@ -396,10 +406,12 @@ NAV_GROUPS_FULL = [
          items=["crisis_audit", "audit", "asset_center", "bug_tickets"]),
     dict(label_key="section_system", label_zh="系统管理", master_only=True,
          note_key="section_note_system", note_zh="配置这套系统",
-         items=["users", "settings", "logs", "developer"]),
+         items=["users", "settings", "logs"]),
+    # 开发者工具不放主账号专属组：坐席默认简洁模式，完整模式里非主账号也要能点到。
+    # 页内仍是开发者密码闸。
     dict(label_key="section_support", label_zh="支持",
          note_key="section_note_support", note_zh="帮助与个性化",
-         items=["personal_settings", "help"]),
+         items=["personal_settings", "help", "developer"]),
 ]
 
 # ── 简洁模式 ────────────────────────────────────────────────────────────────
@@ -411,8 +423,10 @@ SIMPLE_CORE = ["workspace", "cases", "care", "knowledge", DOMAIN_SENTINEL,
                "reply_settings", "model_keys", "escalation"]
 # usage_center 进折叠区（2026-08-16）：全角色默认简洁模式，老板要的「用量/余额」
 # 必须在简洁模式可达；折叠区尺寸棘轮 ≤6，本项恰好用满——再加需先精简。
+# developer（2026-09-29）：壳内没有地址栏，用户版又曾把入口从侧栏和 Ctrl+K 拿掉，
+# 指定的人打不开。放进「更多」，所有角色点得到；页内密码闸不动。折叠区因此到 7。
 SIMPLE_MORE = ["dash", "usage_center", "learner", "crisis_audit",
-               "personal_settings", "help"]
+               "personal_settings", "help", "developer"]
 
 # 真机矩阵成员（简洁模式上下文导航用：深链进矩阵页时侧栏就地渲染本组，保住
 # 组内互切与当前页高亮；base.html 与 _ws_sidebar.html 经 nav_matrix_items 消费）。
@@ -420,8 +434,9 @@ MATRIX_ITEM_IDS = ("rpa_overview", "telegram", "line_rpa", "messenger_rpa",
                    "whatsapp_rpa")
 
 # 客户形态（ui_visibility.flavor=client / 桌面包）不渲染的导航项：纯运维/开发面，
-# 对最终用户只是噪音。侧栏与命令面板同时剔除，URL 与 API 不封（/developer 本就
-# 有密码闸）——内部人员在客户机上直接敲地址仍可进。
+# 对最终用户只是噪音。侧栏与命令面板同时剔除，URL 与 API 不封。
+# 「开发者工具」刻意不在此列（2026-09-29）：桌面壳没有地址栏，藏了入口就没有人
+# 进得去。页内开发者密码闸仍在。
 # 「运营总览 ops」刻意不在此列：那是老板每天看的经营读数面。
 # bug_tickets（实施81）＝我方报障群值守的处置台，客户部署没有报障群值守语义。
 # 2026-09-06 L-4 A（D-L2 / D-L6，#197 #198 #212 #199 #211）扩容：
@@ -431,7 +446,7 @@ MATRIX_ITEM_IDS = ("rpa_overview", "telegram", "line_rpa", "messenger_rpa",
 # - voice_eval  声音评测：只有消费端没有生产端。
 # 「学习队列 learner」刻意不在此列（D-L5 先止血不隐藏，入口本就在简洁模式「更多」）。
 # 三层形态里 partner（代理商版）与 internal 都看得见这些项——本表只对 client 生效。
-CLIENT_HIDDEN_ITEM_IDS = ("logs", "developer", "bug_tickets",
+CLIENT_HIDDEN_ITEM_IDS = ("logs", "bug_tickets",
                           "help", "strategies", "singing", "voice_eval")
 
 # 代理商版才显（D-L7）：白标 / 演示数据 / 授权激活是代理商 / OEM 的商业面，终端
@@ -569,6 +584,30 @@ def _partner_paths():
     return {CMD_EXTRA_ITEMS[i]["path"] for i in PARTNER_ONLY_ITEM_IDS}
 
 
+def _with_simple_tg_members(ctx: dict) -> dict:
+    """群成员提取始终出现在简洁「更多」。不写进 SIMPLE_MORE 常量。"""
+    more = list(ctx.get("nav_simple_more") or [])
+    if any(isinstance(it, dict) and it.get("key") == "tg_members" for it in more):
+        return ctx
+    item = dict(NAV_ITEMS["tg_members"])
+    item["simple"] = True
+    more.append(item)
+    return dict(ctx, nav_simple_more=more)
+
+
+def _with_simple_group_show(ctx: dict, enabled: bool) -> dict:
+    """开关打开才把群脉塞进简洁「更多」。关着时不出现，也不改 SIMPLE_MORE 常量。"""
+    if not enabled:
+        return ctx
+    more = list(ctx.get("nav_simple_more") or [])
+    if any(isinstance(it, dict) and it.get("key") == "group_show" for it in more):
+        return ctx
+    item = dict(NAV_ITEMS["group_show"])
+    item["simple"] = True
+    more.append(item)
+    return dict(ctx, nav_simple_more=more)
+
+
 def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) -> dict:
     """ui_visibility 导航显隐键（缺省即关=隐藏）→ 全导航面剔除对应项。
 
@@ -620,14 +659,15 @@ def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) 
             hidden_paths |= _partner_paths()
     if not flags.get("matrix_nav", False):
         hidden_ids |= set(MATRIX_ITEM_IDS)
-    if not flags.get("group_show", False):
+    show_gs = bool(flags.get("group_show", False))
+    if not show_gs:
         hidden_ids.add("group_show")
     if not flags.get("ai_settings", False):
         hidden_paths.add(NAV_ITEMS["escalation"]["path"])
     if not _monetization_product_on(config):
         hidden_paths.add(NAV_ITEMS["monetization"]["path"])
     if not (hidden_ids or hidden_paths or tier_ids or tier_paths):
-        return ctx
+        return _with_simple_tg_members(_with_simple_group_show(ctx, show_gs))
 
     _mo_path = NAV_ITEMS["monetization"]["path"]
 
@@ -657,7 +697,7 @@ def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) 
         kept = _drop_hidden(g["items"])
         if any(i for i in kept if i != DOMAIN_SENTINEL):
             groups.append(dict(g, items=kept))
-    return dict(
+    return _with_simple_tg_members(_with_simple_group_show(dict(
         ctx,
         nav_groups=groups,
         nav_simple_core=_drop_hidden(ctx["nav_simple_core"]),
@@ -665,7 +705,7 @@ def _apply_ui_visibility(ctx: dict, config: dict, developer_mode: bool = False) 
         nav_matrix_items=([] if set(MATRIX_ITEM_IDS) & hidden_ids
                           else ctx["nav_matrix_items"]),
         nav_cmd_items=_drop_hidden(ctx["nav_cmd_items"]),
-    )
+    ), show_gs and "group_show" not in hidden_ids))
 
 
 def get_nav_context(config: dict = None, developer_mode: bool = False) -> dict:

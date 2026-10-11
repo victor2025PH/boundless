@@ -208,6 +208,18 @@ ZH = {
     "rps_minlen_label": "触发拟稿的最短消息长度",
     "rps_minlen_hint": "短于此字数的入站不生成草稿（0 = 不限制）",
 
+    # P1-5（2026-09-29）：业务域——这台机器做什么生意（从开发者页挪到本页，客户可改）
+    "rps_bd_title": "这台机器做什么生意",
+    "rps_bd_hint": "陪伴：工作目标不出现「转化成交」，知识库不预置支付话术，人设默认按陪聊闸。销售：保留商机标签与成交字段。人设工作室里把某人设标成「客服 / 销售」后，那个号仍按人设查知识库，不受这项影响。改完模板 / 标签即时生效；知识库分类重启后跟随。",
+    "rps_bd_label": "业务域",
+    "rps_bd_loading": "读取中…",
+    "rps_bd_src_explicit": "已设定",
+    "rps_bd_src_inferred": "按部署形态推导",
+    "rps_bd_saved": "已保存。模板 / 标签 / 画像即时生效；知识库分类请重启后跟随。",
+    "rps_bd_bad": "业务域只能是陪伴或销售：{name}",
+    "rps_bd_write_fail": "写入失败，请重试",
+    "rps_bd_fail": "读取失败，请刷新重试",
+
     # 回复速度
     "rps_pace_title": "回复节奏与拟人细节",
 
@@ -839,6 +851,17 @@ EN = {
     "rps_bootstrap_hint": "Off by default. Off: conversations are not pinned \u2014 change this page or the account menu later and they follow immediately. On: once pinned, changing this page no longer affects them; you must reset per conversation or per account. Turn on only when you want old conversations to keep the mode they started with.",
     "rps_minlen_label": "Min message length to draft",
     "rps_minlen_hint": "Inbound messages shorter than this don't generate drafts (0 = no limit)",
+
+    "rps_bd_title": "What this machine is for",
+    "rps_bd_hint": "Companion: work goals hide Conversion templates, the knowledge base ships no payment scripts, and personas default to the chit-chat gate. Sales: keeps opportunity tags and deal fields. A persona marked Support / Sales in Persona Studio still queries the knowledge base regardless of this setting. Templates / tags apply immediately; knowledge-base categories follow after a restart.",
+    "rps_bd_label": "Business domain",
+    "rps_bd_loading": "Loading…",
+    "rps_bd_src_explicit": "Set",
+    "rps_bd_src_inferred": "Inferred from deployment",
+    "rps_bd_saved": "Saved. Templates / tags / profile apply now; knowledge-base categories follow after restart.",
+    "rps_bd_bad": "Business domain must be Companion or Sales: {name}",
+    "rps_bd_write_fail": "Could not save, please retry",
+    "rps_bd_fail": "Could not load, please refresh",
 
     "rps_pace_title": "Reply Pacing & Human-like Details",
 

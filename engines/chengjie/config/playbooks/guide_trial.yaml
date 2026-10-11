@@ -1,0 +1,26 @@
+# 向导场。没有剧本，只按目标聊天。
+id: guide_trial
+name: 向导带一项功能
+system: growth
+products:
+  - matrixx
+soft_ad_level: 3
+goal: 多个号的消息放在一处看
+goal_cues:
+  - 多个号
+  - 多号
+  - 切窗口
+  - 来回切
+  - 消息太多
+  - 看不过来
+  - 号太多
+
+roles:
+  - slot: guide
+    desc: 公开的 AI。平时只聊天。轮到带目标时只讲一件事，邀请对方私聊自己试。
+  - slot: asker
+    desc: 顺着群里的话聊天。不要介绍产品，不要邀请别人。
+  - slot: bystander
+    desc: 顺着群里的话聊天。不要种草，不要喊人私聊。
+  - slot: skeptic
+    desc: 顺着群里的话聊天。不要替向导邀请别人。

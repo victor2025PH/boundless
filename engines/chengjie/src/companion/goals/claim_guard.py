@@ -93,6 +93,8 @@ _BARE_NUM_RE = re.compile(r"(\d{2,3}(?:,\d{3})+|\d{2,5})")
 # 紧跟这些量词的数字**不是**报价（200单 / 3个客服 / 5天 / 12人 / 10万块）
 _NON_MONEY_UNIT_RE = re.compile(
     r"[单人家个次天条位台间款种份笔号年月日小时分秒万千亿%％倍]")
+# 额度计量单位（可隔空格）：「每月送 1,000 Token」「18,000 tokens」是额度不是报价
+_QUOTA_UNIT_RE = re.compile(r"\s*(?:tokens?|字符|chars?|characters?)", re.IGNORECASE)
 # 小句谈的是**别人的钱**（客户成本/收益、人设自家开销）→ 整个小句不按我方报价读。
 # 2026-07-28 开生产开关前实测：不加这一层，跨轮模式对销售最常用的 ROI 话术
 # （「一个月省下2000块人力成本」「客服月薪4500块」）误报 6/9——`块` 是货币单位，
@@ -191,6 +193,8 @@ def find_price_mismatch(
                 if rx is _BARE_NUM_RE:
                     tail = clause[m.end():m.end() + 1]
                     if tail and _NON_MONEY_UNIT_RE.match(tail):
+                        continue
+                    if _QUOTA_UNIT_RE.match(clause, m.end()):
                         continue
                 try:
                     val = round(float(raw.replace(",", "")), 2)

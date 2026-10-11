@@ -125,6 +125,9 @@ async def start_assistant(assistant):
             from src.bootstrap.background_tasks import reconcile_dead_peer_marks
             asyncio.create_task(
                 reconcile_dead_peer_marks(assistant), name="dead_peer_reconcile")
+            from src.bootstrap.background_tasks import sweep_live_chatx_holds
+            asyncio.create_task(
+                sweep_live_chatx_holds(assistant), name="chatx_hold_sweep")
 
             # ★ W3-3G / W3-3K：启动 reunion 草稿成功率评估循环（DraftEvalScheduler）
             if assistant.contacts is not None and assistant.contacts.store is not None:
@@ -238,6 +241,10 @@ async def start_assistant(assistant):
             # 坐席工作台实时化（D5a）：后台轻量 ingest 轮询 → 新入站消息发 SSE 事件
             assistant._maybe_start_inbox_ingest_loop()
 
+            # 同群开口调度器（批准后自动发 / 全自动；只跑本实例 owns 的 TG 号）
+            if hasattr(assistant, "_maybe_start_group_outreach_runner"):
+                assistant._maybe_start_group_outreach_runner()
+
             # Mobile Bridge 轮询循环
             if assistant.mobile_bridge is not None:
                 try:
@@ -320,6 +327,15 @@ async def stop_assistant(assistant):
                 assistant.logger.info("收件箱 ingest 轮询已停止")
             except Exception as ex:
                 assistant.logger.warning("收件箱 ingest 轮询停止异常: %s", ex)
+
+        # 同群开口调度器停止（正在 sending 的行由 reap_stale_sending 在下次启动时收尾）
+        _gt = getattr(assistant, "_group_outreach_task", None)
+        if _gt is not None:
+            try:
+                _gt.cancel()
+                assistant.logger.info("同群开口调度器已停止")
+            except Exception as ex:
+                assistant.logger.warning("同群开口调度器停止异常: %s", ex)
 
         # W2-D4.2：reactivation_loop 优雅停止
         if assistant._reactivation_loop is not None:

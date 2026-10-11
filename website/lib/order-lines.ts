@@ -110,13 +110,13 @@ export const LINGOX_TIERS: LineTier[] = [
       zh: [
         "多坐席统一收件箱 · 客户 journey · 漏斗计数",
         "术语锁定 · 翻译记忆",
-        "标准翻译免费不限量（所有用户含）",
+        "标准翻译走本地模型；没配好时转人工（所有用户同一条）",
         `专业翻译按 Token：${tokenRate("pro_translate").tokens}/千字符 · DeepL 认证 ${tokenRate("deepl_translate").tokens}/千字符`,
       ],
       en: [
         "Multi-seat unified inbox · journey · funnel counter",
         "Term-lock glossary · translation memory",
-        "Standard translation free & unlimited (for everyone)",
+        "Standard translation on the local model; a person takes the line if it is not set",
         `Pro translation by tokens: ${tokenRate("pro_translate").tokens}/1k chars · DeepL ${tokenRate("deepl_translate").tokens}/1k`,
       ],
     },
@@ -170,12 +170,12 @@ export const FAMILIES: FamilyMeta[] = [
     key: "lingox",
     tab: { zh: "智聊 · 翻译", en: "ChatX · Translate" },
     blurb: {
-      zh: "标准翻译永久免费、不限字符，下载智聊 ChatX 即用；本页只卖翻译工作台（纯翻译团队按坐席）。",
-      en: "Standard translation is free forever with unlimited characters — just download ChatX. This tab sells one thing: the per-seat Translation Workbench for translation-only teams.",
+      zh: "标准翻译走本部署的本地模型，不调用付费接口；没配好时转人工。下载智聊 ChatX 即用；本页只卖翻译工作台（纯翻译团队按坐席）。",
+      en: "Standard translation uses this deployment's local model and does not call a paid API; if it is not set, a person takes the line. Download ChatX and go. This tab sells one thing: the per-seat Translation Workbench for translation-only teams.",
     },
     rules: {
-      zh: "标准翻译由内置引擎提供，永久免费、不限字符（公平使用 200 万字符/日/授权）。专业翻译（术语锁定 / 翻译记忆 / DeepL 认证 / 图片语音多模态）按 Token 计量，见「充值」Tab。原字符包 / 团队 / 专业订阅已停售：存量订阅服务到期，字符包未用完的字符按 150 万字符 = 60,000 Token 免费换发（只多不少）。",
-      en: "Standard translation ships with the built-in engine — free forever, unlimited characters (fair use 2M chars/day per license). Pro translation (term-lock, memory, certified DeepL, multimodal) meters in tokens — see the Top up tab. Legacy char packs and subscriptions are discontinued: active plans run to term, and unused char-pack balances convert to 60,000 tokens per 1.5M chars, always in your favor.",
+      zh: "标准翻译走本部署的本地模型，不按字符扣 Token，也不调用付费翻译接口；本地模型没配好时转人工（公平使用 200 万字符/日/授权，超出仅提醒）。专业翻译（术语锁定 / 翻译记忆 / DeepL 认证 / 图片语音多模态）按 Token 计量，见「充值」Tab。原字符包 / 团队 / 专业订阅已停售：存量订阅服务到期，字符包未用完的字符按 150 万字符 = 60,000 Token 免费换发（只多不少）。",
+      en: "Standard translation uses this deployment's local model: no per-character token charge and no paid translation API. If the local model is not set, a person takes the line (fair use 2M chars/day per license; overage is a reminder only). Pro translation (term-lock, memory, certified DeepL, multimodal) meters in tokens — see the Top up tab. Legacy char packs and subscriptions are discontinued: active plans run to term, and unused char-pack balances convert to 60,000 tokens per 1.5M chars, always in your favor.",
     },
   },
 ];
@@ -290,6 +290,6 @@ export function rechargeCreditOf(planKey: string): RechargeCredit | null {
 
 /** 免费开始指引（tokens 产品线面板下的「不用买也能用」提示）。 */
 export const CHATX_FREE_HINT = {
-  zh: `免费开始无需下单：下载智聊 ChatX 即用——标准翻译免费不限量 + 每月 ${fmtN(CHATX_FREE.tokensMonthly)} Token，注册再送 ${fmtN(SIGNUP_BONUS_TOKENS)} 体验 Token。`,
-  en: `Starting free needs no order: download ChatX and go — unlimited standard translation + ${fmtN(CHATX_FREE.tokensMonthly)} tokens/mo, plus ${fmtN(SIGNUP_BONUS_TOKENS)} bonus tokens on signup.`,
+  zh: `免费开始无需下单：下载智聊 ChatX 即用——标准翻译走本地模型，没配好转人工 + 每月 ${fmtN(CHATX_FREE.tokensMonthly)} Token，注册再送 ${fmtN(SIGNUP_BONUS_TOKENS)} 体验 Token。`,
+  en: `Starting free needs no order: download ChatX and go — standard translation on the local model (a person takes the line if it is not set) + ${fmtN(CHATX_FREE.tokensMonthly)} tokens/mo, plus ${fmtN(SIGNUP_BONUS_TOKENS)} bonus tokens on signup.`,
 };

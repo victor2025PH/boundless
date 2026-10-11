@@ -109,7 +109,17 @@ def test_baseline_patch_only_fills_missing():
                           "inbox.l2_autosend.deliver_delay.profile",
                           "inbox.auto_draft.inbound_merge.enabled",
                           # 2026-09-09 Q-4（Q-5 代，#267）：摸底目标 LLM 摘录补槽进基线
-                          "companion.goals.profile_llm.enabled"}
+                          "companion.goals.profile_llm.enabled",
+                          # 2026-09-24 老板例外：公共包 LINE 出站媒体默认开
+                          "platform_login.line.media.outbound",
+                          # 2026-10-01 老板决策「内测用户都可以使用全功能」（1.0.104）：
+                          # 内部功能显隐五个纯软件入口进基线；matrix_nav / group_show
+                          # 不进（真机矩阵导航＝桌面包死入口）
+                          "ui_visibility.group_extract",
+                          "ui_visibility.manual_console",
+                          "ui_visibility.team_collab",
+                          "ui_visibility.ai_settings",
+                          "ui_visibility.cockpit"}
     # 2026-09-09 D-Q1（#267 KYHGSZ）：班表三键撤出基线（A→B 出厂关；红线②③）
     for k in ("inbox.work_schedule.enabled", "inbox.work_schedule.default.start",
               "inbox.work_schedule.default.end"):
@@ -164,6 +174,12 @@ def test_baseline_patch_only_fills_missing():
                       "vision": {"enabled": True}},
         # 记忆抽取三键：显式空白名单 = 用户关掉，与显式 false 同一条三态语义
         "memory": {"extract": {"enabled": True, "use_llm": False, "intents": []}},
+        # 老板例外：LINE 出站媒体显式关＝用户决定，不补
+        "platform_login": {"line": {"media": {"outbound": False}}},
+        # 1.0.104 显隐五键：显式关/开混合＝都已表态，baseline_patch 不补（存量机内测种子
+        # 写的 false 由 ConfigManager 带标记的一次性迁移翻，不走这里——红线①不破）
+        "ui_visibility": {"group_extract": False, "manual_console": True,
+                          "team_collab": False, "ai_settings": True, "cockpit": False},
     }) == {}
 
 

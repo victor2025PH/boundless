@@ -205,7 +205,11 @@ _CONTRACT_KEYS = {"ok", "platform", "persona_id", "persona_source",
                   # #250 N-4 D（2026-09-08）：合成前配置闸预告——人设 voice_profile 非法
                   # （克隆无录音 / 预置态挂克隆引擎…）→ 面板生成前即 ⚠ + 语音页深链；
                   # 与 tts-test 的拦截同一函数 synth_gate（test_voice_verdict_single_250）。
-                  "voice_problems", "voice_config_blocked", "voice_problem_text", "voice_tab"}
+                  "voice_problems", "voice_config_blocked", "voice_problem_text", "voice_tab",
+                  # 语气表达档位（2026-09-22）：有效档 + 来源（session/persona/global）+
+                  # 会话钉住值 + 人设值——右栏 cp-voice 档位行的数据源（按键存在性特性探测）。
+                  "expressiveness", "expressiveness_source",
+                  "expressiveness_session", "expressiveness_persona"}
 
 
 def test_effective_config_contract_telegram(client):

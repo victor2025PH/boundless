@@ -280,7 +280,11 @@ def test_reconcile_end_to_end_with_real_store(clean_ledger, tmp_path, monkeypatc
     monkeypatch.delenv("AITR_AUTOSEND_POLICY_MODE", raising=False)
     store = InboxStore(tmp_path / "e2e.db")
     try:
-        svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+        # 智安 P0-2：STOP 硬闸默认生效后 u1/u4 的停联句直接硬停、不起草（行为见
+        # tests/compliance/test_stop_gate.py）；本用例钉的是 R88「只记录」影子台账对账链路，
+        # 故显式走应急开关 compliance.stop_gate.enabled=false。
+        svc = DraftService(inbox_store=store, risk_fn=quick_risk,
+                           cfg={"compliance": {"stop_gate": {"enabled": False}}})
 
         def conv(k):
             return {"conversation_id": f"telegram:acct1:{k}", "platform": "telegram",

@@ -175,8 +175,8 @@ def tiktok_connect_panel(request: Request, *, registry: Any = None) -> Dict[str,
                              "shop_site": caps["shop_site"], "alternatives": caps["alternatives"]})
     except Exception:
         logger.debug("[onboarding] 读取 TikTok 账号失败", exc_info=True)
-    # TK-3 E2：个人号页签数据（真机桥 / 网页边车）。官方私信 implemented=False 不变；
-    # 两路皆非官方 → notice_unofficial。网页边车阶段 1 未开工，只占位。
+    # TK-3 E2：个人号页签数据（真机桥 / 网页边车）。官方私信是另一条已接线的 official 通道；
+    # 这两路皆非官方 → notice_unofficial。网页边车阶段 1 未开工，只占位。
     personal: Dict[str, Any] = {"bridge_enabled": False, "accounts": [], "notice": "notice_unofficial",
                                 # TK-3 P3：页签表单需要的静态数据——huoke 侧 endpoint 就是本机地址；探针命令；常用 IANA 时区
                                 "huoke": {"endpoint": base, "probe_cmd": "python scripts/tiktok_chengjie_probe.py --bind --roundtrip",

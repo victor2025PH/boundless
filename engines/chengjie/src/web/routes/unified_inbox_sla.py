@@ -25,6 +25,28 @@ logger = logging.getLogger(__name__)
 _SLA_WARN_SEC = 1800  # 客户消息未回复超过该秒数标记 SLA 警告（默认 30 分钟）
 _SLA_CRIT_SEC = 7200  # 超过该秒数标记严重超时（默认 2 小时）
 
+#: 早于该时刻（2015-01-01 UTC）的入站时间戳视为脏值（≈0 / 合成值 / 单位错存）。
+#: 2026-10-08 实锤：173 上 escalations.wait_sec 均值约 566 天，LINE 会话 last_ts≈0。
+MIN_VALID_INBOUND_TS = 1420070400.0
+
+
+def _inbound_wait_base(conv: Dict[str, Any], msg_ts: Any, now: float) -> Optional[float]:
+    """升级等待时长的起点（P1-1）：以会话 ``last_in_ts``（入站落库时精确推进）为准，末条消息
+    ts 只作补充——两者取**可信值里较新的那个**（等得少报，不夸大）；都不可信（≈0 / 早于
+    2015）→ ``None``：算不出客户等了多久就不报升级，免得报出「已等 56 年」。未来时间戳钳到 now。
+    """
+    best: Optional[float] = None
+    for raw in (conv.get("last_in_ts"), msg_ts):
+        try:
+            v = float(raw or 0)
+        except (TypeError, ValueError):
+            continue
+        if v >= MIN_VALID_INBOUND_TS and (best is None or v > best):
+            best = v
+    if best is None:
+        return None
+    return min(best, float(now))
+
 
 def _sla_cfg(request: Request) -> Dict[str, int]:
     """SLA 阈值（秒）：config.inbox.sla_warn_sec / sla_crit_sec，带默认值。"""
@@ -257,6 +279,7 @@ def _escalation_snapshot(request: Request) -> Dict[str, Any]:
     except Exception:
         logger.debug("escalation presence 读取失败（已忽略）", exc_info=True)
     items: List[Dict[str, Any]] = []
+    skipped_bad_ts = 0   # P1-1：入站时间戳不可信而跳过的会话数（观测用）
     for cid, info in dirs.items():
         if info.get("direction") != "in":
             continue
@@ -266,7 +289,11 @@ def _escalation_snapshot(request: Request) -> Dict[str, Any]:
             continue  # 已搁置=坐席「稍后再看」，到点/客户回复前不进升级告警
         if exclude_groups and _is_non_alert_conv(cmap.get(cid) or {}):
             continue  # 群组/频道不进升级告警
-        wait = now - (info.get("ts") or now)
+        _base = _inbound_wait_base(cmap.get(cid) or {}, info.get("ts"), now)
+        if _base is None:
+            skipped_bad_ts += 1
+            continue  # 入站时间戳不可信（≈0 / 早于 2015）：算不出等多久，不进升级
+        wait = now - _base
         if wait < sla["crit"]:
             continue
         cl = claim_map.get(cid)
@@ -317,7 +344,7 @@ def _escalation_snapshot(request: Request) -> Dict[str, Any]:
         logger.debug("escalation snoozed_forever 读取失败（已忽略）", exc_info=True)
     return {"ok": True, "count": len(items), "items": items[:50],
             "today_count": today_count, "crit_sec": sla["crit"],
-            "snoozed_forever": snoozed_forever}
+            "snoozed_forever": snoozed_forever, "skipped_bad_ts": skipped_bad_ts}
 
 
 def _sla_detail(

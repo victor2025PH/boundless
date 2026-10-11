@@ -1172,6 +1172,19 @@ ipcMain.handle("desktop:voice-rebind", async (_e, body) => {
   catch (e) { return { ok: false, error: String(e) }; }
 });
 
+// 会话级「语气表达」覆写（PUT；与 web 客户端 voiceSessionExpressiveness 同形）
+ipcMain.handle("desktop:voice-session-expressiveness", async (_e, body) => {
+  try {
+    const { base_url, token } = config.backend || {};
+    const r = await fetch(`${base_url}/api/voice/session-expressiveness`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body || {}),
+    });
+    try { return await r.json(); } catch (_e2) { return { ok: false, status: r.status }; }
+  } catch (e) { return { ok: false, error: String(e) }; }
+});
+
 ipcMain.handle("desktop:voice-enroll", async (_e, payload) => {
   try {
     const p = payload || {};
@@ -1698,6 +1711,24 @@ function bindBackendPopupLogin(win, intendedUrl) {
       ".catch(function(){location.replace(n);});" +
       "}catch(e){}})();";
     win.webContents.executeJavaScript(js).catch(() => {});
+  });
+  // 页内 API 会话过期（_api_fetch 打 [chatx:session-expired] 标记）：原地静默重登，
+  // redirect:'manual' 只取 303 上的 Set-Cookie，不导航、不丢编辑现场；60s 冷却。
+  const silentJs =
+    "(function(){try{return fetch('/login',{method:'POST',redirect:'manual'," +
+    "headers:{'Content-Type':'application/x-www-form-urlencoded','X-ChatX-Auto-Login':'1'}," +
+    "body:'auth_token='+encodeURIComponent(" + JSON.stringify(token) + ")," +
+    "credentials:'same-origin'})" +
+    ".then(function(r){return r.type==='opaqueredirect';})" +
+    ".catch(function(){return false;});}catch(e){return false;}})();";
+  let lastSilent = 0;
+  win.webContents.on("console-message", (_e, _lvl, msg) => {
+    if (String(msg || "").indexOf("[chatx:session-expired]") < 0) return;
+    if (manual) return;
+    const now = Date.now();
+    if (now - lastSilent < 60000) return;
+    lastSilent = now;
+    win.webContents.executeJavaScript(silentJs).catch(() => {});
   });
 }
 

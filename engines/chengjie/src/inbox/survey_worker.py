@@ -133,7 +133,7 @@ class SurveyWorker:
                 intent = str(meta.get("last_intent") or "")
                 lang = "en" if any(c.isascii() and c.isalpha() for c in intent[:5]) else "zh"
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SurveyWorker._send_one", exc_info=True)
 
         msg_text = get_survey_message(lang)
 
@@ -151,7 +151,7 @@ class SurveyWorker:
             })
             sent_via_event = True
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SurveyWorker._send_one", exc_info=True)
 
         # 标记已发 + 设置 survey_awaiting
         self._store.mark_survey_sent(survey_id)

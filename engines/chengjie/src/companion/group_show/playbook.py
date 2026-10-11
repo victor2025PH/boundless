@@ -17,7 +17,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 #: 四角标准戏的角色槽（剧本可只用其中几个，但 beats 引用的槽必须已声明）
 STANDARD_SLOTS: Tuple[str, ...] = ("asker", "advocate", "bystander", "skeptic")
+
+#: 向导是公开的 AI 身份，不是第五个标准槽。放进 ``STANDARD_SLOTS`` 会让旧剧本
+#: 体检去找这个槽；放进推销槽会让它跟种草角一起轮换。它由剧本显式声明，
+#: 并且必须钉在 ``companion.group_show.guide_account`` 上。
+GUIDE_SLOT = "guide"
 
 #: 产品系（与官网 brand 对齐：growth 获客系 / studio 内容陪伴系 / lingo 翻译系）
 VALID_SYSTEMS: Tuple[str, ...] = ("growth", "studio", "lingo")
@@ -58,6 +63,172 @@ DEFAULT_MUST_NOT: Tuple[str, ...] = (
     "不要提及或编造你和某个群成员的私聊经历",
     "不要长篇大论，像群友插话一两句为宜",
 )
+
+#: 向导可以说自己是 AI，也可以邀请对方私聊自己试**一项**功能。
+#: 链接、功能清单、让别的号代邀，仍然禁止。
+GUIDE_MUST_NOT: Tuple[str, ...] = (
+    "不要发链接，不要一次报出功能清单",
+    "一次只带一项功能去试，只邀请对方私聊你自己",
+    "不要让别的号代替你邀请对方",
+    "不要编造你和某个群成员已经私聊过",
+    "不要长篇大论，像群里插话几句为宜",
+)
+
+#: 有向导在场时，帮手在默认禁令上再加两条：不代邀、不对着群友种草。
+#: 没向导的旧剧本不带这两条，免得既有排练的指令被改写。
+HELPER_WITH_GUIDE_MUST_NOT: Tuple[str, ...] = DEFAULT_MUST_NOT + (
+    "不要邀请对方加你、私聊你或测试功能",
+    "你在和向导对聊，不要自己介绍产品，也不要和其他号互相种草",
+)
+
+
+def must_not_for_slot(slot: str, *, with_guide: bool = False) -> Tuple[str, ...]:
+    """这一拍该带哪组禁令。向导与帮手分开；没向导的戏仍是 :data:`DEFAULT_MUST_NOT`。"""
+    if str(slot or "").strip().lower() == GUIDE_SLOT:
+        return GUIDE_MUST_NOT
+    if with_guide:
+        return HELPER_WITH_GUIDE_MUST_NOT
+    return DEFAULT_MUST_NOT
+
+
+_COMPACT_SPACE = str.maketrans("", "", " \t\u3000")
+_GUIDE_DRIFT = ("自动回复", "工作时间外", "截图")
+_ACCIDENT = ("手滑", "发错", "误发", "打错")
+_HELPER_REFUSAL = ("不用私聊", "别私聊", "不用加我", "不用加你")
+
+
+def _compact_line(text: str) -> str:
+    return str(text or "").translate(_COMPACT_SPACE)
+
+
+def _says_they_are_ai(text: str) -> bool:
+    """向导这句有没有承认自己是 AI。否定句不算。"""
+    raw = str(text or "")
+    compact = _compact_line(raw)
+    if "不是AI" in compact or "不是人工智能" in raw:
+        return False
+    if "我是AI" in compact or "我就是AI" in compact or "自己是AI" in compact:
+        return True
+    return "人工智能" in raw and ("我是" in raw or "我就是" in raw)
+
+
+def _invites_private(text: str) -> bool:
+    raw = str(text or "")
+    return ("私聊" in raw) or ("私信" in raw)
+
+
+def guide_line_fault(text: str, *, prior_guide_texts: Sequence[str] = (),
+                     closing: bool = False) -> str:
+    """向导这句能不能发。空串＝可以。否则是重说时要补上的那一条禁令。
+
+    身份和邀请只要本场前面的向导句说过，中间拍不必每句重复。
+    收场那句必须自己把私聊留下。编出来的设置项和截图，任何一句都不许。
+    """
+    raw = str(text or "")
+    if any(piece in raw for piece in _ACCIDENT):
+        return "不要编手滑、发错或打错这种事故"
+    if any(piece in raw for piece in _GUIDE_DRIFT):
+        return "不要编设置项，不要提截图，只谈多个号的消息放在一处看"
+    prior = "\n".join(str(item or "") for item in prior_guide_texts)
+    if not _says_they_are_ai(raw) and not _says_they_are_ai(prior):
+        return "先承认自己是 AI"
+    if closing and not _invites_private(raw):
+        return "收场这句要留下私聊你自己试这一件"
+    if not _invites_private(raw) and not _invites_private(prior):
+        return "邀请对方私聊你自己试这一件"
+    return ""
+
+
+def helper_line_fault(text: str) -> str:
+    """帮手这句能不能发。空串＝可以。拒绝私聊、把话题带去别的功能，都不许。"""
+    raw = str(text or "")
+    if any(piece in raw for piece in _ACCIDENT):
+        return "不要编手滑、发错或打错这种事故"
+    if any(piece in raw for piece in _HELPER_REFUSAL) or "截图" in raw:
+        return "不要拒绝私聊，不要提截图"
+    if any(piece in raw for piece in _GUIDE_DRIFT[:2]):
+        return "不要把话题带去别的功能"
+    return ""
+
+
+_UNGROUNDED = (
+    "视频", "男的", "女的", "男生", "女生", "男性", "女性", "咖啡店", "开店",
+)
+
+
+def _ungrounded_claim(text: str, events: Sequence[Any]) -> str:
+    """对方没刚说过的视频、性别、地点或职业，不许自己编出来。"""
+    raw = str(text or "")
+    if not raw:
+        return ""
+    corpus = "\n".join(
+        str(getattr(ev, "text", "") or "")
+        for ev in events or ()
+        if str(getattr(ev, "kind", "") or "") in ("human", "line", "media"))
+    if any(piece in raw and piece not in corpus for piece in _UNGROUNDED):
+        return "不要提对方没说过的视频、性别、地点或职业"
+    return ""
+
+
+def _someone_said_uneasy(events: Sequence[Any]) -> bool:
+    """场上已经有人自己说出不放心，才许接着谈这件事。"""
+    for ev in events or ():
+        kind = str(getattr(ev, "kind", "") or "")
+        if kind not in ("line", "media", "human"):
+            continue
+        if "不放心" in str(getattr(ev, "text", "") or ""):
+            return True
+    return False
+
+
+def line_fault_for_beat(playbook: Any, slot: str, beat_id: str, text: str,
+                        events: Sequence[Any] = ()) -> str:
+    """这句台词现在能不能发。没向导的旧剧本恒为空串，行为不变。"""
+    roles = getattr(playbook, "roles", ()) or ()
+    has_guide = any(
+        str(getattr(role, "slot", "") or "").strip().lower() == GUIDE_SLOT
+        for role in roles)
+    if not has_guide:
+        return ""
+    raw_line = str(text or "")
+    if "接住" in raw_line:
+        return "不要把导演说明说出来，直接说事情本身"
+    if "不放心" in raw_line and not _someone_said_uneasy(events):
+        return "没人说过不放心，不要替对方安抚"
+    claim = _ungrounded_claim(raw_line, events)
+    if claim:
+        return claim
+    # 开场接话还没进剧本。这时候逼「我是 AI / 私聊」会把闲聊重说成广告。
+    # 编造的设置项、拒绝私聊，接话阶段也不许。
+    if str(beat_id or "").startswith(("warmup_", "chat_")):
+        raw = str(text or "")
+        if any(piece in raw for piece in _ACCIDENT):
+            return "不要说手滑、发错或打错，先正常接话"
+        if any(piece in raw for piece in _GUIDE_DRIFT) or "截图" in raw:
+            return "不要编设置项，不要提截图，先接对方刚说的事"
+        # 接话阶段不提私聊。剧本开了才许邀请。
+        if any(piece in raw for piece in ("私聊", "私信", "加好友", "加个好友", "加我", "加你")):
+            return "先在群里接话，不要邀请私聊或加好友"
+        return ""
+    who = str(slot or "").strip().lower()
+    if who == GUIDE_SLOT:
+        prior = []
+        for ev in events or ():
+            if str(getattr(ev, "role", "") or "").strip().lower() != GUIDE_SLOT:
+                continue
+            if str(getattr(ev, "kind", "") or "") not in ("line", "media"):
+                continue
+            said = str(getattr(ev, "text", "") or "").strip()
+            if said:
+                prior.append(said)
+        guide_ids = [
+            str(getattr(beat, "id", "") or "")
+            for beat in (getattr(playbook, "beats", ()) or ())
+            if str(getattr(beat, "role", "") or "").strip().lower() == GUIDE_SLOT
+        ]
+        closing = bool(guide_ids) and str(beat_id or "") == guide_ids[-1]
+        return guide_line_fault(text, prior_guide_texts=prior, closing=closing)
+    return helper_line_fault(text)
 
 #: 软广强度上限（红区群由 runtime 另行锁死，这里只做 schema 边界）
 SOFT_AD_MAX = 10
@@ -110,6 +281,12 @@ class Playbook:
     soft_ad_level: int = 5
     roles: Tuple[Role, ...] = ()
     beats: Tuple[Beat, ...] = ()
+    #: 进剧本前先接群里真人的句数。0＝旧剧本，开场就念稿。
+    chat_before_script: int = 0
+    #: 私下要推进的那一件事。有目标就不再念 beats。
+    goal: str = ""
+    #: 真人说到这些，才许把目标带出来一次。
+    goal_cues: Tuple[str, ...] = ()
 
     @property
     def slots(self) -> Tuple[str, ...]:
@@ -281,7 +458,8 @@ def validate_playbook(pb: Playbook) -> List[str]:
     try:
         if not str(pb.id or "").strip():
             problems.append("playbook.id 不能为空")
-        if not pb.beats:
+        goaled = bool(str(getattr(pb, "goal", "") or "").strip())
+        if not pb.beats and not goaled:
             problems.append("playbook.beats 不能为空")
         if pb.system and pb.system not in VALID_SYSTEMS:
             problems.append(f"未知 system: {pb.system}（应为 {VALID_SYSTEMS}）")
@@ -384,6 +562,14 @@ def playbook_from_dict(data: Dict[str, Any]) -> Playbook:
         products = [products]
     roles_raw = _as_items(d.get("roles"), "roles")
     beats_raw = _as_items(d.get("beats"), "beats")
+    try:
+        chat_first = int(d.get("chat_before_script", 0) or 0)
+    except (TypeError, ValueError):
+        chat_first = 0
+    chat_first = max(0, min(20, chat_first))
+    cues = d.get("goal_cues") or []
+    if isinstance(cues, str):
+        cues = [cues]
     return Playbook(
         id=str(d.get("id") or "").strip(),
         name=str(d.get("name") or d.get("id") or "").strip(),
@@ -392,6 +578,9 @@ def playbook_from_dict(data: Dict[str, Any]) -> Playbook:
         soft_ad_level=soft,
         roles=tuple(_coerce_role(r) for r in roles_raw),
         beats=tuple(_coerce_beat(b) for b in beats_raw),
+        chat_before_script=chat_first,
+        goal=str(d.get("goal") or "").strip(),
+        goal_cues=tuple(str(c).strip() for c in cues if str(c).strip()),
     )
 
 

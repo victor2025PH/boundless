@@ -8,6 +8,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
+from src.ai.translation_service import TranslationService
 from src.web.routes.enable_routes import register_enable_routes
 
 
@@ -44,6 +45,9 @@ def test_translate_with_available_engine_returns_translated_text():
     """注入假 ai_client（免真实 key/网络）覆盖 ok=True 正常译文分支。"""
     client, app = _client()
     app.state.ai_client = _FakeAI()
+    # 夹具测的是付费引擎还能译。免费档默认 enforce，不会打这只 AI。
+    app.state.translation_service = TranslationService(
+        ai_client=app.state.ai_client, free_tier_zero_cost=False)
     text = "hello friend"
     r = client.post("/api/translate", json={"text": text, "to_lang": "zh"})
     assert r.status_code == 200

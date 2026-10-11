@@ -8,6 +8,7 @@
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from src.ai.translation_service import TranslationService
 from src.inbox.store import InboxStore
 from src.web.routes.unified_inbox_routes import register_unified_inbox_routes
 
@@ -35,6 +36,9 @@ def _client(tmp_path):
         app, page_auth=page_auth, api_auth=api_auth, templates=_Templates(),
     )
     app.state.ai_client = FakeAI()
+    # 记账夹具走付费 AI。免费档默认 enforce 时这条链会转人工、不记账。
+    app.state.translation_service = TranslationService(
+        ai_client=app.state.ai_client, free_tier_zero_cost=False)
     app.state.inbox_store = InboxStore(tmp_path / "inbox.db")
     return TestClient(app)
 

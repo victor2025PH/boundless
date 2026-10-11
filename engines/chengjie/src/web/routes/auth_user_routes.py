@@ -40,9 +40,11 @@ from src.utils.web_user_store import (
     ROLE_LABELS,
     ROLE_MASTER,
     ROLE_SUPERVISOR,
+    admin_cap_reached,
     assignable_roles,
     can_manage_target,
     default_perm_allowed,
+    max_admins_from_config,
     parse_perms,
 )
 from src.web.i18n_packs import UI_LANGS
@@ -113,6 +115,18 @@ def register_auth_user_routes(
         """操作者层级不足以管理目标账号 → 403（角色变更/禁用/删除/设额度共用）。"""
         if not can_manage_target(_actor_role(request), str(target_role or "")):
             raise HTTPException(403, tr(request, "err.team.cannot_manage"))
+
+    def _guard_admin_cap(request: Request, role: str, *, exclude_user_id=None) -> None:
+        """坐席最小权限（智安 P1-6）：新增 / 提升为 admin 受 ``web_admin.max_admins``
+        （缺省 2，0=不限）约束；存量超额不自动降级（清单见 tools/web_user_role_audit.py）。"""
+        if str(role or "") != ROLE_ADMIN:
+            return
+        cap = max_admins_from_config(_runtime_config() or {})
+        if admin_cap_reached(user_store, cap, exclude_user_id=exclude_user_id):
+            if audit_store:
+                audit_store.log(request.session.get("username", ""), "admin_cap_blocked",
+                                str(cap))
+            raise HTTPException(403, tr(request, "err.team.role_not_allowed"))
 
     def _users_page_ctx(request: Request, *, msg: str = "", msg_ok: bool = True) -> dict:
         actor = _actor_role(request)
@@ -382,6 +396,7 @@ def register_auth_user_routes(
         # 分层：只能发自己层级以下的角色（master 也不得再造 master）
         if role not in assignable_roles(_actor_role(request)):
             raise HTTPException(403, tr(request, "err.team.role_not_allowed"))
+        _guard_admin_cap(request, role)
         ajax = "application/json" in request.headers.get("accept", "")
         if len(password) < 6:
             if ajax:
@@ -418,6 +433,8 @@ def register_auth_user_routes(
         if role:
             if role not in assignable_roles(_actor_role(request)):
                 raise HTTPException(403, tr(request, "err.team.role_not_allowed"))
+            if role != str(target.get("role") or ""):
+                _guard_admin_cap(request, role, exclude_user_id=user_id)
             kw["role"] = role
         if password:
             # P0-3 重置密码入口与创建同一下限（此前 update 路径无校验，可设 1 位密码）

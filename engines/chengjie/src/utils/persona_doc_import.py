@@ -1447,7 +1447,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")   # 防 Windows GBK 控制台崩
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in main", exc_info=True)
 
     ap = argparse.ArgumentParser(
         description="「从文档创建人设」离线冒烟：docx/txt → LLM 抽取 canonical 人设 JSON")

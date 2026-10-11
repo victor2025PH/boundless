@@ -190,39 +190,51 @@ def test_no_goal_throttle_is_60s_per_conversation():
 
 
 # ── 4. 被动注入不受拍数上限；主动侧超额记 beat_blocked(pace_cap) ─────────────
-def _today_goal(store: GoalStore):
+def _afternoon_same_day() -> float:
+    """本地下午。往前退几小时仍在同一天，today 的拍数才按当天数满。
+
+    用 time.time() 时，UTC 凌晨往前退 2 小时会跨到昨天，计数只认当天前缀，
+    上限看起来没满，主动链就不会 hold。
+    """
+    t = time.localtime()
+    return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 15, 10, 0,
+                        t.tm_wday, t.tm_yday, t.tm_isdst))
+
+
+def _today_goal(store: GoalStore, now: float = NOW):
     return store.create_goal(
         conversation_id=CONV, platform=PLAT, account_id=ACCT, chat_key=CK,
         template="custom", autonomy="auto", deadline_days=6 / 24.0,
-        params={"pace": "today", "note": "拿到微信号"}, now=NOW - 3 * 3600)
+        params={"pace": "today", "note": "拿到微信号"}, now=now - 3 * 3600)
 
 
-def _fill_cap(store: GoalStore, gid: str, cap: int):
+def _fill_cap(store: GoalStore, gid: str, cap: int, now: float = NOW):
     for i in range(cap):
-        store.upsert_action(gid, slot_key("today", NOW - (i + 1) * 3600),
+        store.upsert_action(gid, slot_key("today", now - (i + 1) * 3600),
                             intent=f"p{i}", push_level="soft", status="consumed",
-                            now=NOW - (i + 1) * 3600)
+                            now=now - (i + 1) * 3600)
 
 
 def test_passive_inject_ignores_pace_cap_but_proactive_holds_and_records():
     cfg_root = {"companion": {"goals": {"enabled": True, "sprint": {
         "enabled": True, "today_cap": 2}}}}
+    now = _afternoon_same_day()
     store = GoalStore(":memory:")
-    g = _today_goal(store)
+    g = _today_goal(store, now)
     gid = g["goal_id"]
-    _fill_cap(store, gid, 2)
+    _fill_cap(store, gid, 2, now)
     # 主动链（无入站）：仍被 cap 拦，且记 beat_blocked(pace_cap@<槽>)
-    res = refresh_goal(store, cfg_root, store.get_goal(gid), now=NOW,
+    res = refresh_goal(store, cfg_root, store.get_goal(gid), now=now,
                        inbound_turn=False)
     assert res.get("hold") == "pace_cap" and res.get("action") is None
     blocked = store.list_events(gid, kinds=("beat_blocked",))
     assert len(blocked) == 1
-    assert blocked[0]["detail"] == f"pace_cap@{slot_key('today', NOW)}"
+    assert blocked[0]["detail"] == f"pace_cap@{slot_key('today', now)}"
     assert blocked[0]["conversation_id"] == CONV
-    refresh_goal(store, cfg_root, store.get_goal(gid), now=NOW + 5, inbound_turn=False)
+    refresh_goal(store, cfg_root, store.get_goal(gid), now=now + 5, inbound_turn=False)
     assert len(store.list_events(gid, kinds=("beat_blocked",))) == 1   # 同槽去重
     # 被动链（客户来消息）：不 hold，照常出当日拍供组块
-    res2 = refresh_goal(store, cfg_root, store.get_goal(gid), now=NOW,
+    res2 = refresh_goal(store, cfg_root, store.get_goal(gid), now=now,
                         inbound_turn=True)
     assert not res2.get("hold")
     assert res2.get("cap_reached") is True
@@ -231,16 +243,17 @@ def test_passive_inject_ignores_pace_cap_but_proactive_holds_and_records():
 
 def test_build_block_injects_when_cap_reached_on_inbound(monkeypatch):
     """端到端：cap 已满 + 客户来消息 → 仍注入方向块（此前 hold(pace_cap) 一刀切）。"""
+    now = _afternoon_same_day()
     store = get_goal_store(":memory:")
-    g = _today_goal(store)
-    _fill_cap(store, g["goal_id"], 2)
+    g = _today_goal(store, now)
+    _fill_cap(store, g["goal_id"], 2, now)
     cfg = _cfg({"sprint": {"enabled": True, "today_cap": 2}})
     ctx = {}
     with _ProdLogging() as h:
         blk = build_block_for_chat(
             cfg, platform=PLAT, chat_key=CK, account_id=ACCT,
             conversation_id=CONV, user_context=ctx, chain="draft",
-            inbound_text="are you there?", now=NOW)
+            inbound_text="are you there?", now=now)
     assert blk and ctx["_goal_inject_meta"]["injected"] is True
     assert _msgs(h, "[goal-inject] injected")
     assert not _msgs(h, "pace_cap")

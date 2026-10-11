@@ -10,6 +10,7 @@ asyncio.Queue 线程安全前提成立。
 
 from __future__ import annotations
 
+import logging
 import asyncio
 from typing import Any, Dict, Set
 
@@ -39,7 +40,7 @@ class WebOutboundHub:
                     q.get_nowait()
                     q.put_nowait(event)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WebOutboundHub.publish", exc_info=True)
 
     @property
     def subscriber_count(self) -> int:

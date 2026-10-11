@@ -311,8 +311,8 @@ export default function EnterprisePage() {
             </h1>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">
               {zh
-                ? "多平台统一收件箱、AI 人设承接、免费标准翻译、人工接管——同一套引擎，两种企业形态：云端年框省心，私有化部署数据不出网。"
-                : "Unified omni-channel inbox, AI personas, free standard translation, human handoff — one engine, two enterprise shapes: managed cloud frame deals, or private deployment that keeps data on-prem."}
+                ? "多平台统一收件箱、AI 人设承接、标准翻译走本部署的本地模型（没配好时转人工）、人工接管——同一套引擎，两种企业形态：云端年框省心，私有化部署数据不出网。"
+                : "Unified omni-channel inbox, AI personas, standard translation on this deployment's local model (a person takes the line if it is not set), human handoff — one engine, two enterprise shapes: managed cloud frame deals, or private deployment that keeps data on-prem."}
             </p>
             <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
               <a

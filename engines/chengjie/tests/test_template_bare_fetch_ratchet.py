@@ -37,9 +37,8 @@ _BARE_FETCH_CEILINGS = {
     # 统一层自身的原生 fetch 调用（_oneAttempt 两处 + 老浏览器透传一处）——豁免基线，
     # 全站唯一允许长期保留裸 fetch 的文件。
     "_api_fetch.html": 3,
-    # 2026-08-07 批清尾巴：仅剩 /api/personas/{pid}/media/test 一处（并行线在途文件，
-    # 归零后请顺手除名本条目）。
-    "personas.html": 1,
+    # personas.html 的最后一处裸 fetch（/api/personas/{pid}/media/test）已迁走，
+    # 账本降到 0＝除名（test_bare_fetch_ledger_not_stale 要求实际低于天花板时下调）。
     # 独立整页（布局链无 _api_fetch.html）+ 实时通话链自带 signal 的超时包装——
     # 结构性豁免：为一处迁移给独立页挂统一层，收益低于回归风险，刻意保留。
     "voice_call.html": 1,

@@ -46,6 +46,17 @@ def test_routes_parse_and_resolve():
     assert prof["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
+def test_group_show_defaults_to_the_local_model():
+    c = _client({"model": "deepseek-flash", "api_key": "k"})
+    c._fb_client = object()
+    c._fb_model = "chatx"
+    c._fb_extra_body = {}
+    c._build_route_clients({"model": "deepseek-flash", "api_key": "k"}, "k")
+    assert c._task_routes.get("group_show") == "_lan_tool"
+    assert c.resolve_route("group_show")["model"] == "chatx"
+    assert c.resolve_route("group_show")["client"] is c._fb_client
+
+
 def test_default_off_no_models():
     c = _client({"provider": "openai_compatible", "model": "m", "api_key": "k"})
     c._build_route_clients({}, "k")

@@ -1,0 +1,584 @@
+{
+ "schema": "zhiliao.kb_eval.v1",
+ "about": "智聊 KB 命中评测集（zh/en/tl 三语 50 条：40 条应命中指定条目，10 条闲聊不应命中）。seed_entries 是自带的通用跨境私域/自有业务 FAQ，不依赖任何线上库。",
+ "metric": "accuracy = 判对数/50；应命中题要求 judge_kb_hit 为真且首条 id 等于 expect，不应命中题要求 judge_kb_hit 为假。",
+ "global_rules": [
+  "不承诺未写进知识库的价格或时效"
+ ],
+ "seed_entries": [
+  {
+   "id": "kbe01",
+   "category": "价格咨询",
+   "title": "套餐价格与收费",
+   "triggers": [
+    "价格",
+    "多少钱",
+    "收费",
+    "套餐",
+    "报价",
+    "price",
+    "pricing",
+    "how much",
+    "cost",
+    "magkano",
+    "presyo"
+   ],
+   "scenario": "客户问产品或套餐多少钱",
+   "steps": "按套餐报价，先问需求再推荐",
+   "principles": "",
+   "example_reply_zh": "套餐价格与收费：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe02",
+   "category": "支付方式",
+   "title": "支持的付款方式",
+   "triggers": [
+    "付款方式",
+    "支付方式",
+    "怎么付款",
+    "转账",
+    "GCash",
+    "Maya",
+    "bank transfer",
+    "payment method",
+    "pay",
+    "bayad",
+    "magbayad"
+   ],
+   "scenario": "客户问可以用什么方式付款",
+   "steps": "列出支持的支付方式",
+   "principles": "",
+   "example_reply_zh": "支持的付款方式：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe03",
+   "category": "物流配送",
+   "title": "发货与配送时效",
+   "triggers": [
+    "发货",
+    "物流",
+    "快递",
+    "几天到",
+    "运费",
+    "shipping",
+    "delivery",
+    "ship",
+    "shipping fee",
+    "padala",
+    "darating",
+    "deliver"
+   ],
+   "scenario": "客户问多久发货、几天到、运费多少",
+   "steps": "说明发货时效和运费",
+   "principles": "",
+   "example_reply_zh": "发货与配送时效：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe04",
+   "category": "售后服务",
+   "title": "退款与退货",
+   "triggers": [
+    "退款",
+    "退货",
+    "退钱",
+    "refund",
+    "return",
+    "money back",
+    "ibalik",
+    "pera",
+    "refund po"
+   ],
+   "scenario": "客户要求退款或退货",
+   "steps": "说明退款条件与流程",
+   "principles": "",
+   "example_reply_zh": "退款与退货：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe05",
+   "category": "常规咨询",
+   "title": "营业与客服时间",
+   "triggers": [
+    "营业时间",
+    "几点上班",
+    "客服时间",
+    "上班时间",
+    "business hours",
+    "open",
+    "opening hours",
+    "oras",
+    "bukas"
+   ],
+   "scenario": "客户问几点有人在线",
+   "steps": "说明客服在线时间",
+   "principles": "",
+   "example_reply_zh": "营业与客服时间：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe06",
+   "category": "订单处理",
+   "title": "修改或取消订单",
+   "triggers": [
+    "改订单",
+    "修改地址",
+    "取消订单",
+    "改地址",
+    "change order",
+    "cancel order",
+    "change address",
+    "cancel",
+    "palitan",
+    "address",
+    "i-cancel"
+   ],
+   "scenario": "客户想改地址或取消订单",
+   "steps": "说明可修改的时间窗口",
+   "principles": "",
+   "example_reply_zh": "修改或取消订单：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe07",
+   "category": "订单处理",
+   "title": "查询订单状态",
+   "triggers": [
+    "订单状态",
+    "查单",
+    "查订单",
+    "订单到哪了",
+    "物流单号",
+    "order status",
+    "track",
+    "tracking",
+    "tracking number",
+    "order ko",
+    "nasaan"
+   ],
+   "scenario": "客户问订单进度",
+   "steps": "请客户提供订单号后查询",
+   "principles": "",
+   "example_reply_zh": "查询订单状态：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe08",
+   "category": "活动优惠",
+   "title": "优惠与折扣活动",
+   "triggers": [
+    "优惠",
+    "折扣",
+    "活动",
+    "优惠券",
+    "打折",
+    "discount",
+    "promo",
+    "voucher",
+    "coupon",
+    "sale"
+   ],
+   "scenario": "客户问有没有优惠",
+   "steps": "说明当前活动",
+   "principles": "",
+   "example_reply_zh": "优惠与折扣活动：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe09",
+   "category": "账号问题",
+   "title": "登录与密码问题",
+   "triggers": [
+    "登录不上",
+    "忘记密码",
+    "密码忘了",
+    "账号登录",
+    "登录",
+    "login",
+    "log in",
+    "forgot password",
+    "password",
+    "maka-login",
+    "nakalimutan"
+   ],
+   "scenario": "客户登录不上或忘了密码",
+   "steps": "引导重置密码",
+   "principles": "",
+   "example_reply_zh": "登录与密码问题：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe10",
+   "category": "人工服务",
+   "title": "转人工客服",
+   "triggers": [
+    "人工",
+    "转人工",
+    "人工客服",
+    "真人客服",
+    "human agent",
+    "agent",
+    "talk to a person",
+    "real person",
+    "representative",
+    "kausapin",
+    "tao"
+   ],
+   "scenario": "客户要求找人工",
+   "steps": "告知会转给同事跟进",
+   "principles": "",
+   "example_reply_zh": "转人工客服：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe11",
+   "category": "售后服务",
+   "title": "发票与收据",
+   "triggers": [
+    "发票",
+    "开票",
+    "收据",
+    "invoice",
+    "receipt",
+    "official receipt",
+    "resibo"
+   ],
+   "scenario": "客户要发票或收据",
+   "steps": "说明开票方式",
+   "principles": "",
+   "example_reply_zh": "发票与收据：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe12",
+   "category": "商务合作",
+   "title": "代理与合作",
+   "triggers": [
+    "合作",
+    "代理",
+    "加盟",
+    "分销",
+    "partnership",
+    "partner",
+    "reseller",
+    "distributor",
+    "dealer",
+    "maging reseller"
+   ],
+   "scenario": "客户想做代理或合作",
+   "steps": "收集资料转商务",
+   "principles": "",
+   "example_reply_zh": "代理与合作：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe13",
+   "category": "售后服务",
+   "title": "产品保修",
+   "triggers": [
+    "保修",
+    "质保",
+    "坏了",
+    "故障",
+    "warranty",
+    "defective",
+    "broken",
+    "sira",
+    "nasira"
+   ],
+   "scenario": "客户问保修或产品坏了",
+   "steps": "说明保修政策",
+   "principles": "",
+   "example_reply_zh": "产品保修：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  },
+  {
+   "id": "kbe14",
+   "category": "常规咨询",
+   "title": "尺码选择",
+   "triggers": [
+    "尺码",
+    "尺寸",
+    "大小",
+    "码数",
+    "size",
+    "size chart",
+    "sizes",
+    "sukat"
+   ],
+   "scenario": "客户问尺码怎么选",
+   "steps": "给尺码表",
+   "principles": "",
+   "example_reply_zh": "尺码选择：请参考客服说明",
+   "reply_mode": "ai_guided",
+   "enabled": 1
+  }
+ ],
+ "cases": [
+  {
+   "q": "这个套餐多少钱",
+   "lang": "zh",
+   "expect": "kbe01"
+  },
+  {
+   "q": "你们怎么收费的",
+   "lang": "zh",
+   "expect": "kbe01"
+  },
+  {
+   "q": "可以用什么方式付款",
+   "lang": "zh",
+   "expect": "kbe02"
+  },
+  {
+   "q": "一般几天能发货",
+   "lang": "zh",
+   "expect": "kbe03"
+  },
+  {
+   "q": "运费怎么算",
+   "lang": "zh",
+   "expect": "kbe03"
+  },
+  {
+   "q": "我想申请退款",
+   "lang": "zh",
+   "expect": "kbe04"
+  },
+  {
+   "q": "你们客服几点上班",
+   "lang": "zh",
+   "expect": "kbe05"
+  },
+  {
+   "q": "下单后还能改地址吗",
+   "lang": "zh",
+   "expect": "kbe06"
+  },
+  {
+   "q": "帮我查下订单到哪了",
+   "lang": "zh",
+   "expect": "kbe07"
+  },
+  {
+   "q": "最近有什么优惠活动",
+   "lang": "zh",
+   "expect": "kbe08"
+  },
+  {
+   "q": "账号登录不上怎么办",
+   "lang": "zh",
+   "expect": "kbe09"
+  },
+  {
+   "q": "我要找人工客服",
+   "lang": "zh",
+   "expect": "kbe10"
+  },
+  {
+   "q": "能开发票吗",
+   "lang": "zh",
+   "expect": "kbe11"
+  },
+  {
+   "q": "想做你们的代理",
+   "lang": "zh",
+   "expect": "kbe12"
+  },
+  {
+   "q": "How much is the basic plan?",
+   "lang": "en",
+   "expect": "kbe01"
+  },
+  {
+   "q": "What payment methods do you accept?",
+   "lang": "en",
+   "expect": "kbe02"
+  },
+  {
+   "q": "How long does shipping take?",
+   "lang": "en",
+   "expect": "kbe03"
+  },
+  {
+   "q": "I want a refund for my order",
+   "lang": "en",
+   "expect": "kbe04"
+  },
+  {
+   "q": "What are your business hours?",
+   "lang": "en",
+   "expect": "kbe05"
+  },
+  {
+   "q": "Can I cancel my order?",
+   "lang": "en",
+   "expect": "kbe06"
+  },
+  {
+   "q": "Where is my order? Need the tracking number",
+   "lang": "en",
+   "expect": "kbe07"
+  },
+  {
+   "q": "Any discount or promo code?",
+   "lang": "en",
+   "expect": "kbe08"
+  },
+  {
+   "q": "I forgot my password and can't log in",
+   "lang": "en",
+   "expect": "kbe09"
+  },
+  {
+   "q": "Can I talk to a real person please",
+   "lang": "en",
+   "expect": "kbe10"
+  },
+  {
+   "q": "Do you issue an official receipt?",
+   "lang": "en",
+   "expect": "kbe11"
+  },
+  {
+   "q": "Is the product under warranty?",
+   "lang": "en",
+   "expect": "kbe13"
+  },
+  {
+   "q": "Which size should I get? Is there a size chart?",
+   "lang": "en",
+   "expect": "kbe14"
+  },
+  {
+   "q": "Magkano po yung package?",
+   "lang": "tl",
+   "expect": "kbe01"
+  },
+  {
+   "q": "Pwede ba GCash bayad?",
+   "lang": "tl",
+   "expect": "kbe02"
+  },
+  {
+   "q": "Kailan po darating yung padala?",
+   "lang": "tl",
+   "expect": "kbe03"
+  },
+  {
+   "q": "Pwede po ba refund? Ibalik nyo pera ko",
+   "lang": "tl",
+   "expect": "kbe04"
+  },
+  {
+   "q": "Anong oras po kayo bukas?",
+   "lang": "tl",
+   "expect": "kbe05"
+  },
+  {
+   "q": "Pwede ko pa ba i-cancel yung order?",
+   "lang": "tl",
+   "expect": "kbe06"
+  },
+  {
+   "q": "Nasaan na po yung order ko?",
+   "lang": "tl",
+   "expect": "kbe07"
+  },
+  {
+   "q": "May promo ba kayo ngayon?",
+   "lang": "tl",
+   "expect": "kbe08"
+  },
+  {
+   "q": "Hindi ako maka-login, nakalimutan ko password",
+   "lang": "tl",
+   "expect": "kbe09"
+  },
+  {
+   "q": "Gusto ko po kausapin yung agent",
+   "lang": "tl",
+   "expect": "kbe10"
+  },
+  {
+   "q": "Pwede po ba humingi ng resibo?",
+   "lang": "tl",
+   "expect": "kbe11"
+  },
+  {
+   "q": "Gusto ko maging reseller ninyo",
+   "lang": "tl",
+   "expect": "kbe12"
+  },
+  {
+   "q": "Nasira yung item, may warranty ba?",
+   "lang": "tl",
+   "expect": "kbe13"
+  },
+  {
+   "q": "今天天气真好",
+   "lang": "zh",
+   "expect": null
+  },
+  {
+   "q": "你吃饭了吗",
+   "lang": "zh",
+   "expect": null
+  },
+  {
+   "q": "哈哈哈你好可爱",
+   "lang": "zh",
+   "expect": null
+  },
+  {
+   "q": "I love this song so much",
+   "lang": "en",
+   "expect": null
+  },
+  {
+   "q": "Good morning! How are you?",
+   "lang": "en",
+   "expect": null
+  },
+  {
+   "q": "What's your favorite movie?",
+   "lang": "en",
+   "expect": null
+  },
+  {
+   "q": "Kumain ka na ba?",
+   "lang": "tl",
+   "expect": null
+  },
+  {
+   "q": "Ingat ka palagi ha",
+   "lang": "tl",
+   "expect": null
+  },
+  {
+   "q": "Salamat po sa kwento mo",
+   "lang": "tl",
+   "expect": null
+  },
+  {
+   "q": "Ang ganda ng araw ngayon",
+   "lang": "tl",
+   "expect": null
+  }
+ ]
+}

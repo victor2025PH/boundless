@@ -1156,47 +1156,17 @@ async def warmup_embeddings(assistant):
             assistant.logger.info("向量预热: 所有条目已向量化 (%d 条)", kb._vindex.count())
             return
         assistant.logger.info("向量预热: 发现 %d 条待向量化条目，开始批量处理...", len(pending))
-        batch_size = 20
-        done = 0
-        for i in range(0, len(pending), batch_size):
-            if not assistant.running:
-                break
-            batch = pending[i:i + batch_size]
-            texts = []
-            for e in batch:
-                parts = [e.get("title", "")]
-                trigs = e.get("triggers", "")
-                if trigs:
-                    try:
-                        import json as _j
-                        tl = _j.loads(trigs) if isinstance(trigs, str) else trigs
-                        if isinstance(tl, list):
-                            parts.append(" ".join(tl))
-                    except Exception:
-                        pass
-                for f in ("scenario", "steps", "principles"):
-                    if e.get(f):
-                        parts.append(e[f][:200])
-                texts.append(" ".join(parts)[:500])
-            try:
-                vecs = await assistant.ai_client.embed_with_fallback(texts)
-                if vecs and len(vecs) == len(batch):
-                    n_ok = 0
-                    for entry, vec in zip(batch, vecs):
-                        if not vec:
-                            continue
-                        kb.set_single_embedding(entry["id"], vec)
-                        n_ok += 1
-                    done += n_ok
-                    assistant.logger.debug("向量预热: 已处理 %d/%d (本批成功 %d)", done, len(pending), n_ok)
-                else:
-                    assistant.logger.warning(
-                        "向量预热: 批次返回数量仍不匹配 (%s vs %s)",
-                        len(vecs) if vecs else 0, len(batch),
-                    )
-            except Exception as e:
-                assistant.logger.warning("向量预热: 批次失败: %s", e)
-            await asyncio.sleep(1.5)
+        # 拼接口径 / 批失败逐条重试统一在 kb_embed_job（与管理端「向量化」、CLI 同一实现）
+        from src.utils.kb_embed_job import embed_pending_entries
+        st = await embed_pending_entries(
+            kb, assistant.ai_client.embed_with_fallback, batch_size=20, pause_s=1.5,
+            should_continue=lambda: bool(getattr(assistant, "running", True)),
+        )
+        done = st["done"]
+        if st["failed"]:
+            assistant.logger.warning(
+                "向量预热: %d 条失败（ids=%s），可在知识库页点「向量化」或跑 scripts/kb_embed_all.py 重试",
+                st["failed"], ",".join(st["failed_ids"][:10]))
         cov = kb.embedding_coverage()
         assistant.logger.info("向量预热完成: %d 条新增向量化, 总覆盖率 %s%%", done, cov.get("pct", 0))
     except Exception:
@@ -1283,6 +1253,30 @@ async def reconcile_dead_peer_marks(assistant) -> None:
                 out.get("checked", 0), out.get("cleared", 0))
     except Exception:
         assistant.logger.debug("dead-peer 存量核销跳过", exc_info=True)
+
+
+async def sweep_live_chatx_holds(assistant) -> None:
+    """启动后按最近私聊往前翻：已经在智聊对聊或改写空转的，收成人审并写状态带。"""
+    try:
+        await asyncio.sleep(25)
+        store = getattr(assistant, "inbox_store", None)
+        if store is None:
+            return
+        cfg = getattr(getattr(assistant, "config", None), "config", None) or {}
+        from src.inbox.peer_bot_guard import sweep_live_chatx_holds as _sweep
+        out = await asyncio.to_thread(_sweep, store, config=cfg)
+        held = list(out.get("held") or [])
+        if not held:
+            return
+        from src.inbox.peer_guard_marker import mark as _mark
+        for item in held:
+            _mark(store, str(item.get("conversation_id") or ""),
+                  reason=str(item.get("reason") or ""), soft=bool(item.get("soft")))
+        assistant.logger.info(
+            "[peer-guard] 存量扫描 checked=%s held=%s",
+            out.get("checked", 0), len(held))
+    except Exception:
+        assistant.logger.debug("[peer-guard] 存量扫描跳过", exc_info=True)
 
 
 async def episodic_backfill_periodic(assistant):

@@ -118,8 +118,16 @@ def _white_label_allowed(license_status: Any) -> bool:
 def brand_catalog() -> Dict[str, Any]:
     """品牌族结构化清单（供静态 JSON / 文档 / 前端只读引用）。"""
     return {
-        "company": {"zh": DEFAULT_COMPANY_NAME, "en": DEFAULT_COMPANY_NAME_EN},
-        "product": {"zh": DEFAULT_PRODUCT_NAME, "en": DEFAULT_PRODUCT_NAME_EN},
+        "company": {
+            "zh": DEFAULT_COMPANY_NAME,
+            "zh_hant": "無界科技",
+            "en": DEFAULT_COMPANY_NAME_EN,
+        },
+        "product": {
+            "zh": DEFAULT_PRODUCT_NAME,
+            "zh_hant": DEFAULT_PRODUCT_NAME,
+            "en": DEFAULT_PRODUCT_NAME_EN,
+        },
         "site_name": DEFAULT_SITE_NAME,
         "tagline": {"zh": "让沟通，无界", "en": "Communication, Boundless."},
         "assets": {

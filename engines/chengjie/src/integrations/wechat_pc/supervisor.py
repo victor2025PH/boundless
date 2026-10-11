@@ -217,6 +217,7 @@ class WeChatPcSupervisor:
         try:
             pres = self.presence_provider()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor._presence", exc_info=True)
             return None
         if not isinstance(pres, dict):
             return None
@@ -225,7 +226,7 @@ class WeChatPcSupervisor:
                 if float(pres.get("ts") or 0.0) <= self._stopped_hb_ts:
                     return {**pres, "alive": False, "stale_after_stop": True}
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor._presence", exc_info=True)
             self._stopped_hb_ts = 0.0  # 出现了更新的心跳 → 是别处新起的进程，恢复正常判定
         return pres
 
@@ -307,7 +308,7 @@ class WeChatPcSupervisor:
         try:
             Path(self.state_dir).mkdir(parents=True, exist_ok=True)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor.start", exc_info=True)
         cmd = build_driver_command(python_exe=self.python_exe, backend_url=self.backend_url,
                                    account_id=self.account_id, label=self.label, config_file=self.config_file,
                                    state_dir=self.state_dir, interval=self.interval,
@@ -409,7 +410,7 @@ class WeChatPcSupervisor:
         try:
             ready = self.driver_ready_provider() or ready
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor.autostart_tick", exc_info=True)
         act = decide_autostart(enabled=self.autostart, proc_alive=alive, presence_alive=bool(pres and pres.get("alive")),
                                wechat_main_window=bool(env.get("main_window")), driver_ok=bool(ready.get("ok", True)),
                                backoff_until=self._backoff_until, now=self._now())
@@ -509,22 +510,22 @@ class WeChatPcSupervisor:
             if proc.poll() is not None:
                 return
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor._kill_tree", exc_info=True)
         if sys.platform == "win32":
             try:
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor._kill_tree", exc_info=True)
             try:
                 if proc.poll() is None:
                     proc.kill()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor._kill_tree", exc_info=True)
             try:
                 proc.wait(timeout=5)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor._kill_tree", exc_info=True)
         else:
             try:
                 proc.terminate()
@@ -533,7 +534,7 @@ class WeChatPcSupervisor:
                 try:
                     proc.kill()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor._kill_tree", exc_info=True)
 
     def _close_job(self) -> None:
         if self._job is None:
@@ -542,7 +543,7 @@ class WeChatPcSupervisor:
             import ctypes
             ctypes.WinDLL("kernel32").CloseHandle(self._job)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor._close_job", exc_info=True)
         self._job = None
 
     def _close_logf(self) -> None:
@@ -550,7 +551,7 @@ class WeChatPcSupervisor:
             try:
                 self._logf.close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisor._close_logf", exc_info=True)
             self._logf = None
 
 
@@ -646,13 +647,13 @@ class WeChatPcSupervisorPool:
                 try:
                     sup.stop()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisorPool.sync", exc_info=True)
                 task = getattr(sup, "_task", None)
                 if task is not None:
                     try:
                         task.cancel()
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisorPool.sync", exc_info=True)
         self._order = want
         return {"added": added, "updated": updated, "removed": removed}
 
@@ -691,7 +692,7 @@ class WeChatPcSupervisorPool:
             try:
                 await sup.shutdown()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in WeChatPcSupervisorPool.shutdown", exc_info=True)
 
 
 __all__ = ["WeChatPcSupervisor", "WeChatPcSupervisorPool", "normalize_accounts", "account_log_name", "derive_state", "decide_autostart", "next_backoff", "build_driver_command",

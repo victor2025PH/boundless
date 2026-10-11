@@ -32,14 +32,7 @@ _ACCEPTED_DUPS: dict = {
 
 # 真 bug 待处置登记（文件名 → 函数名集合）：确认是同页双定义、后者已在覆盖前者，
 # 归属工作流修复后必须摘牌（防表过期门禁看住）。
-_PENDING_DUPS: dict = {
-    "knowledge.html": {
-        # 801 vs 1846：两版实现（v1 有 feedback 分支 / v2 null-safe），后者胜出
-        "switchTab",
-        # 830 vs 1861：两套 debounce 计时器（_debounceTimer/350ms vs _searchTimer/300ms）
-        "debounceLoadEntries",
-    },
-}
+_PENDING_DUPS: dict = {}
 
 
 def _toplevel_function_decls(js: str):

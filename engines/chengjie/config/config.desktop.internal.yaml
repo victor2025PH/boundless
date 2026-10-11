@@ -1065,15 +1065,20 @@ usage:
   agent_chars:
     enabled: true
 
-# v1.005：UI 收纳（与生产一致的导航去噪——这些入口生产机也是藏的，
-# 不是功能缺失：group_extract/group_show 走各自功能页，手动控制台/矩阵导航/
-# 团队协作属内部运维面）
+# 内部功能显隐（1.0.104，老板决策 2026-10-01「内测用户都可以使用全功能」）：
+# 五个纯软件入口显式开（与 feature_registry A 类 / config.desktop.min.yaml 镜像）。
+# 历史：v1.005 起本段全 false 把这些入口在每台内测机 overlay 里钉死，_ensure_baseline
+# 只补缺席键翻不动（1.0.103 花无缺机「勾了群成员提取、工具箱卡出现又消失」）；存量机由
+# ConfigManager._migrate_ui_visibility_full_open_1104 一次性翻开。
+# matrix_nav / group_show 仍关：真机矩阵（RPA 通道页，需安卓真机）导航面，桌面包不带。
 ui_visibility:
-  group_extract: false
+  group_extract: true
   group_show: false
-  manual_console: false
+  manual_console: true
   matrix_nav: false
-  team_collab: false
+  team_collab: true
+  ai_settings: true
+  cockpit: true
 
 ops:
   # v1.005：自动化覆盖趋势（观测卡）

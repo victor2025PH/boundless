@@ -1,0 +1,76 @@
+# 自有业务 · 待人工 SOP（人工＝老板本人或店员；手机收到「待人工」提醒即可接管）
+
+schema: zhiliao.handoff_sop.v1
+triggers:
+  explicit_human:
+  - 人工
+  - 转人工
+  - 真人客服
+  - human
+  - agent
+  - real person
+  - tao po
+  - kausapin ang agent
+  complaint_refund:
+  - 投诉
+  - 退款
+  - 差评
+  - complaint
+  - refund
+  - reklamo
+  - ibalik ang pera
+  legal_threat:
+  - 律师
+  - 起诉
+  - 报警
+  - 消协
+  - lawyer
+  - sue
+  - police
+  - abogado
+  - ireklamo sa DTI
+  privacy_payment:
+  - 密码
+  - 验证码
+  - 银行卡
+  - password
+  - OTP
+  - card number
+  owner_decision:
+  - 老板
+  - 便宜点
+  - 合作
+  - owner
+  - discount please
+  - tawad
+always_handoff_intents:
+- complaint
+- refund
+- legal
+- payment_issue
+- account_security
+priority:
+  high:
+  - legal_threat
+  - privacy_payment
+  normal:
+  - complaint_refund
+  - explicit_human
+sla:
+  first_response_min: 30
+  business_hours: 09:00-21:00 (客户所在地时区)
+  after_hours: 下一工作时段首小时内回复
+steps:
+- 命中任一触发：AI 用客户语言发一次 holding 回复（下方 holding_reply），之后本会话停止自动回复。
+- 会话标记为「待人工」，写明触发类别与原句摘要（不含密码/卡号等敏感值），按优先级入队。
+- 坐席接手后先读最近 20 条上下文与 AI 已答内容，不重复问客户已经回答过的问题。
+- 坐席处理完点「交还 AI」才恢复自动回复；投诉/法律类会话本轮不交还。
+- 客户在等待期间再发消息：AI 不再回复内容，只在超过 SLA 时补一句进度说明（最多一次）。
+holding_reply:
+  zh: 收到，这个我请老板亲自回你，稍等一下哦。
+  en: Got it — I'll ask the owner to reply to you personally. Just a moment.
+  tl: Sige po, ipapasabi ko po sa may-ari para siya mismo ang sumagot. Sandali lang po.
+after_hours_reply:
+  zh: 同事现在下班了，上班后第一时间回复你。
+  en: My teammates are offline right now; they'll reply first thing when they're back.
+  tl: Offline po ang team ngayon; sasagot po sila agad pagbalik nila.

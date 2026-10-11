@@ -11,6 +11,7 @@ best-effort：``record`` 任何异常都吞掉，绝不阻塞合成主链路。
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -39,6 +40,7 @@ class VoiceSynthLangStats:
             d = str(default_lang or "").strip().lower()
             u = str(used_lang or "").strip().lower()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in VoiceSynthLangStats.record", exc_info=True)
             return
         with self._lock:
             self._total += 1
@@ -52,6 +54,7 @@ class VoiceSynthLangStats:
         try:
             p = str(lang or "").strip().lower().split("-")[0]
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in VoiceSynthLangStats.record_blocked", exc_info=True)
             return
         if not p:
             return
@@ -66,6 +69,7 @@ class VoiceSynthLangStats:
             key = (f"{str(lang or '').strip().lower().split('-')[0]}:"
                    f"{str(engine or '').strip().lower()}")
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in VoiceSynthLangStats.record_lang_routed", exc_info=True)
             return
         if key == ":":
             return

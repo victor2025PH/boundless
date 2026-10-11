@@ -305,6 +305,7 @@ class KfCallbackCrypto:
             msg, _rid = self.decrypt(echostr)
             return msg.decode("utf-8")
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in KfCallbackCrypto.verify_url", exc_info=True)
             return None
 
     def decrypt_callback(self, body: bytes, msg_signature: str, timestamp: str,

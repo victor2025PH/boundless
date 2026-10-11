@@ -56,7 +56,10 @@ def _spy_hub(ok: bool = True):
     seen = {}
 
     def fake(base_url, profile, text, *, language="", emotion="",
-             best_of=1, timeout_sec=30.0, audio_format="", tts_engine=""):
+             best_of=1, timeout_sec=30.0, audio_format="", tts_engine="",
+             **_extra):
+        # hub_fish_synthesize 另传 emo_text / emo_alpha。签名漏了会被 TypeError
+        # 吞掉，hub 回 None，后面的预算断言全部失真。
         seen.update(profile=profile, text=text)
         if not ok:
             raise RuntimeError("hub down")
@@ -124,7 +127,8 @@ def _spy_hub_bestof(ok: bool = True):
     seen = {}
 
     def fake(base_url, profile, text, *, language="", emotion="",
-             best_of=1, timeout_sec=30.0, audio_format="", tts_engine=""):
+             best_of=1, timeout_sec=30.0, audio_format="", tts_engine="",
+             **_extra):
         seen.update(profile=profile, best_of=best_of)
         if not ok:
             raise RuntimeError("hub down")

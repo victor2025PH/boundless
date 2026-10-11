@@ -38,19 +38,41 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.companion.group_show.playbook import (
-    DEFAULT_MUST_NOT,
     Beat,
     BeatDirective,
     CastMember,
     ShowEvent,
     ShowState,
+    must_not_for_slot,
 )
 
 # 角色顶替优先级：核心槽缺位时用谁顶（种草 > 抛问 > 质疑 > 附和）
 _SUBSTITUTE_ORDER: Tuple[str, ...] = ("advocate", "asker", "skeptic", "bystander")
+
+# 进剧本之前的接话。意图里不写事故、不写产品，避免占位生成器把禁令念出来。
+_OPENER_INTENT = (
+    "先在群里自然地开口，像刚进来看到大家。一句就好。"
+    "更早的群聊当没看见，不要回答里面的问题。"
+    "不要提产品，不要发出邀请，不要编事故。"
+)
+_CONTINUE_INTENT = (
+    "顺着群里上一句，像普通群友接着聊。一句就好。"
+    "不要回答更早的旧问题，不要另起一个故事。"
+    "不要提产品，不要发出邀请，不要把人往私下带。"
+)
+_WARMUP_INTENT = (
+    "顺着这个人刚说的那件事接一句。"
+    "就聊这件事，不要另起一个故事，不要提产品，不要发出邀请。"
+)
+_WARMUP_MUST = (
+    "不要编手滑、发错号、误发这种事故",
+    "不要把话题拐到产品或功能上",
+    "不要提对方没刚说过的视频，也不要自报性别、地点或职业",
+)
+_ASK_CUES = ("你是谁", "你能做", "什么功能", "怎么用")
 
 # 真人插话里的「疑问 / 产品关切」信号——命中则响应式选人接管本拍
 _HUMAN_QUESTION_RE = re.compile(
@@ -121,6 +143,25 @@ class GroupShowDirector:
         self._pending_human_name: str = ""
         # 连续真人发言计数（我们的号一发言就清零）
         self._human_streak: int = 0
+        # 排练没有真人可接时才放开。真发一直等到有人说话，或时长到了。
+        self._warmup_released = False
+        raw_chat = (config or {}).get("chat_before_script", None)
+        if raw_chat is None:
+            try:
+                self._chat_need = int(
+                    getattr(state.playbook, "chat_before_script", 0) or 0)
+            except (TypeError, ValueError):
+                self._chat_need = 0
+        else:
+            try:
+                self._chat_need = int(raw_chat)
+            except (TypeError, ValueError):
+                self._chat_need = 0
+        self._chat_need = max(0, self._chat_need)
+        self._goal_opened = False
+        if self._goal_mode():
+            self._queue = []
+            self._chat_need = 0
 
     # ── 观测输入 ─────────────────────────────────────────────────────────
 
@@ -132,16 +173,82 @@ class GroupShowDirector:
         惯性打断——这是群戏与广告机器人最直观的区别。
         """
         now = float(ts if ts is not None else time.time())
+        t = str(text or "").strip()
+        if t and self._heard_just_now(t):
+            return
         self.state.last_human_ts = now
         self._human_streak += 1
-        t = str(text or "").strip()
         if t:
             self._pending_human = t
             self._pending_human_name = str(sender or "")
+            if self._goal_mode() and self._cue_hit(t):
+                self._goal_opened = True
         self.state.append_event(ShowEvent(
             seq=self.state.next_seq, ts=now,
             speaker_account=str(sender or "human"), role="human",
             beat_id="", text=t, kind="human"))
+
+    def prime_room(self, rows: Sequence[Any], *, now: float) -> int:
+        """开演前群里已经在说的话。用来接，不计入「真人接管」。
+
+        只留最近几句。最新一句若还在让路窗内，就先别抢话。
+        """
+        cleaned: List[Tuple[str, str, float]] = []
+        for item in rows or ():
+            try:
+                if isinstance(item, (tuple, list)) and len(item) >= 3:
+                    who, said, ts = str(item[0]), str(item[1]), float(item[2])
+                elif isinstance(item, dict):
+                    who = str(item.get("sender_name") or item.get("sender_id")
+                              or "群友")
+                    said = str(item.get("text") or "")
+                    ts = float(item.get("ts") or 0.0)
+                else:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            said = str(said or "").strip()
+            if not said or ts <= 0 or ts > float(now):
+                continue
+            if any(said == prev[1] for prev in cleaned[-4:]):
+                continue
+            cleaned.append((who.strip() or "群友", said, ts))
+        if not cleaned:
+            return 0
+        kept = cleaned[-8:]
+        for who, said, ts in kept:
+            # 让路窗里的才是待接的话。更早的只留在台账，不送进模型当问题。
+            fresh = 0 <= float(now) - ts < self.cfg.human_yield_seconds
+            kind = "human" if fresh else "room"
+            self.state.append_event(ShowEvent(
+                seq=self.state.next_seq, ts=ts,
+                speaker_account=who, role="human",
+                beat_id="", text=said, kind=kind))
+        who, said, ts = cleaned[-1]
+        # 只有刚说完的话才算待接。更早的记录只作背景，开场先自己开口。
+        if 0 <= float(now) - ts < self.cfg.human_yield_seconds:
+            self._pending_human = said
+            self._pending_human_name = who
+            self.state.last_human_ts = ts
+        return len(kept)
+
+    def warmup_remaining(self) -> int:
+        """还要先接几句真人，才许打开剧本。"""
+        if self._warmup_released or self._chat_need <= 0:
+            return 0
+        spoken = sum(
+            1 for ev in self.state.events
+            if ev.kind in ("line", "media")
+            and str(ev.beat_id or "").startswith("warmup_"))
+        return max(0, self._chat_need - spoken)
+
+    def waiting_for_people(self) -> bool:
+        """没有可说的话时才等。接话阶段可以自己先开口，真人来了再让。"""
+        return False
+
+    def release_warmup(self) -> None:
+        """只给排练用：没有真人可接时，不要空转。真发不调用。"""
+        self._warmup_released = True
 
     # ── 五方法接口 ───────────────────────────────────────────────────────
 
@@ -166,9 +273,19 @@ class GroupShowDirector:
         """
         if self.state.status == "aborted":
             return True, "aborted"
-        # 真人接管：连续真人发言达阈值——戏的目的就是把场子点着，点着了就该退场
-        if self._human_streak >= self.cfg.human_takeover_lines:
-            return True, "human_takeover"
+        # 真人接管：连续真人发言达阈值——戏的目的就是把场子点着，点着了就该退场。
+        # 场上有向导时不整场掐掉：帮手退场，向导留下把真人那句接完。
+        # 没向导的旧剧本仍是「点着了就退」，这条分支碰不到它们。
+        # 接话阶段真人连说几句是正常的，不能据此删掉剧本，也不能就此退场。
+        if (not self._goal_mode()
+                and self.warmup_remaining() <= 0
+                and self._human_streak >= self.cfg.human_takeover_lines):
+            if self._guide_member() is None:
+                return True, "human_takeover"
+            self._sideline_helpers()
+            if not self._queue:
+                return True, "human_takeover"
+            # 向导还留着拍，本拍不收场；条数和时长闸在下面继续生效。
         spoken = sum(1 for e in self.state.events if e.kind in ("line", "media"))
         if spoken >= self.cfg.max_lines:
             return True, "budget"
@@ -176,7 +293,8 @@ class GroupShowDirector:
         if (self.state.started_at > 0
                 and t - self.state.started_at > self.cfg.max_duration_seconds):
             return True, "timeout"
-        if not self._queue:
+        if (not self._queue and self.warmup_remaining() <= 0
+                and not self._goal_mode()):
             return True, "completed"
         return False, ""
 
@@ -184,8 +302,9 @@ class GroupShowDirector:
         """这一拍谁说话？返回 None＝没人能上（选角全空/全被刷屏闸挡下）。
 
         三层决策，从强到弱：
-        ① **响应式覆盖**：有待回应的真人提问 → 让 advocate/skeptic 接（懂产品的
-           人回答问题才自然，让 bystander 去答技术疑问是穿帮点）。选定后把队列里
+        ① **响应式覆盖**：场上有向导时，真人说的任何一句都由向导接，帮手不抢。
+           没有向导时，仍只在真人**提问**时让 advocate/skeptic 接（懂产品的人
+           回答问题才自然，让 bystander 去答技术疑问是穿帮点）。选定后把队列里
            **他自己角色的拍**提前对齐，别让他顶着别人的意图开口；
         ② **自我接话规避**：本拍角色恰是上一个发言者 → 队列里第一个不同角色的拍
            提前（真人群里几乎没人自己接自己）；
@@ -198,6 +317,9 @@ class GroupShowDirector:
         **不变量**：正常拍流程（非响应式）里，返回的人永远就是队头拍的角色——
         「谁在说」与「说什么」由同一次重排一起改，绝不脱钩。
         """
+        if self._goal_mode() or self.warmup_remaining() > 0:
+            return self._warmup_speaker()
+
         if not self._queue:
             return None
         cast = self.state.casting
@@ -226,6 +348,10 @@ class GroupShowDirector:
 
     def next_directive(self) -> Optional[BeatDirective]:
         """给本拍发言者的意图指令（**没有台词字段**——台词由人设 LLM 现场生成）。"""
+        if self._goal_mode():
+            return self._chat_directive()
+        if self.warmup_remaining() > 0:
+            return self._warmup_directive()
         if not self._queue:
             return None
         beat = self._queue[0]
@@ -242,13 +368,22 @@ class GroupShowDirector:
             product=beat.product,
             media=beat.media,
             soft_level=soft,
-            must_not=DEFAULT_MUST_NOT,
+            must_not=must_not_for_slot(beat.role, with_guide=self._has_guide()),
             reference_last=reference_last,
             respond_to_human=human_line,
         )
 
     def advance_beat(self, event: ShowEvent) -> None:
         """本拍已发出：记账、清真人待回应、出队推进。"""
+        if str(getattr(event, "beat_id", "") or "").startswith("warmup_"):
+            self.state.append_event(event)
+            if event.kind in ("line", "media"):
+                self._human_streak = 0
+                self._pending_human = ""
+                self._pending_human_name = ""
+            if self.state.status == "pending":
+                self.state.status = "running"
+            return
         self.state.append_event(event)
         if event.kind in ("line", "media"):
             self._human_streak = 0
@@ -280,10 +415,175 @@ class GroupShowDirector:
                 return str(ev.speaker_account or "")
         return ""
 
+    def _warmup_spoken(self) -> int:
+        return sum(
+            1 for ev in self.state.events
+            if ev.kind in ("line", "media")
+            and str(ev.beat_id or "").startswith("warmup_"))
+
+    def _warmup_speaker(self) -> Optional[CastMember]:
+        """真人来了由向导接。没人说话时向导先开口，之后换一个号接着聊。"""
+        guide = self._guide_member()
+        if str(self._pending_human).strip() and guide is not None:
+            return guide
+        last = self._last_speaker_account()
+        members = list(self.state.casting.members)
+        if not last and guide is not None:
+            return guide
+        for member in members:
+            if member.account_id != last:
+                return member
+        return guide or (members[0] if members else None)
+
+    def _goal_mode(self) -> bool:
+        return bool(str(getattr(self.state.playbook, "goal", "") or "").strip())
+
+    def _cue_hit(self, text: str) -> bool:
+        raw = str(text or "")
+        cues = tuple(getattr(self.state.playbook, "goal_cues", ()) or ())
+        return any(piece and piece in raw for piece in cues + _ASK_CUES)
+
+    def _pusher_slot(self) -> str:
+        slots = [str(role.slot) for role in self.state.playbook.roles]
+        if "guide" in slots:
+            return "guide"
+        if "advocate" in slots:
+            return "advocate"
+        return slots[0] if slots else ""
+
+    def _goal_already_said(self) -> bool:
+        return any(
+            ev.kind in ("line", "media")
+            and str(ev.beat_id or "").startswith("goal_")
+            for ev in self.state.events)
+
+    def _chat_spoken(self) -> int:
+        return sum(
+            1 for ev in self.state.events
+            if ev.kind in ("line", "media")
+            and str(ev.beat_id or "").startswith(("chat_", "goal_", "warmup_")))
+
+    def _chat_directive(self) -> BeatDirective:
+        member = self._warmup_speaker()
+        slot = member.slot if member is not None else self._pusher_slot()
+        pending = str(self._pending_human).strip()
+        push = (
+            not pending
+            and slot == self._pusher_slot()
+            and self._goal_opened
+            and not self._goal_already_said()
+            and self._chat_spoken() > 0)
+        if pending:
+            intent = _WARMUP_INTENT
+            human = f"{self._pending_human_name or '群友'}：{pending}"
+            beat_id = f"chat_{self._chat_spoken() + 1}"
+        elif self._chat_spoken() == 0:
+            intent = _OPENER_INTENT
+            human = ""
+            beat_id = "chat_1"
+        elif push:
+            intent = self._goal_intent(slot)
+            human = ""
+            beat_id = "goal_1"
+        else:
+            intent = _CONTINUE_INTENT
+            human = ""
+            beat_id = f"chat_{self._chat_spoken() + 1}"
+        must = must_not_for_slot(slot, with_guide=self._has_guide())
+        if push:
+            must = must + ("不要说出目标这两个字", "不要提对方没说过的顾虑")
+        else:
+            must = must + _WARMUP_MUST
+        return BeatDirective(
+            beat_id=beat_id,
+            intent=intent,
+            product=str(self.state.playbook.products[0]) if push and self.state.playbook.products else "",
+            soft_level=3 if push else 0,
+            must_not=must,
+            reference_last=self._chat_spoken() > 0 and not human,
+            respond_to_human=human,
+        )
+
+    def _goal_intent(self, slot: str) -> str:
+        feature = str(self.state.playbook.goal or "").strip()
+        if slot == "guide":
+            return (
+                "用一句人话接对方刚提到的事。然后说我是 AI。"
+                f"只讲这一件：{feature}。"
+                "邀请对方私聊你自己试。不要提对方没说过的顾虑。"
+            )
+        return (
+            "用一句人话接对方刚提到的事。"
+            f"只讲这一件：{feature}。"
+            "邀请对方来找你看一眼。不要提对方没说过的顾虑。"
+        )
+
+    def _warmup_directive(self) -> BeatDirective:
+        guide = self._guide_member()
+        last = self._last_speaker_account()
+        if str(self._pending_human).strip():
+            slot = "guide" if guide is not None else "skeptic"
+            intent = _WARMUP_INTENT
+            human = f"{self._pending_human_name or '群友'}：{self._pending_human}"
+        elif self._warmup_spoken() == 0:
+            slot = "guide" if guide is not None else "skeptic"
+            intent = _OPENER_INTENT
+            human = ""
+        else:
+            slot = "skeptic"
+            if guide is not None and last and last != guide.account_id:
+                slot = "guide"
+            intent = _CONTINUE_INTENT
+            human = ""
+        must = must_not_for_slot(slot, with_guide=self._has_guide()) + _WARMUP_MUST
+        return BeatDirective(
+            beat_id=f"warmup_{self._warmup_spoken() + 1}",
+            intent=intent,
+            product="",
+            soft_level=0,
+            must_not=must,
+            reference_last=self._warmup_spoken() > 0 and not human,
+            respond_to_human=human,
+        )
+
+    def _heard_just_now(self, text: str) -> bool:
+        """同一句群消息常被多个号各记一笔。接话时只听一遍。"""
+        want = str(text or "").strip()
+        if not want:
+            return False
+        for ev in reversed(self.state.events[-6:]):
+            if ev.kind == "human" and str(ev.text or "").strip() == want:
+                return True
+        return False
+
+    def _guide_member(self) -> Optional[CastMember]:
+        return self.state.casting.by_slot("guide")
+
+    def _has_guide(self) -> bool:
+        """剧本声明了向导，或演员表里已经有向导。两者任一为真，禁令和让路都按向导场处理。"""
+        if self._guide_member() is not None:
+            return True
+        slots = getattr(self.state.playbook, "slots", ()) or ()
+        return any(str(s).strip().lower() == "guide" for s in slots)
+
+    def _sideline_helpers(self) -> None:
+        """真人聊起来之后，队列里只留向导的拍。没有向导拍时留队头，给向导一句回应的载体。"""
+        kept = [b for b in self._queue if str(b.role).strip().lower() == "guide"]
+        if kept:
+            self._queue = kept
+            return
+        if self._pending_human and self._queue:
+            self._queue = self._queue[:1]
+
     def _responsive_pick(self) -> Optional[CastMember]:
-        """真人提问时的响应式选人：让最合适的人回答，而不是念下一拍。"""
+        """真人说话时的响应式选人：有向导就由向导接，否则只在提问时让种草/质疑接。"""
         if not self._pending_human:
             return None
+        guide = self._guide_member()
+        if guide is not None:
+            # 向导是公开身份，真人的话由他接。上一句是不是他自己说的无所谓——
+            # 这是对话，不是托儿之间的抢答规避。
+            return guide
         if not _HUMAN_QUESTION_RE.search(self._pending_human):
             return None
         cast = self.state.casting
@@ -314,7 +614,12 @@ class GroupShowDirector:
                 return
 
     def _substitute_for(self, slot: str) -> Optional[CastMember]:
-        """角色槽没配上人时找替补（号不够时的降级演出）。"""
+        """角色槽没配上人时找替补（号不够时的降级演出）。
+
+        向导的嘴不能借给别的号：邀请私聊的只能是钉死的那个公开号。
+        """
+        if str(slot or "").strip().lower() == "guide":
+            return None
         cast = self.state.casting
         for s in _SUBSTITUTE_ORDER:
             if s == slot:

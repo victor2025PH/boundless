@@ -451,6 +451,7 @@ class UiaBackend:
                 if c is not None:
                     out.append(c)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in UiaBackend._qt_windows", exc_info=True)
                 continue
         return out
 
@@ -460,7 +461,7 @@ class UiaBackend:
                 try:
                     self._main_hwnd = int(c.NativeWindowHandle)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in UiaBackend._main_window", exc_info=True)
                 return c
         return None
 
@@ -522,7 +523,7 @@ class UiaBackend:
             win.SetActive()
             time.sleep(0.25)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in UiaBackend._activate", exc_info=True)
 
     # ── 自检 ──
     def self_check(self) -> Dict[str, Any]:
@@ -551,7 +552,7 @@ class UiaBackend:
                     time.sleep(1.2)
                     rep["opened_first_session"] = True
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in UiaBackend.self_check", exc_info=True)
         missing += [k for k in REQUIRED_FOR_SEND if k not in REQUIRED_FOR_READ and not self._find(win, k)]
         self.missing_anchors = missing
         self.readonly = bool(missing)
@@ -584,7 +585,7 @@ class UiaBackend:
                     if len(texts) > 80:
                         break
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in UiaBackend.screen_state", exc_info=True)
         title = self._title_text(main) if main is not None else ""
         if login and main is None:
             wc = _s(getattr(login[0], "ClassName", ""))
@@ -656,6 +657,7 @@ class UiaBackend:
                     cell.Click(simulateMove=True)
                     time.sleep(0.9)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in UiaBackend.open_session", exc_info=True)
                 continue
             if not expected_wxid:
                 return True
@@ -715,7 +717,7 @@ class UiaBackend:
                 if (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
                     return True
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in UiaBackend.peer_typing", exc_info=True)
         return False
 
     #: 头像区 / 气泡内区的相对采样位置（见 classify_bubble_direction 的量测依据）
@@ -732,6 +734,7 @@ class UiaBackend:
             hwnd = int(getattr(main, "NativeWindowHandle", 0) or self._main_hwnd or 0)
             return WindowCapture.grab(hwnd) if hwnd else None
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in UiaBackend._grab_window", exc_info=True)
             return None
 
     def _bubble_direction(self, item: Any, cap: Optional[Any]) -> Optional[bool]:
@@ -751,6 +754,7 @@ class UiaBackend:
             inner_left = cap.sample_rect(l, t, rt, bt, self._INNER_X_LEFT, self._ZONE_Y)
             return classify_bubble_direction(ref, left_zone, right_zone, inner_right, inner_left)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in UiaBackend._bubble_direction", exc_info=True)
             return None
 
     def read_visible_messages(self) -> List[Bubble]:
@@ -892,6 +896,7 @@ class UiaBackend:
                         and _s(c.Name) and _s(c.Name) not in send_names):
                     return c
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in UiaBackend._voice_button", exc_info=True)
                 continue
         return None
 
@@ -942,7 +947,7 @@ class UiaBackend:
             if fg and fg == int(getattr(win, "NativeWindowHandle", 0) or 0):
                 return
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in UiaBackend._activate_for_click", exc_info=True)
         UiaBackend._activate(win)
 
     def voice_ready(self) -> bool:
@@ -992,6 +997,7 @@ class UiaBackend:
                         hits = [c]
                         break
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in UiaBackend._locate_in_record_view", exc_info=True)
                     continue
         return hits[0] if hits else None
 
@@ -1083,6 +1089,7 @@ class UiaBackend:
             try:
                 btn[0].Click(simulateMove=True)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in UiaBackend._ensure_chat_info_panel", exc_info=True)
                 return None
             time.sleep(1.2)
             heads = self._find(main, "contact_head")
@@ -1093,6 +1100,7 @@ class UiaBackend:
             try:
                 h = int(c.NativeWindowHandle)
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in UiaBackend._close_popups", exc_info=True)
                 continue
             if h in before:
                 continue
@@ -1101,7 +1109,7 @@ class UiaBackend:
                 if wp:
                     wp.Close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in UiaBackend._close_popups", exc_info=True)
 
     def read_profile_wxid(self, display_name: str = "") -> str:
         """当前打开会话的对方微信号（资料卡弹窗「微信号：」值）；读不到空串。侧栏与弹窗用完即关。"""
@@ -1113,7 +1121,7 @@ class UiaBackend:
             try:
                 before.add(int(c.NativeWindowHandle))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in UiaBackend.read_profile_wxid", exc_info=True)
         head = self._ensure_chat_info_panel(main)
         if head is None:
             return ""
@@ -1139,7 +1147,7 @@ class UiaBackend:
                     btn[0].Click(simulateMove=True)
                     time.sleep(0.4)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in UiaBackend.read_profile_wxid", exc_info=True)
         return wxid
 
     def _self_avatar(self, main: Any) -> Optional[Any]:
@@ -1148,6 +1156,7 @@ class UiaBackend:
         try:
             limit_x = int(lists[0].BoundingRectangle.left) if lists else int(main.BoundingRectangle.left) + 90
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in UiaBackend._self_avatar", exc_info=True)
             return None
 
         def _left_of_list(c: Any) -> Optional[Tuple[int, int]]:
@@ -1156,7 +1165,7 @@ class UiaBackend:
                 if r.right <= limit_x and r.right > r.left and r.bottom > r.top:
                     return (int(r.top), int(r.left))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in UiaBackend._self_avatar._left_of_list", exc_info=True)
             return None
 
         best: List[Tuple[Tuple[int, int], Any]] = []
@@ -1187,6 +1196,7 @@ class UiaBackend:
                 return None
             return (int(r.left + r.right) // 2, (int(r.top) + first_tab) // 2)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in UiaBackend._self_avatar_point", exc_info=True)
             return None
 
     def read_self_identity(self) -> Dict[str, str]:
@@ -1200,7 +1210,7 @@ class UiaBackend:
             try:
                 before.add(int(c.NativeWindowHandle))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in UiaBackend.read_self_identity", exc_info=True)
         avatar = self._self_avatar(main)
         point = None if avatar is not None else self._self_avatar_point(main)
         if avatar is None and point is None:
@@ -1217,6 +1227,7 @@ class UiaBackend:
                 try:
                     h = int(c.NativeWindowHandle)
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in UiaBackend.read_self_identity", exc_info=True)
                     continue
                 if h not in before and (_s(getattr(c, "ClassName", "")) == PROFILE_POPUP_CLASS or popup is None):
                     popup = c

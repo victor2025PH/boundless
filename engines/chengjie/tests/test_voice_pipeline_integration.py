@@ -765,7 +765,9 @@ class TestVoiceReplyLangRoute:
             monkeypatch,
             voice_cfg={"enabled": True, "backend": "edge_tts",
                        "voice": "ja-JP-NanamiNeural"})
-        msg = types.SimpleNamespace(chat=types.SimpleNamespace(id=7), id=1, from_user=None)
+        # 同文件前面的用例已经往 chat=7 记过语音，进程级熔断会把本条降级成文字，
+        # 音色路由根本走不到。换一个没人用过的会话。
+        msg = types.SimpleNamespace(chat=types.SimpleNamespace(id=88001), id=1, from_user=None)
         out = await s._maybe_send_voice_reply(
             msg, "Hello there, how are you doing today?", is_peer_voice=False)
 
@@ -817,7 +819,7 @@ class TestVoiceReplyLangRoute:
             voice_cfg={"enabled": True, "backend": "edge_tts",
                        "voice": "ja-JP-NanamiNeural"},
             extra_cfg={"voice_lang_route": {"enabled": False}})
-        msg = types.SimpleNamespace(chat=types.SimpleNamespace(id=7), id=1, from_user=None)
+        msg = types.SimpleNamespace(chat=types.SimpleNamespace(id=88002), id=1, from_user=None)
         await s._maybe_send_voice_reply(
             msg, "Hello there, how are you doing today?", is_peer_voice=False)
 

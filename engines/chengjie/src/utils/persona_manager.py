@@ -122,6 +122,18 @@ PROMPT_EXEMPT_FIELDS = frozenset({
     # 攻击性指令的双源真相。两种历史写法（顶层/嵌套）一并登记。
     "temper",
     "personality.temper",
+    # P0-1（2026-09-29 8E56 实锤）：人设工作类型 companion / support / sales——决定知识库
+    # 该不该查、查无怎么办（SSOT=src/utils/persona_kind.py，消费方 kb_policy）。是策略开关
+    # 不是台词：人设块里说「我是客服类型」只会穿帮，措辞由 ai_client 按 kind 另拼。
+    "kind",
+    # 陪聊人设显式恢复业务知识库（kb_gate.persona_kb_suppressed 早已消费，此前漏登记 →
+    # L-2 JSON 导入闸把它当未知字段拒绝）。同为策略开关，不进 prompt。
+    "kb_access",
+    # 顶层 language / country（2026-10-11 印度游戏人设）：档案页和路由用的代码
+    # （hi / india），不是给模型念的句子。该跟的语言和国籍已经写在 background
+    # 与 speaking.language_follow 里；再把裸代码注入就是第二份事实源。
+    "language",
+    "country",
 })
 
 # 已表态的字段全集。门禁比对「真实 schema ⊆ 本集合」，
@@ -129,9 +141,10 @@ PROMPT_EXEMPT_FIELDS = frozenset({
 PERSONA_SCHEMA_FIELDS = PROMPT_CONSUMED_FIELDS | PROMPT_EXEMPT_FIELDS
 
 # 顶层键之外、schema 表没登记但真实档案/表单在用的键（quirks 进 persona_voice 口头禅；
-# language 进档案页；capabilities 已按子键登记，这里补顶层；时间戳是导出/备份元数据）。
+# capabilities 已按子键登记，这里补顶层；时间戳是导出/备份元数据）。
+# language / country 已在 PROMPT_EXEMPT_FIELDS 表态，不再放这里。
 _EXTRA_TOP_KEYS = frozenset({
-    "quirks", "language", "capabilities", "emotion", "temper", "avatar",
+    "quirks", "capabilities", "emotion", "temper", "avatar",
     "created_at", "updated_at",
 })
 
@@ -830,7 +843,7 @@ class PersonaManager:
             if isinstance(c, dict) and "stage_lock" in c:
                 return _cfg_truthy(c.get("stage_lock"), default=True)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager._stage_locked", exc_info=True)
         return True
 
     def count_speaking_overrides(self) -> Dict[str, int]:
@@ -1094,7 +1107,7 @@ class PersonaManager:
                     filter_constraints_for_honesty)
                 constraints = filter_constraints_for_honesty(constraints, True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager._build_constraints_text", exc_info=True)
         return self._assemble_constraints(constraints, platform=platform)
 
     def preview_constraints_text(self, rules_data: Dict[str, Any], platform: str = "") -> str:
@@ -1492,7 +1505,7 @@ class PersonaManager:
         try:
             self.maybe_reload_runtime_profiles()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager.get_persona_by_id", exc_info=True)
         return self._profile_personas.get(str(profile_id))
 
     @staticmethod
@@ -1560,10 +1573,18 @@ class PersonaManager:
             bc = b_acc + b_chat
             # P6: derive source — mrpa flag takes precedence over _profile_sources
             source = "mrpa" if p.get("_mrpa_source") else self._profile_sources.get(pid, "studio")
+            try:
+                from src.utils.persona_kind import kind_view as _kind_view
+                _kv = _kind_view(p, full_config)
+            except Exception:
+                _kv = {"kind": "", "source": "", "explicit": ""}
             entry = {
                 "id": pid,
                 "name": p.get("name") or pid,
                 "role": p.get("role") or "",
+                # P0-1：工作类型（生效值 + 来源 explicit/tag/keyword/default），卡片角标用
+                "kind": _kv.get("kind") or "",
+                "kind_source": _kv.get("source") or "",
                 "tags": PersonaManager.coerce_profile_tags(p.get("tags")),
                 # L-2 #205 三态：显式「不发语音」→ 卡片无试听键；其余沿旧判据
                 "has_voice": (
@@ -1599,7 +1620,7 @@ class PersonaManager:
                 from src.utils.persona_completeness import persona_completeness
                 entry["completeness"] = int(persona_completeness(p)["score"])
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager.list_profiles_summary", exc_info=True)
             result.append(entry)
         return result
 
@@ -1822,7 +1843,7 @@ class PersonaManager:
         try:
             self.maybe_reload_runtime_profiles()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager.get_persona_with_tier", exc_info=True)
         if conversation_key:
             _conv_ref = self._chat_bindings.get(str(conversation_key))
             if _conv_ref:
@@ -1894,7 +1915,7 @@ class PersonaManager:
                 from src.utils.persona_usage import record as _usage_record
                 _usage_record(_upid)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager.format_persona_block", exc_info=True)
         # B75（实施67 P1-11a，`_352`/1.054 报障）：用户**显式绑定**的人设（会话覆写/
         # 会话绑定/账号人设三个 tier）＝用户意志——档案就是拿来用的。compact 档只
         # 编译约 1/3 字段（背景故事/家人职业/英文名/好恶/专属记忆/外貌/作息全部
@@ -2081,7 +2102,7 @@ class PersonaManager:
                     persona_identity_for_prompt)
                 identity = persona_identity_for_prompt(identity, True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager._format_persona_compact", exc_info=True)
         if identity.get("deny_ai"):
             reply = identity.get("deny_ai_reply", f"我是{name}")
             lines.append(
@@ -2146,7 +2167,7 @@ class PersonaManager:
             if _ab:
                 lines.append(_ab)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager._format_persona_compact", exc_info=True)
         # 尺度锁关（companion.stage_lock=false，2026-09-19）：compact 也带一行脾气 / 口头脏话——
         # 生产主用 compact 之前整段缺失，长会话被裁剪后人设立刻回到「客气客服」。full 仍是完整段，
         # 这里只给一句紧凑版；stage_lock 开着时维持旧行为（compact 不带，与之前一致）。
@@ -2601,7 +2622,7 @@ class PersonaManager:
                     persona_identity_for_prompt)
                 identity = persona_identity_for_prompt(identity, True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager._format_persona_instructions", exc_info=True)
         if identity.get("deny_ai"):
             reply = identity.get("deny_ai_reply", f"我是{name}")
             # P1-2：身份硬锁 — 旧版只说"当用户问 AI 时回答 X"，模型仍可能在
@@ -2694,7 +2715,7 @@ class PersonaManager:
             if _ab:
                 lines.append(_ab)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in PersonaManager._format_persona_instructions", exc_info=True)
 
         # Emotion handling
         e = persona.get("emotion", {})
@@ -2756,7 +2777,7 @@ class PersonaManager:
             try:
                 path.with_suffix(".yaml.tmp").unlink(missing_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in PersonaManager.save_persona_file", exc_info=True)
             return False
 
     def export_chat_bindings(self) -> Dict[str, Any]:

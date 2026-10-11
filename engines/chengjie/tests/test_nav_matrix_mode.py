@@ -10,7 +10,8 @@
    都消费它（简洁模式深链进矩阵页不成孤岛）；
 5. Telegram 刻意不挂 feature（主号=基础产品面，挂档会锁核心渠道进 flagship）；
    其余四项挂 rpa，档位锁定时 nav_matrix_items 同步打 locked 注解；
-6. 简洁清单尺寸棘轮：主区 ≤8、折叠区 ≤6——「简洁模式再度膨胀」必须是显式决策。
+6. 简洁清单尺寸棘轮：主区 ≤8、折叠区 ≤7——「简洁模式再度膨胀」必须是显式决策。
+   折叠区第 7 项是开发者工具（2026-09-29，所有用户要在壳内侧栏点到）。
 """
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ def test_simple_lists_size_ratchet():
     assert len(SIMPLE_CORE) <= 8, (
         f"简洁主区膨胀到 {len(SIMPLE_CORE)} 项——精简是本次改版的核心承诺，"
         "新增前先确认它真是『每天要碰』的")
-    assert len(SIMPLE_MORE) <= 6, f"简洁折叠区膨胀到 {len(SIMPLE_MORE)} 项"
+    assert len(SIMPLE_MORE) <= 7, f"简洁折叠区膨胀到 {len(SIMPLE_MORE)} 项"
 
 
 def test_matrix_group_in_full_mode_overview_first():

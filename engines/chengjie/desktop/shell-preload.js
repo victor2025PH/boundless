@@ -98,6 +98,7 @@ contextBridge.exposeInMainWorld("shell", {
   voicePurgeOrphans: () => ipcRenderer.invoke("desktop:voice-purge-orphans"),
   voiceUnbind: (args) => ipcRenderer.invoke("desktop:voice-unbind", args),
   voiceRebind: (body) => ipcRenderer.invoke("desktop:voice-rebind", body),
+  voiceSessionExpressiveness: (body) => ipcRenderer.invoke("desktop:voice-session-expressiveness", body),
   voiceEnroll: (payload) => ipcRenderer.invoke("desktop:voice-enroll", payload),
   // D4b 受控出站桥：轮询取走发给本内嵌账号的全自动回复（已过后端 send-gate/kill-switch），
   // 在对应 webview 的官方页 DOM 填入并发送，再回执。

@@ -109,7 +109,7 @@ class SongOrderStore:
         try:
             c.execute("PRAGMA journal_mode=WAL")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in SongOrderStore._conn", exc_info=True)
         return c
 
     # ── 建单 ────────────────────────────────────────────────────────────

@@ -21,10 +21,12 @@ import pytest
 from src.companion.group_show.director import DirectorConfig, GroupShowDirector
 from src.companion.group_show.playbook import (
     DEFAULT_MUST_NOT,
+    GUIDE_MUST_NOT,
     Beat,
     CastMember,
     Casting,
     Playbook,
+    Role,
     ShowEvent,
     ShowState,
 )
@@ -747,3 +749,189 @@ def test_two_directors_over_the_same_inputs_decide_identically():
         return trace
 
     assert run() == run()
+
+
+# ── 向导场：真人由向导接，帮手退场 ──────────────────────────────────────────
+
+
+def _guide_director(**kw):
+    beats = [
+        Beat("b1", "asker", "对向导说卡住了"),
+        Beat("b2", "guide", "只带一项功能"),
+        Beat("b3", "skeptic", "指出别扭"),
+    ]
+    pb = Playbook(
+        id="guide_trial", name="向导戏",
+        roles=(Role("asker"), Role("guide"), Role("skeptic")),
+        beats=tuple(beats))
+    casting = Casting(members=(
+        CastMember("asker", "a_ask", "p_ask"),
+        CastMember("guide", "a_guide", "p_guide"),
+        CastMember("skeptic", "a_skp", "p_skp"),
+    ))
+    return GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), kw.get("config"))
+
+
+def test_any_human_line_goes_to_the_guide_not_a_helper():
+    """不是提问也由向导接。帮手不抢这句。"""
+    d = _guide_director()
+    d.observe_human("我按你说的试了一下", sender="真人甲", ts=T0)
+    assert d.select_next_speaker().account_id == "a_guide"
+    directive = d.next_directive()
+    assert directive.beat_id == "b2"
+    assert directive.must_not == GUIDE_MUST_NOT
+    assert "真人甲" in directive.respond_to_human
+
+
+def test_helper_lines_keep_the_no_invite_rule_only_when_a_guide_is_cast():
+    d = _guide_director()
+    directive = d.next_directive()
+    assert directive.beat_id == "b1"
+    assert "不要邀请对方加你" in "".join(directive.must_not)
+    assert _director().next_directive().must_not == DEFAULT_MUST_NOT
+
+
+def test_human_takeover_sidelines_helpers_but_lets_the_guide_answer():
+    d = _guide_director(config={"human_takeover_lines": 2})
+    d.observe_human("一", sender="甲", ts=T0)
+    d.observe_human("二", sender="乙", ts=T0 + 1)
+    assert d.should_terminate(now=T0 + 10) == (False, "")
+    assert [b.role for b in d._queue] == ["guide"]
+    assert d.select_next_speaker().slot == "guide"
+
+
+def test_chat_comes_before_the_script_and_does_not_burn_a_beat():
+    """没人说话也先开口。另一个号接着聊。剧本队列先不动。真人一来就改由向导接。"""
+    beats = [
+        Beat("b1", "guide", "先说我是 AI，并私聊来试"),
+        Beat("b2", "skeptic", "还想自己看过"),
+    ]
+    pb = Playbook(
+        id="guide_trial_duo", name="两角",
+        roles=(Role("guide"), Role("skeptic")),
+        beats=tuple(beats), chat_before_script=2)
+    casting = Casting(members=(
+        CastMember("guide", "a_guide", "p_guide"),
+        CastMember("skeptic", "a_skp", "p_skp"),
+    ))
+    d = GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {"human_takeover_lines": 2})
+    assert d.waiting_for_people() is False
+    assert d.select_next_speaker().slot == "guide"
+    first = d.next_directive()
+    assert first.beat_id == "warmup_1" and first.respond_to_human == ""
+    assert "私聊" not in first.intent
+    assert [b.id for b in d._queue] == ["b1", "b2"]
+    _say(d, "a_guide", "warmup_1", text="刚进来，你们聊什么呢", ts=T0 + 5)
+    assert d.select_next_speaker().slot == "skeptic"
+    second = d.next_directive()
+    assert second.beat_id == "warmup_2" and second.respond_to_human == ""
+    d.observe_human("我也在", sender="老王", ts=T0 + 6)
+    d.observe_human("等一下", sender="小李", ts=T0 + 7)
+    assert d.should_terminate(now=T0 + 10) == (False, "")
+    assert [b.id for b in d._queue] == ["b1", "b2"]
+    assert d.select_next_speaker().slot == "guide"
+    assert "老王" not in d.next_directive().respond_to_human
+    assert d.next_directive().respond_to_human.startswith("小李")
+
+
+def test_an_old_room_does_not_steal_the_opener():
+    """一小时前的话只作背景。开场先自己说，不把旧话当成必须马上接的一句。"""
+    pb = Playbook(
+        id="guide_trial_duo", name="两角",
+        roles=(Role("guide"), Role("skeptic")),
+        beats=(Beat("b1", "guide", "先说我是 AI，并私聊来试"),),
+        chat_before_script=2)
+    casting = Casting(members=(CastMember("guide", "a_guide", "p_guide"),))
+    d = GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {})
+    assert d.prime_room([("老王", "昨晚那句", T0 - 600)], now=T0) == 1
+    assert d.state.events[-1].kind == "room"
+    assert d.next_directive().respond_to_human == ""
+    fresh = GroupShowDirector(ShowState(
+        session_id="s2", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {})
+    assert fresh.prime_room([("老王", "我刚到", T0 - 10)], now=T0) == 1
+    assert fresh.state.events[-1].kind == "human"
+    assert fresh.next_directive().respond_to_human.startswith("老王")
+
+
+def test_stale_room_lines_are_not_fed_as_questions():
+    """一小时前的提问留在台账，不进模型要回答的对话。"""
+    from src.companion.group_show.ecp import project_history_for
+    pb = Playbook(
+        id="guide_trial_duo", name="两角",
+        roles=(Role("guide"), Role("skeptic")),
+        beats=(), goal="多个号的消息放在一处看")
+    casting = Casting(members=(CastMember("guide", "a_guide", "p_guide"),))
+    d = GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {})
+    d.prime_room([
+        ("老王", "你们是男的女的", T0 - 2800),
+        ("老王", "在哪里", T0 - 2500),
+    ], now=T0)
+    assert [ev.kind for ev in d.state.events] == ["room", "room"]
+    msgs = project_history_for(
+        casting.members[0], d.state.events, directive=d.next_directive())
+    blob = "\n".join(item["content"] for item in msgs)
+    assert "你们是男的女的" not in blob
+    assert "在哪里" not in blob
+
+
+def test_a_goal_show_chats_until_someone_opens_the_topic():
+    """没人递话头就只聊天。有人自己说到那件事，向导先接话，下一轮才带一次。"""
+    pb = Playbook(
+        id="guide_trial_duo", name="两角",
+        roles=(Role("guide"), Role("skeptic")),
+        beats=(),
+        goal="多个号的消息放在一处看",
+        goal_cues=("多个号", "看不过来"))
+    casting = Casting(members=(
+        CastMember("guide", "a_guide", "p_guide"),
+        CastMember("skeptic", "a_skp", "p_skp"),
+    ))
+    d = GroupShowDirector(ShowState(
+        session_id="s1", group_key="g1", playbook=pb, casting=casting,
+        started_at=T0), {"human_takeover_lines": 2})
+    assert d._queue == []
+    assert d.should_terminate(now=T0 + 10) == (False, "")
+    assert d.select_next_speaker().slot == "guide"
+    first = d.next_directive()
+    assert first.beat_id == "chat_1" and "私聊" not in first.intent
+    _say(d, "a_guide", "chat_1", text="刚进来", ts=T0 + 5)
+    assert d.select_next_speaker().slot == "skeptic"
+    d.observe_human("多个号看不过来", sender="老王", ts=T0 + 20)
+    d.observe_human("我也这样", sender="小李", ts=T0 + 21)
+    assert d.should_terminate(now=T0 + 30) == (False, "")
+    answer = d.next_directive()
+    assert answer.beat_id.startswith("chat_")
+    assert answer.respond_to_human.startswith("小李")
+    assert "私聊" not in answer.intent
+    _say(d, "a_guide", answer.beat_id, text="看不过来最烦", ts=T0 + 40)
+    assert d.next_directive().beat_id.startswith("chat_")
+    _say(d, "a_skp", "chat_3", text="是挺烦", ts=T0 + 50)
+    pushed = d.next_directive()
+    assert pushed.beat_id == "goal_1"
+    assert "我是 AI" in pushed.intent and "私聊" in pushed.intent
+    assert "目标" not in pushed.intent
+
+
+def test_the_same_human_line_is_heard_once():
+    d = _director()
+    d.observe_human("这单客户又不回", sender="老王", ts=T0)
+    d.observe_human("这单客户又不回", sender="老王", ts=T0 + 1)
+    heard = [ev for ev in d.state.events if ev.kind == "human"]
+    assert len(heard) == 1
+    assert d._human_streak == 1
+
+
+def test_takeover_still_ends_a_show_that_has_no_guide():
+    d = _director(config={"human_takeover_lines": 2})
+    d.observe_human("一", ts=T0)
+    d.observe_human("二", ts=T0 + 1)
+    assert d.should_terminate(now=T0 + 10) == (True, "human_takeover")

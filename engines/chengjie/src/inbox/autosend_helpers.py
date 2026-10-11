@@ -2009,6 +2009,21 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                 _assistant_ref, platform, account_id, chat_key, text,
                 sent_text=sent_text)
 
+        def _voice_also_text_on(platform, account_id, chat_key):
+            try:
+                from src.ai.persona_voice import resolve_effective_persona_id
+                from src.inbox.voice_autosend import (
+                    effective_voice_block, resolve_voice_autosend_cfg, voice_also_text,
+                )
+                _cfg_at = _assistant_ref.config.config or {}
+                _vb_at = effective_voice_block(resolve_voice_autosend_cfg(_cfg_at), platform)
+                _pid_at = resolve_effective_persona_id(
+                    _cfg_at, platform, account_id, str(chat_key))
+                return voice_also_text(_vb_at, _pid_at)
+            except Exception:
+                _assistant_ref.logger.debug("[autosend voice] also_text 判定失败", exc_info=True)
+                return False
+
         async def _try_autosend_video(platform, account_id, chat_key, text):
             return await autosend_video(_assistant_ref, platform, account_id, chat_key, text)
 
@@ -2463,6 +2478,7 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
             # 未启用/不满足/失败 → 回落到下面的文本投递（零行为变更）。
             # 语音念**翻译前原文**（人设克隆声念母语；长度判定同口径），
             # 并把译文一并传入做语言闸门（外语文字客户不发语音）。
+            _voice_sent = False
             try:
                 _voice_text = str(original_text or "").strip() or text
                 if await _try_autosend_voice(
@@ -2477,13 +2493,18 @@ def build_autosend_callbacks(assistant, web_app, deliver_enabled, *,
                             _rsce_v("fulfilled")
                         except Exception:
                             pass
-                    return {"ok": True, "delivered_as": "voice"}
+                    if not _voice_also_text_on(platform, account_id, chat_key):
+                        return {"ok": True, "delivered_as": "voice"}
+                    _voice_sent = True
+                    _assistant_ref.logger.info(
+                        "[autosend voice] 语音已发，also_text → 补发文字 "
+                        "platform=%s acct=%s", platform, account_id)
             except Exception:
                 _assistant_ref.logger.debug(
                     "[autosend voice] 失败，回落文本", exc_info=True)
             # 语音承诺撤回：文本承诺「发你条语音」而上面的语音分支没发成
             # （未启用/概率闸/语言闸/合成失败）→ 文本出站前剥掉语音承诺。
-            if _promised == "voice":
+            if _promised == "voice" and not _voice_sent:
                 from src.inbox.image_autosend import (
                     record_promise_event as _rpe2,
                     record_sent_claim_event as _rsce2,

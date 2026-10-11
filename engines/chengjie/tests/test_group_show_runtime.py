@@ -279,13 +279,20 @@ async def test_format_rehearsal_is_readable():
 
 
 @pytest.mark.parametrize("pid", ["growth_matrixx", "lingo_lingox",
-                                 "studio_voicex"])
+                                 "studio_voicex", "guide_trial",
+                                 "guide_trial_duo"])
 @pytest.mark.asyncio
 async def test_shipped_playbooks_actually_rehearse(pid):
     """每套出货模板都必须能被真正演完——这是「交付物可用」的端到端证明。"""
     pb = load_playbook_dir(_PLAYBOOK_DIR)[pid]
     r = await rehearse(pb, _candidates(4), seed=11,
                        generate=stub_generator())
-    assert r.terminate_reason == "completed"
-    assert r.line_count == len(pb.beats)
+    if str(getattr(pb, "goal", "") or "").strip():
+        assert r.terminate_reason == "budget"
+        assert r.line_count == 40
+        assert all(not str(ln.beat_id).startswith("goal_") for ln in r.lines)
+    else:
+        assert r.terminate_reason == "completed"
+        extra = int(getattr(pb, "chat_before_script", 0) or 0)
+        assert r.line_count == len(pb.beats) + extra
     assert r.duration_seconds > 60, "整场戏不该几十秒演完，那节奏一眼假"

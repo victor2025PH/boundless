@@ -134,10 +134,23 @@ function Get-ExpectedAccounts([string]$token) {
     }
 }
 
+function Get-SidecarHeaders {
+    # P0-1 (2026-10-08): the Node sidecar now requires its OWN token on every route except
+    # /health. Same resolution as services/whatsapp-baileys/start.ps1: env WA_SIDECAR_TOKEN,
+    # else <DataDir>\config\wa_sidecar_token.key. No token -> no header (legacy open sidecar).
+    $tok = "$env:WA_SIDECAR_TOKEN".Trim()
+    if (-not $tok) {
+        $f = Join-Path $DataDir "config\wa_sidecar_token.key"
+        if (Test-Path -LiteralPath $f) { $tok = ((Get-Content -LiteralPath $f -Raw -ErrorAction SilentlyContinue) + "").Trim() }
+    }
+    if ($tok) { return @{ Authorization = "Bearer $tok" } }
+    return @{}
+}
+
 function Get-NodeAccounts {
     # actual set = authorized accounts reported by the Node service. @{ok; ids; err}
     try {
-        $r = Invoke-RestMethod -Uri "$NodeBase/accounts" -TimeoutSec $NodeTimeoutSec -ErrorAction Stop
+        $r = Invoke-RestMethod -Uri "$NodeBase/accounts" -Headers (Get-SidecarHeaders) -TimeoutSec $NodeTimeoutSec -ErrorAction Stop
         $ids = @()
         foreach ($a in @($r.accounts)) {
             if ("$($a.account_id)" -ne "") { $ids += "$($a.account_id)" }
@@ -171,6 +184,7 @@ function Invoke-Reconnect([string[]]$ids) {
     foreach ($id in $ids) {
         try {
             Invoke-RestMethod -Uri "$NodeBase/accounts/$id/reconnect" -Method Post `
+                -Headers (Get-SidecarHeaders) `
                 -ContentType "application/json" -Body "{}" -TimeoutSec 10 -ErrorAction Stop | Out-Null
             Write-Log "HEAL" "POST /accounts/$id/reconnect accepted"
         } catch {

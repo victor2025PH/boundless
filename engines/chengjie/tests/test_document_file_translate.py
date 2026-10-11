@@ -69,12 +69,13 @@ async def test_translate_paragraphs_and_preserves_structure():
 
 
 async def test_translate_table_cells():
-    data = _make_docx(["Intro"], table_rows=[["A", "B"], ["C", "D"]])
+    # 单字符走 translation_service identity 早退，到不了引擎；用有正文的词验证单元格翻译。
+    data = _make_docx(["Intro"], table_rows=[["Alpha", "Beta"], ["Gamma", "Delta"]])
     res = await translate_docx(data, xlate=_svc(), target_lang="zh", source_lang="en")
     assert res["ok"] is True
     d = docx.Document(BytesIO(res["data"]))
     cells = [c.text for t in d.tables for row in t.rows for c in row.cells]
-    assert "A#ai" in cells and "D#ai" in cells
+    assert "Alpha#ai" in cells and "Delta#ai" in cells
     # 1 段 + 4 单元格 = 5 段翻译
     assert res["stats"]["total"] == 5 and res["stats"]["translated"] == 5
 
@@ -93,10 +94,10 @@ async def test_segment_failure_keeps_original():
 async def test_engine_passthrough():
     s = TranslationService(ai_client=None)
     s._router = EngineRouter([_StubEngine("ai"), _StubEngine("deepl")])
-    data = _make_docx(["x"])
+    data = _make_docx(["hello"])
     res = await translate_docx(data, xlate=s, target_lang="zh",
                                source_lang="en", engine="deepl")
-    assert "x#deepl" in _texts(res["data"])
+    assert "hello#deepl" in _texts(res["data"])
 
 
 async def test_preserves_run_formatting():
@@ -161,10 +162,10 @@ async def test_xlsx_translates_string_cells():
 async def test_xlsx_engine_passthrough():
     s = TranslationService(ai_client=None)
     s._router = EngineRouter([_StubEngine("ai"), _StubEngine("deepl")])
-    data = _make_xlsx([["x"]])
+    data = _make_xlsx([["hello"]])
     res = await translate_xlsx(data, xlate=s, target_lang="zh",
                                source_lang="en", engine="deepl")
-    assert "x#deepl" in _xlsx_values(res["data"])
+    assert "hello#deepl" in _xlsx_values(res["data"])
 
 
 async def test_xlsx_segment_failure_keeps_original():

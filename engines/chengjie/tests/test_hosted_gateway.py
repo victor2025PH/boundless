@@ -1190,6 +1190,46 @@ def test_hosted_chatx_never_touches_public_fallback(tmp_path, monkeypatch):
     assert cm.config["ai"]["fallback"]["base_url"] == "https://bd2026.cc/api/ai/v1"
 
 
+def test_hosted_chatx_seeds_gateway_when_customer_has_no_fallback(tmp_path, monkeypatch):
+    """升级安装的旧客户档没有 fallback：补官网 chatx，模型列表才有无限制行。"""
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    monkeypatch.delenv(hg.CHATX_ENV, raising=False)
+    cm = _CMM(tmp_path, ai_extra={"base_url": "https://bd2026.cc/api/ai/v1",
+                                  "model": "deepseek-flash"})
+    assert hg.ensure_hosted_chatx(cm, probe=lambda u: False) is True
+    fb = cm.config["ai"]["fallback"]
+    assert fb["base_url"] == _GW and fb["model"] == "chatx"
+    assert fb["chat_fallback"] is False
+    assert cm.config["ai"]["model"] == "deepseek-flash"
+    from src.ai import conv_route
+    by = {row["name"]: row for row in conv_route.model_catalog(cm.config)}
+    assert by[""]["model"] == "deepseek-flash"
+    assert by["unrestricted"]["opens_unrestricted"] is True
+    assert by["unrestricted"]["via"] == "hosted"
+    assert by["unrestricted"]["public_host"] == "SVIP企业搭建"
+    assert os.environ.get(hg.CHATX_ENV) == "1"
+    # 热重载把内存档抹掉后，回放要再补上
+    cm.config["ai"].pop("fallback")
+    assert hg.apply_hosted_chatx(cm.config, _GW) is False
+    assert hg.seed_hosted_chatx(cm.config, _GW) is True
+    assert cm.config["ai"]["fallback"]["model"] == "chatx"
+
+
+def test_hosted_chatx_respects_disabled_or_custom_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("AITR_DESKTOP_MODE", "1")
+    off = _CMM(tmp_path, ai_extra={"fallback": {"enabled": False}})
+    assert hg.ensure_hosted_chatx(off, probe=lambda u: False) is False
+    assert off.config["ai"]["fallback"] == {"enabled": False}
+    custom = _CMM(tmp_path, ai_extra={"fallback": {
+        "enabled": True, "base_url": "https://example.invalid/v1", "model": "qwen",
+    }})
+    assert hg.ensure_hosted_chatx(custom, probe=lambda u: False) is False
+    assert custom.config["ai"]["fallback"]["model"] == "qwen"
+    own = _CMM(tmp_path, ai_key="sk-user-own")
+    assert hg.ensure_hosted_chatx(own, probe=lambda u: False) is False
+    assert "fallback" not in own.config["ai"]
+
+
 def test_config_manager_replays_hosted_chatx_flag():
     src = (Path(__file__).resolve().parents[1] / "src" / "utils"
            / "config_manager.py").read_text(encoding="utf-8")

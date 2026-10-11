@@ -1,7 +1,7 @@
 """P0-1 桌面首启向导契约（A1 最小种子 / A2 AI Key overlay 保存 / A3 引导条 / A5 就绪灯）。
 
 覆盖：
-- config.desktop.min.yaml 不变量：无 YOUR_* 占位、translation.engines.order=["ai"]、
+- config.desktop.min.yaml 不变量：无 YOUR_* 占位、免费档本地引擎序、
   危险子系统不显式开启；
 - ConfigManager：桌面模式播种优先最小种子（非桌面回落 example）、save_ai_credentials
   写 overlay（主 config 字节不动）+ 即时合并 + 白名单/校验；
@@ -35,7 +35,9 @@ class TestDesktopMinSeed:
 
     def test_translation_shortest_path(self):
         data = yaml.safe_load(MIN_SEED.read_text(encoding="utf-8"))
-        assert (data.get("translation") or {}).get("engines", {}).get("order") == ["ai"]
+        order = (data.get("translation") or {}).get("engines", {}).get("order")
+        assert order == ["ollama_mt", "opencc", "ai"]
+        assert (data.get("translation") or {}).get("free_tier_zero_cost") == "enforce"
         ai = data.get("ai") or {}
         assert ai.get("provider") == "openai_compatible"
         assert str(ai.get("api_key") or "") == ""  # key 留空由向导写 overlay
@@ -95,7 +97,9 @@ class TestSeedPreference:
         text = target.read_text(encoding="utf-8")
         assert "YOUR_" not in text
         data = yaml.safe_load(text)
-        assert (data.get("translation") or {}).get("engines", {}).get("order") == ["ai"]
+        order = (data.get("translation") or {}).get("engines", {}).get("order")
+        assert order == ["ollama_mt", "opencc", "ai"]
+        assert (data.get("translation") or {}).get("free_tier_zero_cost") == "enforce"
 
     def test_server_mode_seeds_example(self, tmp_path, monkeypatch):
         target = self._mgr(tmp_path, monkeypatch, desktop=False)

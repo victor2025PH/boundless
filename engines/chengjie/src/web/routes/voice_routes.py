@@ -19,6 +19,9 @@ GET  /api/voice/tts-test/{filename}
 GET  /api/voice/effective-config
     Read-only snapshot of the effective voice config for a platform/persona
     (channel-center preview panel).
+
+PUT  /api/voice/session-expressiveness
+    Per-conversation expressiveness override (session > persona > global).
 """
 from __future__ import annotations
 
@@ -152,9 +155,9 @@ def _cleanup_old_previews() -> None:
                 if st.st_size < 512 or st.st_mtime < now - ttl:
                     f.unlink(missing_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in _cleanup_old_previews", exc_info=True)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _cleanup_old_previews", exc_info=True)
 
 
 # ── tts-test 后台 job 模式（channel-center「后台试听」）──────────────────────
@@ -183,7 +186,7 @@ def _cleanup_tts_jobs() -> None:
             if now - float(entry.get("ts") or 0.0) > _TTS_JOB_TTL_SEC:
                 _TTS_JOBS.pop(jid, None)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _cleanup_tts_jobs", exc_info=True)
 
 
 # 「立即渲染」后台进程句柄（防重复拉起；渲染幂等，丢句柄无害）
@@ -228,6 +231,7 @@ def _voice_quality_latest() -> Dict[str, Dict[str, Any]]:
                         "date": str(row.get("date") or ""),
                     }
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in _voice_quality_latest", exc_info=True)
                     continue
     except Exception:
         latest = {}
@@ -467,7 +471,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             try:
                 preview_path.unlink(missing_ok=True)   # type: ignore[call-arg]
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_voice_routes._redispatch_garbled_to_edge", exc_info=True)
             return _fb_speech, _fb_result, _fb_path
         except Exception:
             logger.warning(
@@ -497,7 +501,8 @@ def register_voice_routes(app, api_auth, config_manager=None):
         _vt = str(body.get("target_lang") or "").strip().lower()
         if _vt and xlate_svc is not None:
             from src.ai.voice_outbound_xlate import resolve_spoken_text
-            spoken_text, _xl = await resolve_spoken_text(text, _vt, xlate_svc)
+            spoken_text, _xl = await resolve_spoken_text(
+                text, _vt, xlate_svc, tier=str(body.get("translation_tier") or ""))
         fmt_override: Optional[str] = body.get("format") or None
         # Optional: caller passes current UI settings to override saved config
         cfg_override: Optional[Dict[str, Any]] = body.get("voice_cfg_override") or None
@@ -509,6 +514,16 @@ def register_voice_routes(app, api_auth, config_manager=None):
         chat_key: str = str(body.get("chat_key") or "").strip()
         platform: str = str(body.get("platform") or "telegram").strip().lower()
         account_id: str = str(body.get("account_id") or "").strip()
+        # 人设页「语气表达」对比试听：未保存的档位 / 基线情绪直接进解析链（试听=发送
+        # 同一条 apply_expressiveness 缩放），不传＝旧行为。
+        _expr_override: str = ""
+        _emo_override: str = ""
+        try:
+            from src.ai.voice_emotion import normalize_expressiveness
+            _expr_override = normalize_expressiveness(body.get("expressiveness"))
+            _emo_override = str(body.get("emotion") or "").strip().lower()
+        except Exception:
+            _expr_override, _emo_override = "", ""
 
         # Resolve voice config
         raw_cfg: Dict[str, Any] = {}
@@ -536,12 +551,20 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 account_persona_id=account_persona_id or None,
                 contact_key=chat_key or None,
                 platform=platform, account_id=account_id or None,
-                text=spoken_text)
+                text=spoken_text,
+                expressiveness=_expr_override or None)
             voice_cfg = voice_ctx.get("voice_cfg") or {}
         except Exception as ex:
             logger.warning("[tts] preview resolve_voice_cfg failed: %s", ex)
             voice_cfg = {}
             voice_ctx = {"persona_id": persona_id or "", "persona_source": "error", "emotion": None}
+        if _emo_override:
+            try:
+                from src.ai.voice_emotion import EMOTIONS, coerce_emotion
+                if _emo_override in EMOTIONS:
+                    voice_ctx["emotion"] = coerce_emotion(_emo_override)
+            except Exception:
+                logger.debug("[tts] preview 情绪覆写跳过", exc_info=True)
 
         # 选声金标（#149，2026-09-02 钧机 KKXSTU）：坐席显式选了人设 X，解析结果
         # 必须就是 X——人设不存在/被偷换/来源标签指认别人 → **拒绝合成**并明说，
@@ -578,6 +601,9 @@ def register_voice_routes(app, api_auth, config_manager=None):
         voice_cfg["enabled"] = True
         if fmt_override:
             voice_cfg["format"] = fmt_override.strip().lower()
+        if _expr_override:
+            voice_cfg["voice_expressiveness"] = _expr_override
+            voice_cfg["voice_expressiveness_source"] = "preview"
 
         # fast=true → force the always-hot edge_tts backend so the preview answers
         # within seconds even when the production clone chain (avatar_clone → hub
@@ -823,7 +849,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 try:
                     preview_path.unlink(missing_ok=True)   # type: ignore[call-arg]
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_voice_routes._run_tts_preview", exc_info=True)
                 _why = f"clone_lang_garbled:{_g_lang or '?'}"
                 logger.warning(
                     "[tts] preview blocked reason=clone_unavailable:%s persona=%s "
@@ -867,37 +893,39 @@ def register_voice_routes(app, api_auth, config_manager=None):
         try:
             _cleanup_old_previews()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_routes._run_tts_preview", exc_info=True)
 
         # 「所听即所发」复用登记（P1 2026-08-05）：sidecar 记文本指纹+音色键+元数据，
         # send-voice 带回 filename 且校验通过时直接复用本音频（省一次合成/额度，
         # 且客户听到的与坐席试听的逐字节一致）。best-effort：失败只丢复用资格。
+        # 带档位/情绪覆写的对比试听不是「发送会出的声」，不登记复用。
         try:
             from src.integrations.shared.tts_preview import record_preview_meta
-            record_preview_meta(
-                preview_path.name, text=text,
-                persona_key=str(persona_id or ""),
-                target_lang=(_vt if _xl.get("translated") else ""),
-                meta={
-                    "resolved_persona_id": voice_ctx.get("persona_id") or "",
-                    "requested_persona_id": str(persona_id or ""),
-                    "persona_source": voice_ctx.get("persona_source") or "",
-                    "provider": result.provider,
-                    "voice": result.voice,
-                    "emotion": (
-                        getattr(voice_ctx.get("emotion"), "emotion", "")
-                        if voice_ctx.get("emotion") else ""
-                    ),
-                    "fallback_from": (result.extra or {}).get("fallback_from", ""),
-                    "duration_sec": result.duration_sec,
-                    "format": result.format,
-                    "fast": bool(fast),
-                    "speech": _speech.get("speech") or "unknown",
-                    "speech_basis": _speech.get("basis") or "",
-                    # 译声：复用命中时发送侧用它当收件箱镜像文本（客户实际听到的话）
-                    "spoken_text": (spoken_text if _xl.get("translated") else ""),
-                    "xl_provider": _xl.get("provider") or "",
-                })
+            if not (_expr_override or _emo_override):
+                record_preview_meta(
+                    preview_path.name, text=text,
+                    persona_key=str(persona_id or ""),
+                    target_lang=(_vt if _xl.get("translated") else ""),
+                    meta={
+                        "resolved_persona_id": voice_ctx.get("persona_id") or "",
+                        "requested_persona_id": str(persona_id or ""),
+                        "persona_source": voice_ctx.get("persona_source") or "",
+                        "provider": result.provider,
+                        "voice": result.voice,
+                        "emotion": (
+                            getattr(voice_ctx.get("emotion"), "emotion", "")
+                            if voice_ctx.get("emotion") else ""
+                        ),
+                        "fallback_from": (result.extra or {}).get("fallback_from", ""),
+                        "duration_sec": result.duration_sec,
+                        "format": result.format,
+                        "fast": bool(fast),
+                        "speech": _speech.get("speech") or "unknown",
+                        "speech_basis": _speech.get("basis") or "",
+                        # 译声：复用命中时发送侧用它当收件箱镜像文本（客户实际听到的话）
+                        "spoken_text": (spoken_text if _xl.get("translated") else ""),
+                        "xl_provider": _xl.get("provider") or "",
+                    })
         except Exception:
             logger.debug("[tts] preview 复用 sidecar 登记失败（忽略）", exc_info=True)
 
@@ -946,6 +974,9 @@ def register_voice_routes(app, api_auth, config_manager=None):
                     getattr(voice_ctx.get("emotion"), "emotion", "")
                     if voice_ctx.get("emotion") else ""
                 ),
+                "expressiveness": str(voice_cfg.get("voice_expressiveness") or ""),
+                "expressiveness_source": str(
+                    voice_cfg.get("voice_expressiveness_source") or ""),
                 "fallback_from": (result.extra or {}).get("fallback_from", ""),
                 # B62：克隆名被映射成通用音色（如 steven → zh-CN-Xiaoxiao）时
                 # 前端同样要出「非克隆声」警示——没有 fallback_from 的映射场景
@@ -1043,8 +1074,16 @@ def register_voice_routes(app, api_auth, config_manager=None):
             if _vt_raw:
                 try:
                     from src.web.routes.unified_inbox_services import (
+                        _effective_conv_translation_tier,
                         _get_translation_service)
                     _vt_svc = _get_translation_service(request)
+                    body["translation_tier"] = _effective_conv_translation_tier(
+                        request,
+                        str(body.get("platform") or ""),
+                        str(body.get("account_id") or "default"),
+                        str(body.get("chat_key") or ""),
+                        str(body.get("tier") or ""),
+                    )
                 except Exception:
                     _vt_svc = None
             body["target_lang"] = _vt_raw
@@ -1374,6 +1413,20 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         voice_problem_text = _voice_problem_text(request, _g.get("blocking"))
             except Exception:
                 logger.debug("[tts] effective-config 配置闸预告异常（忽略）", exc_info=True)
+            _expr_session = ""
+            _expr_persona = ""
+            try:
+                from src.ai.persona_voice import get_session_expressiveness
+                from src.ai.voice_emotion import normalize_expressiveness
+                if chat_key and account_id:
+                    _expr_session = get_session_expressiveness(
+                        platform, account_id, chat_key)
+                _rp = ctx.get("persona") or {}
+                _rvp = _rp.get("voice_profile") if isinstance(_rp, dict) else None
+                _expr_persona = normalize_expressiveness(
+                    (_rvp or {}).get("expressiveness") if isinstance(_rvp, dict) else "")
+            except Exception:
+                logger.debug("[tts] effective-config 表达力读取异常（忽略）", exc_info=True)
             return {
                 "ok": True,
                 "platform": platform,
@@ -1381,6 +1434,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 "persona_source": ctx.get("persona_source") or "",
                 "backend": str(voice_cfg.get("backend") or ""),
                 "voice": str(voice_cfg.get("voice") or ""),
+                "expressiveness": str(voice_cfg.get("voice_expressiveness") or ""),
+                "expressiveness_source": str(
+                    voice_cfg.get("voice_expressiveness_source") or ""),
+                "expressiveness_session": _expr_session,
+                "expressiveness_persona": _expr_persona,
                 "is_clone": is_clone,
                 "ready": ready,
                 "hub_strict": hub_strict,
@@ -1396,6 +1454,59 @@ def register_voice_routes(app, api_auth, config_manager=None):
             }
         except Exception as ex:  # noqa: BLE001
             return {"ok": False, "error": str(ex)[:200]}
+
+    @app.put("/api/voice/session-expressiveness")
+    async def api_voice_session_expressiveness(request: Request, _=Depends(api_auth)):
+        """会话级「语气表达」覆写（会话 > 人设 > 全局）。
+
+        Body: ``{platform, account_id, chat_key, level?, action?}``
+        - ``level``：restrained/natural/vivid/dramatic；空串或 inherit = 清除会话覆写
+        - ``action="step_down"``：以**当前有效档位**为基准降一档并钉成会话覆写
+          （坐席点「太夸张」👎 的落点；已是 restrained 则原地不动）
+        返回 ``{ok, session, effective, source}``，与 effective-config 同字段语义。
+        """
+        body = await request.json()
+        platform = str(body.get("platform") or "telegram").strip().lower()
+        account_id = str(body.get("account_id") or "").strip()
+        chat_key = str(body.get("chat_key") or "").strip()
+        if not account_id or not chat_key:
+            raise HTTPException(400, "account_id / chat_key required")
+        from src.ai.persona_voice import (
+            resolve_account_persona_id, resolve_effective_voice_context,
+            set_session_expressiveness)
+        from src.ai.voice_emotion import step_down_expressiveness
+        raw_cfg: Dict[str, Any] = {}
+        if config_manager and hasattr(config_manager, "config"):
+            raw_cfg = config_manager.config or {}
+
+        def _effective() -> Dict[str, Any]:
+            _acc = ""
+            try:
+                _acc = resolve_account_persona_id(raw_cfg, platform, account_id) or ""
+            except Exception:
+                _acc = ""
+            ctx = resolve_effective_voice_context(
+                raw_cfg, persona_id=str(body.get("persona_id") or "") or None,
+                chat_key=chat_key, account_persona_id=_acc or None,
+                contact_key=chat_key, account_id=account_id,
+                platform=platform, text="")
+            return ctx.get("voice_cfg") or {}
+
+        action = str(body.get("action") or "").strip().lower()
+        if action == "step_down":
+            cur = str(_effective().get("voice_expressiveness") or "")
+            level = set_session_expressiveness(
+                platform, account_id, chat_key, step_down_expressiveness(cur))
+        else:
+            level = set_session_expressiveness(
+                platform, account_id, chat_key, body.get("level"))
+        vc = _effective()
+        return {
+            "ok": True,
+            "session": level,
+            "effective": str(vc.get("voice_expressiveness") or ""),
+            "source": str(vc.get("voice_expressiveness_source") or ""),
+        }
 
     @app.get("/api/voice/profiles")
     async def api_voice_profiles(request: Request, _=Depends(api_auth)):
@@ -1557,7 +1668,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
             if hosted:
                 return tr(request, "err.voice.hosted_unavailable")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_routes._voice_missing_message", exc_info=True)
         return tr(request, "err.voice.engine_missing")
 
     def _audit(request: Request, action: str, detail: str) -> None:
@@ -1663,6 +1774,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         _contained = True
                         break
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll", exc_info=True)
                     continue
             if not _contained:
                 raise HTTPException(400, tr(request, "err.voice.media_ref_invalid"))
@@ -1720,7 +1832,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 audio_path.with_suffix(".txt").write_text(
                     reference_text, encoding="utf-8")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll", exc_info=True)
 
         raw_full_cfg: Dict[str, Any] = {}
         if config_manager and hasattr(config_manager, "config"):
@@ -1785,7 +1897,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         audio_path.with_suffix(".txt").write_text(
                             av_ref_text, encoding="utf-8")
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll", exc_info=True)
                 from src.ai.voice_enroll import build_avatar_voice_profile
                 vp_av = build_avatar_voice_profile(
                     reference_audio_path=str(audio_path), speaker_id=safe,
@@ -1809,11 +1921,11 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         try:
                             av_client.register_spk(load_reference_b64(str(audio_path)))
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll._warm", exc_info=True)
 
                     _th.Thread(target=_warm, name="avatar-enroll-warm", daemon=True).start()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_voice_enroll", exc_info=True)
                 _audit(request, "voice_enroll",
                        f"persona={persona_id} mode=avatar_clone name={preferred_name}"
                        f" src={source_ref.get('kind')} consent={owner_consent}"
@@ -2331,7 +2443,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                 out["engine_dir"].update(hub_synth_breaker_state(
                     _hf.get("base_url"), _hf.get("tts_engine")))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_avatar_voice_status", exc_info=True)
         # 口语化 LLM 档健康：provider 分布（lan 端点/cloud/fallback 成败）+ 端点
         # 冷却 + 落盘缓存命中——「176 的逻辑有没有真的在被调用」看板可见（2026-08-01）
         try:
@@ -2374,6 +2486,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                             "date": row.get("date"),
                         }
                     except Exception:
+                        logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_avatar_voice_status", exc_info=True)
                         continue
             out["voice_quality"] = latest
         except Exception:
@@ -2428,7 +2541,7 @@ def register_voice_routes(app, api_auth, config_manager=None):
                         if pid and r:
                             refs[pid] = r
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_voice_routes.api_avatar_voice_status", exc_info=True)
             if base.is_dir():
                 for pdir in base.iterdir():
                     d = pdir / PRERENDER_DIRNAME

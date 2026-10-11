@@ -52,7 +52,7 @@ class _TS:
     def detect_language(self, text):
         return self._detect
 
-    async def translate(self, text, *, target_lang, source_lang, style="chat"):
+    async def translate(self, text, *, target_lang, source_lang, style="chat", tier=""):
         self.calls.append((text, target_lang, source_lang))
         return self._res
 

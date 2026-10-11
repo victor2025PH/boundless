@@ -166,7 +166,7 @@ def _flood_wait_sec(ex: Exception) -> int:
         if isinstance(v, (int, float)) and v > 0:
             return int(v)
     except Exception:  # noqa: BLE001
-        pass
+        logging.getLogger(__name__).debug("swallowed in _flood_wait_sec", exc_info=True)
     return 0
 
 
@@ -546,7 +546,7 @@ class TelegramQrLogin:
                 try:
                     await self.client.disconnect()
                 except Exception:  # noqa: BLE001
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in TelegramQrLogin._safe_disconnect", exc_info=True)
             if remove_session:
                 f = self.sessions_dir / f"{self.session_name}.session"
                 if f.exists():
@@ -625,7 +625,7 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
             from src.integrations.credpool_stats import get_credpool_stats
             get_credpool_stats().record_login(bool(device_fp))
         except Exception:  # noqa: BLE001
-            pass
+            logging.getLogger(__name__).debug("swallowed in make_provider._provider", exc_info=True)
         login = TelegramQrLogin(
             api_id, api_hash, sessions_dir, proxy=proxy, device_kwargs=device_fp)
         try:
@@ -740,7 +740,7 @@ def make_provider(config: Dict[str, Any], sessions_dir: str = _DEFAULT_SESSIONS_
                         res["account_id"], cfg,
                     )
                 except Exception:  # noqa: BLE001
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in make_provider._provider._persist_if_authorized", exc_info=True)
                 # P2-⑨ 托管凭据随账号落库（复用池内号的 META_CRED_KEY 缓存，runner
                 # 优先读它）：托管机器换组后（隔离/换发），config 注入的是**新组**，
                 # 而本账号 session 是**这组**建的——不落库的话 runner 重启就会拿

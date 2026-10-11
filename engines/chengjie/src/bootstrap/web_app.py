@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 import asyncio
 import os
 from pathlib import Path
@@ -136,7 +137,7 @@ def start_web_server_thread(assistant: Any, server: Any, web_host: str, web_port
                 try:
                     web_loop.close()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in start_web_server_thread._run_web_in_thread", exc_info=True)
         except BaseException as e:  # 必须含 SystemExit：uvicorn bind 失败的真实路径
             exc = e
         reason = classify_web_serve_outcome(
@@ -910,6 +911,13 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                         _cfg_root, domain_files=_domain_files, overrides=_gloss_overrides,
                     )
                     _engines = build_engines(_tr_cfg, assistant.ai_client)
+                    from src.ai.translation_engines import (
+                        free_tier_guard_enabled,
+                        set_free_tier_guard_process,
+                    )
+                    _free_tier_guard = free_tier_guard_enabled(
+                        _tr_cfg.get("free_tier_zero_cost", "enforce"))
+                    set_free_tier_guard_process(_free_tier_guard)
                     # K：引擎置信度智能切换（默认关 → min_confidence=0 行为不变）
                     _conf_sw = (_tr_cfg.get("engines") or {}).get("confidence_switch") or {}
                     _min_conf = (
@@ -945,14 +953,24 @@ def setup_web_app(assistant: Any, web_cfg: dict) -> None:
                         per_lang_order=_per_lang,
                         semantic_embed_fn=_sem_fn,
                         semantic_min_similarity=_sem_min,
+                        free_tier_zero_cost=_free_tier_guard,
                     )
                     assistant.logger.info(
-                        "Phase C/P56 服务已预置（意图LLM=%s, 翻译记忆=%s, 引擎=%s, 术语=%d, 保护词=%d）",
+                        "Phase C/P56 服务已预置（意图LLM=%s, 翻译记忆=%s, 引擎=%s, 术语=%d, 保护词=%d, 免费档零成本=%s）",
                         bool(_ia_cfg.get("use_llm", False)),
                         _tm_store is not None,
                         "→".join(e.name for e in _engines),
                         len(_glossary.terms), len(_glossary.protect),
+                        _free_tier_guard,
                     )
+                    if _free_tier_guard:
+                        _mt = next((e for e in _engines if getattr(e, "name", "") == "ollama_mt"), None)
+                        if _mt is None or not getattr(_mt, "available", False):
+                            assistant.logger.warning(
+                                "免费档翻译已 enforce，但 ollama_mt 不可用（本部署需配置 "
+                                "translation.engines.ollama_mt 的 base_url 与 model，不要写死某台机器）。"
+                                "标准档翻译将转人工，不会改打付费引擎。繁体变体在装了 opencc 时仍可本地转换。"
+                            )
 
                     # ── Phase B：可选统计语种检测（缺库自动跳过，仅精修含糊拉丁） ──
                     try:

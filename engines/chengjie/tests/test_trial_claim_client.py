@@ -58,6 +58,18 @@ def test_claim_persists_state_and_sends_fingerprint(state_file):
     _m, _u, body = site.calls[0]
     assert body["fingerprint"] == "A1B2-C3D4-E5F6-0789"
     assert body["contact"] == "@bob"
+    assert body["product"] == "chatx"
+
+
+def test_matrixx_build_claims_matrixx_not_chatx(state_file):
+    """钉了 matrixx 的安装包，领取单上的产品就是 matrixx。没配仍是 chatx。"""
+    site = FakeSite()
+    cfg = {"licensing": {"trial": {"product": "matrixx"}}}
+    tc.claim("@bob", config=cfg, fetch=site)
+    assert site.calls[0][2]["product"] == "matrixx"
+    assert tc.claim_product(None) == "chatx"
+    assert tc.claim_product({"licensing": {"trial": {"product": "随便"}}}) == "chatx"
+    assert tc.claim_product({"licensing": {"trial": {"product": "one"}}}) == "chatx"
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     assert saved["claim_id"] == "tc_1" and saved["bind_code"] == "BC-1111-2222"
 

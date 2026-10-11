@@ -36,6 +36,25 @@ def test_zh_hant_conversion_quality_spots():
     assert view.get("care") == "主動關懷", view.get("care")
     # 品牌名不受转换伤害（智聊简繁同形）
     assert "智聊" in view.get("brand", "")
+    # 驾驶舱三句为什么：简体源已是人话，OpenCC 必须原样转出，
+    # 不能再靠手改 zh_hant_auto.py（regen 会覆盖手改）。
+    assert view.get("ck.why.draft_pending") == "AI 草稿寫好了，等人看過再發"
+    assert view.get("ck.why.takeover_overdue") == "接手後還沒交還，這段時間 AI 是停的"
+    assert view.get("ck.why.waiting") == "客戶說了最後一句，還沒人回"
+
+
+def test_psn_js_305_tag_text_converts_without_reject():
+    """按钮 title 里的「折叠/展开」要转成繁体，标签骨架不能因此被拒。"""
+    from scripts.i18n_hant import _conversion_ok, _converter, convert_value
+    from src.web.i18n_packs.persona_studio import ZH
+
+    zh = ZH["psn_js_305"]
+    tr = convert_value(_converter(), zh)
+    assert _conversion_ok(zh, tr)
+    assert 'title="摺疊/展開"' in tr
+    assert 'onclick="_grToggleCard(this)"' in tr
+    view = get_translations("zh_hant")
+    assert view.get("psn_js_305") == tr
 
 
 def test_zh_hant_no_tai_variant_pin():

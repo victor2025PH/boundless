@@ -414,7 +414,7 @@ class VoiceCloneClient:
                         detail["model_loaded"] = bool(data["model_loaded"])
                     detail["loading"] = bool(data.get("loading", False))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in VoiceCloneClient.probe_health_detail", exc_info=True)
             return detail
         except Exception as exc:
             logger.debug("[voice_clone_lan] health probe failed %s: %s", url, exc)
@@ -512,7 +512,7 @@ class VoiceCloneClient:
             from src.ai.voice_synth_stats import get_voice_synth_stats
             get_voice_synth_stats().record(default_lang=self.language, used_lang=lang)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in VoiceCloneClient.synthesize_clone", exc_info=True)
 
         # 长文本 → 按句切块逐块合成再拼接（防长句整段生成时截断/漂移）；短文本单块直发。
         chunks = (

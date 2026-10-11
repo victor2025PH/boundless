@@ -400,3 +400,70 @@ async def test_preset_catalog_endpoint(app_on):
         assert {"zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural", "ja-JP-KeitaNeural"} <= ids
         assert any(l["code"] == "ja" for l in d["languages"])
         assert all(v["gender"] in ("female", "male") for v in d["edge_voices"])
+
+
+@pytest.mark.asyncio
+async def test_put_expressiveness_merges_and_survives_mode_patch(app_on):
+    """人设页「语气表达」：patch 只带 expressiveness/emotion 不动三态；改三态不丢表达力；空串清除。"""
+    async with _client(app_on) as c:
+        r = await c.put("/api/personas/profiles/chen_mo", headers=_HDRS,
+                        json=_body({"expressiveness": "restrained", "emotion": "neutral"}, "陈默"))
+        assert r.status_code == 200, r.text
+        vp = (await c.get("/api/personas/profiles/chen_mo", headers=_HDRS)).json()["persona"]["voice_profile"]
+        assert vp["expressiveness"] == "restrained" and vp["emotion"] == "neutral"
+        # 切到预置声，表达力保留
+        r = await c.put("/api/personas/profiles/chen_mo", headers=_HDRS,
+                        json=_body({"voice_mode": "preset", "backend": "edge_tts",
+                                    "voice": "zh-CN-XiaoxiaoNeural", "enabled": True}, "陈默"))
+        assert r.status_code == 200, r.text
+        vp = (await c.get("/api/personas/profiles/chen_mo", headers=_HDRS)).json()["persona"]["voice_profile"]
+        assert vp["voice_mode"] == "preset" and vp["expressiveness"] == "restrained"
+        # 回到「跟随全局」
+        r = await c.put("/api/personas/profiles/chen_mo", headers=_HDRS,
+                        json=_body({"expressiveness": "", "emotion": ""}, "陈默"))
+        assert r.status_code == 200, r.text
+        vp = (await c.get("/api/personas/profiles/chen_mo", headers=_HDRS)).json()["persona"]["voice_profile"]
+        assert vp.get("expressiveness", "") == "" and vp["voice_mode"] == "preset"
+
+
+@pytest.mark.asyncio
+async def test_session_expressiveness_route_roundtrip(app_on, tmp_path, monkeypatch):
+    """收件箱会话级覆写：PUT 钉档 → effective-config 回显 session 来源；step_down 以有效档为基准降一档；清除回落。"""
+    import src.ai.persona_voice as pv
+    monkeypatch.setenv("AITR_CONFIG_PATH", str(tmp_path / "config.yaml"))
+    monkeypatch.setattr(pv, "_session_expr", {})
+    monkeypatch.setattr(pv, "_session_expr_loaded", True)
+    q = "platform=telegram&account_id=acc1&chat_key=chat9"
+    async with _client(app_on) as c:
+        d0 = (await c.get(f"/api/voice/effective-config?{q}", headers=_HDRS)).json()
+        assert d0["ok"] and d0["expressiveness"] == "natural"
+        assert d0["expressiveness_source"] == "global" and d0["expressiveness_session"] == ""
+
+        r = await c.put("/api/voice/session-expressiveness", headers=_HDRS,
+                        json={"platform": "telegram", "account_id": "acc1", "chat_key": "chat9", "level": "生动"})
+        assert r.status_code == 200 and r.json() == {"ok": True, "session": "vivid", "effective": "vivid", "source": "session"}
+        d1 = (await c.get(f"/api/voice/effective-config?{q}", headers=_HDRS)).json()
+        assert d1["expressiveness"] == "vivid" and d1["expressiveness_source"] == "session"
+        assert d1["expressiveness_session"] == "vivid"
+        # 别的会话不受影响
+        d_other = (await c.get("/api/voice/effective-config?platform=telegram&account_id=acc1&chat_key=zzz", headers=_HDRS)).json()
+        assert d_other["expressiveness"] == "natural"
+
+        # 👎 太夸张：vivid → natural（会话钉住）
+        r = await c.put("/api/voice/session-expressiveness", headers=_HDRS,
+                        json={"platform": "telegram", "account_id": "acc1", "chat_key": "chat9", "action": "step_down"})
+        assert r.json()["session"] == "natural" and r.json()["effective"] == "natural"
+        # 到底后原地不动
+        for _ in range(2):
+            r = await c.put("/api/voice/session-expressiveness", headers=_HDRS,
+                            json={"platform": "telegram", "account_id": "acc1", "chat_key": "chat9", "action": "step_down"})
+        assert r.json()["session"] == "restrained"
+
+        # 清除 → 回落全局
+        r = await c.put("/api/voice/session-expressiveness", headers=_HDRS,
+                        json={"platform": "telegram", "account_id": "acc1", "chat_key": "chat9", "level": ""})
+        assert r.json() == {"ok": True, "session": "", "effective": "natural", "source": "global"}
+
+        r = await c.put("/api/voice/session-expressiveness", headers=_HDRS,
+                        json={"platform": "telegram", "chat_key": "chat9", "level": "vivid"})
+        assert r.status_code == 400

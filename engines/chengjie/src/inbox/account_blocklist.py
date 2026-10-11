@@ -53,6 +53,21 @@ CREATE TABLE IF NOT EXISTS account_blocklist (
     PRIMARY KEY (platform, account_id, peer)
 );
 CREATE INDEX IF NOT EXISTS idx_ab_account ON account_blocklist(platform, account_id);
+CREATE INDEX IF NOT EXISTS idx_ab_peer ON account_blocklist(platform, peer);
+-- 智安 P0-2（2026-10-08）：STOP 硬闸审计（只记元数据与命中词，不记消息原文）
+CREATE TABLE IF NOT EXISTS stop_gate_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              REAL NOT NULL DEFAULT 0,
+    path            TEXT NOT NULL DEFAULT '',
+    action          TEXT NOT NULL DEFAULT '',
+    platform        TEXT NOT NULL DEFAULT '',
+    account_id      TEXT NOT NULL DEFAULT '',
+    peer            TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL DEFAULT '',
+    reason          TEXT NOT NULL DEFAULT '',
+    hit             TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sga_ts ON stop_gate_audit(ts);
 """
 
 
@@ -129,10 +144,12 @@ class AccountBlocklist:
     # ── 读 ────────────────────────────────────────────────────────────────
     def get(self, platform: str, account_id: str, peer: str) -> Optional[Dict[str, Any]]:
         with self._lock:
+            if self._conn is None:
+                return None
             row = self._conn.execute(
                 "SELECT * FROM account_blocklist WHERE platform=? AND account_id=? AND peer=?",
                 (_norm(platform).lower(), _norm(account_id), _norm(peer))).fetchone()
-        return dict(row) if row is not None else None
+            return dict(row) if row is not None else None
 
     def is_blocked(self, platform: str, account_id: str, peer: str) -> bool:
         """名单在场且**未解冻** → True。绝不抛。"""
@@ -142,6 +159,89 @@ class AccountBlocklist:
             return False
         return bool(row) and float(row.get("unfrozen_ts") or 0) <= 0
 
+    def is_peer_blocked_any_account(self, platform: str, peer: str) -> bool:
+        """同平台同 external_id 在**任一**账号名单上且未解冻 → True（STOP 硬闸跨账号视角）。绝不抛。"""
+        plat, pr = _norm(platform).lower(), _norm(peer)
+        if not plat or not pr:
+            return False
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return False
+                row = self._conn.execute(
+                    "SELECT 1 FROM account_blocklist WHERE platform=? AND peer=? AND unfrozen_ts<=0 LIMIT 1",
+                    (plat, pr)).fetchone()
+                return row is not None
+        except Exception:
+            return False
+
+    def is_phone_blocked(self, phone_key: str) -> bool:
+        """末 10 位手机号（``stop_gate.phone_key``）在任一平台 / 账号名单上且未解冻 → True。绝不抛。
+
+        peer 形态各异（``6391…@s.whatsapp.net`` / ``phone:91…`` / 纯数字），按「去非数字后以
+        phone_key 结尾」比；名单规模是「要求停联的人」，量级小，全表扫可接受。
+        """
+        pk = "".join(ch for ch in str(phone_key or "") if ch.isdigit())
+        if len(pk) < 7:
+            return False
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return False
+                rows = [str(r["peer"] or "") for r in self._conn.execute(
+                    "SELECT peer FROM account_blocklist WHERE unfrozen_ts<=0 AND peer LIKE ?",
+                    (f"%{pk[-4:]}%",)).fetchall()]
+            for raw in rows:
+                head = raw.split("@", 1)[0]
+                if ":" in head and head.split(":", 1)[0].isalpha():
+                    head = head.split(":", 1)[1]
+                head = head.split(":", 1)[0]
+                d = "".join(ch for ch in head if ch.isdigit())
+                if len(d) >= 7 and d[-10:].endswith(pk[-10:]) and len(pk[-10:]) <= len(d[-10:]):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def audit(self, *, ts: Optional[float] = None, path: str = "", action: str = "",
+              platform: str = "", account_id: str = "", peer: str = "",
+              conversation_id: str = "", reason: str = "", hit: str = "") -> bool:
+        """STOP 硬闸审计一行（``stop_gate_audit``）。只记元数据 + 命中词（≤40 字），不记原文。"""
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO stop_gate_audit(ts, path, action, platform, account_id, peer,"
+                    " conversation_id, reason, hit) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (float(ts if ts is not None else time.time()), _norm(path)[:40], _norm(action)[:20],
+                     _norm(platform).lower()[:20], _norm(account_id)[:80], _norm(peer)[:120],
+                     _norm(conversation_id)[:200], _norm(reason)[:40], _norm(hit)[:40]))
+                self._conn.commit()
+            return True
+        except Exception:
+            logger.debug("[blocklist] stop_gate_audit 写入失败", exc_info=True)
+            return False
+
+    def audit_rows(self, *, limit: int = 200, path: str = "", action: str = "",
+                   conversation_id: str = "") -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM stop_gate_audit WHERE 1=1"
+        args: List[Any] = []
+        if path:
+            sql += " AND path=?"
+            args.append(path)
+        if action:
+            sql += " AND action=?"
+            args.append(action)
+        if conversation_id:
+            sql += " AND conversation_id=?"
+            args.append(conversation_id)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(int(limit))
+        try:
+            with self._lock:
+                return [dict(r) for r in self._conn.execute(sql, args).fetchall()]
+        except Exception:
+            return []
+
     def list_for_account(self, platform: str, account_id: str, *,
                          include_unfrozen: bool = True, limit: int = 5000) -> List[Dict[str, Any]]:
         sql = "SELECT * FROM account_blocklist WHERE platform=? AND account_id=?"
@@ -149,9 +249,11 @@ class AccountBlocklist:
             sql += " AND unfrozen_ts=0"
         sql += " ORDER BY ts DESC LIMIT ?"
         with self._lock:
+            if self._conn is None:
+                return []
             rows = self._conn.execute(
                 sql, (_norm(platform).lower(), _norm(account_id), int(limit))).fetchall()
-        return [dict(r) for r in rows]
+            return [dict(r) for r in rows]
 
     def blocked_peers(self, platform: str, account_id: str) -> List[str]:
         return [str(r["peer"]) for r in self.list_for_account(
@@ -168,8 +270,10 @@ class AccountBlocklist:
                 sql += " AND account_id=?"
                 args.append(_norm(account_id))
         with self._lock:
+            if self._conn is None:
+                return {"total": 0, "active": 0}
             row = self._conn.execute(sql, args).fetchone()
-        return {"total": int(row["n"] or 0), "active": int(row["active"] or 0)}
+            return {"total": int(row["n"] or 0), "active": int(row["active"] or 0)}
 
     # ── 导出 / 导入（随账号迁移包） ───────────────────────────────────────
     def export_rows(self, platform: str, account_id: str) -> List[Dict[str, Any]]:
@@ -276,10 +380,17 @@ class AccountBlocklist:
         return added
 
     def close(self) -> None:
-        try:
-            self._conn.close()
-        except Exception:
-            pass
+        """关掉连接。必须持有 ``_lock``：登录回填的 settle 线程可能正在读同一份名单，
+        3.13 上并发 ``close`` 会把 worker 段错误（xdist 把崩溃记到当时正在跑的无关用例上）。"""
+        with self._lock:
+            conn = self._conn
+            self._conn = None
+            if conn is None:
+                return
+            try:
+                conn.close()
+            except Exception:
+                logger.debug("[blocklist] close 失败", exc_info=True)
 
 
 # ── 单例（按库路径） ─────────────────────────────────────────────────────────

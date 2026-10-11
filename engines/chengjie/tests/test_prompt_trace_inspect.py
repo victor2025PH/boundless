@@ -80,7 +80,7 @@ def test_record_chatx_exposes_public_host_not_rfc1918():
     prompt_trace.reset()
     prompt_trace.record(messages=[{"role": "user", "content": "hi"}],
                         model="chatx", host="bd2026.cc", conv="c", ok=True)
-    assert prompt_trace.list_entries()[0]["public_host"] == "经官网"
+    assert prompt_trace.list_entries()[0]["public_host"] == conv_route.PUBLIC_HOST_CHATX
 
 
 def test_ring_buffer_bounded_and_long_system_clipped():

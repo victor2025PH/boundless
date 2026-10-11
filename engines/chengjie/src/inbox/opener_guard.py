@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -109,6 +110,7 @@ def inspect(text: str, recent_out: Optional[Iterable[str]], *,
             return None
         return {"opener": key, "count": count, "stripped": strip_opener(text)}
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in inspect", exc_info=True)
         return None
 
 

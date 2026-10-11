@@ -110,6 +110,8 @@ class AIChatAssistant:
         # 坐席工作台实时化（D5a）：收件箱后台 ingest 轮询任务 + web_app 引用
         self._web_app = None  # type: Optional[Any]  # noqa: F821
         self._inbox_ingest_task = None
+        self._group_outreach_runner = None
+        self._group_outreach_task = None
         # Phase 11：启动分阶段计时（冷启动归因）；initialize() 早期实例化，失败绝不挡启动
         self._boot_timer = None  # type: Optional[Any]  # noqa: F821
 
@@ -1259,6 +1261,25 @@ class AIChatAssistant:
     async def _maybe_start_companion_proactive(self) -> None:
         from src.companion.proactive_topic import maybe_start_companion_proactive
         return await maybe_start_companion_proactive(self)
+
+    def _maybe_start_group_outreach_runner(self) -> None:
+        """同群开口调度器：把坐席批准的开口在时段内带抖动自动发出（只跑本实例 owns 的号）。
+
+        功能没开（companion.group_members.enabled / 开发者页勾选）→ 不起。
+        """
+        if self._web_app is None:
+            return
+        try:
+            from src.companion.group_member_outreach_runner import build_runner_for_assistant
+            runner = build_runner_for_assistant(self)
+            if runner is None:
+                return
+            self._group_outreach_runner = runner
+            self._group_outreach_task = runner.start()
+            self.logger.info("✅ 同群开口调度器已启动（interval=%ss，仅本实例受管 TG 号）",
+                             int(runner.interval))
+        except Exception:
+            self.logger.debug("同群开口调度器未启动", exc_info=True)
 
     async def _maybe_start_reactivation_loop(self, *args, **kwargs):
         from src.bootstrap.background_tasks import maybe_start_reactivation_loop

@@ -11,12 +11,12 @@ const LANGUAGES = { "zh-CN": "/pricing", en: "/en/pricing", "x-default": "/prici
 export const metadata: Metadata = {
   title: "价格 · 智聊 ChatX 按充值计费 · 不订阅 · 无界科技 BOUNDLESS",
   description:
-    "免费开始，按充值计费，不订阅：下载即用 + 标准翻译永久免费不限字符 + 每月 1,000 Token（注册再送 10,000）。充值 50U 起、1U = 1,500 Token，首充加赠最高 +40%（100U +5% · 200U +10% · 500U +20% · 1000U +30% · 5000U +35% · 10000U +40%）；新人 6U 大礼包 18,000 Token 双倍到账（注册 72 小时内）。企业合作年框与企业级私有化部署面议。",
+    "免费开始，按充值计费，不订阅：下载即用。标准翻译走本部署的本地模型，不按字符扣 Token，也不调用付费翻译接口；本地模型没配好时转人工。每月 1,000 Token（注册再送 10,000）。充值 50U 起、1U = 1,500 Token，首充加赠最高 +40%（100U +5% · 200U +10% · 500U +20% · 1000U +30% · 5000U +35% · 10000U +40%）；新人 6U 大礼包 18,000 Token 双倍到账（注册 72 小时内）。企业合作年框与企业级私有化部署面议。",
   alternates: { canonical: "/pricing", languages: LANGUAGES },
   openGraph: {
     title: "价格 · 免费开始，充多少用多少 · 无界科技",
     description:
-      "智聊 ChatX 充值计费：50U 起充、首充最高 +40%，新人 6U 大礼包双倍到账。标准翻译免费不限量，用尽自动降级永不断线；企业合作 / 私有化部署面议。",
+      "智聊 ChatX 充值计费：50U 起充、首充最高 +40%，新人 6U 大礼包双倍到账。标准翻译走本地模型，不调用付费接口；本地模型没配好时转人工。企业合作 / 私有化部署面议。",
     url: `${SITE_URL}/pricing`,
   },
 };
@@ -28,7 +28,7 @@ const pricingLd = {
   "@type": "Product",
   name: "智聊 ChatX — AI 成交聊天系统（免费开始 · 按充值计费）",
   description:
-    "多平台统一收件箱 + AI 人设承接 + 免费标准翻译 + 人工接管。免费开始，充多少用多少：50U 起充、首充最高 +40%、新人 6U 大礼包双倍到账；标准翻译永久免费不限字符。",
+    "多平台统一收件箱（含抖音企业号与 TikTok 官方客服）+ AI 人设承接 + 本地模型标准翻译 + 人工接管。免费开始，充多少用多少：50U 起充、首充最高 +40%、新人 6U 大礼包双倍到账。标准翻译不调用付费接口；本地模型没配好时转人工。",
   brand: { "@type": "Organization", name: "无界科技 BOUNDLESS" },
   offers: [...tokenPackOffers, ...translateOffers].map(toSchemaOffer),
 };

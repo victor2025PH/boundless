@@ -2208,8 +2208,8 @@ class TestChurnOfferSteer:
         chatx = next(p for p in cat["products"] if p.get("id") == "chatx")
         hot = sc.product_link(cat["site"], chatx)
         entry = sc.product_link(cat["site"], chatx, plan_pref="entry")
-        assert "autochat-team" in hot  # hot 默认
-        assert "autochat-entry" in entry
+        assert "recharge-200" in hot  # hot 默认
+        assert "recharge-50" in entry
         assert "discount" not in entry.lower()
         # 文案分叉：价格敏感提醒 + 信任问题客服口吻
         blk_entry = sc.build_catalog_block(
@@ -2276,7 +2276,7 @@ class TestChurnOfferSteer:
             cfg_obj, platform="telegram", chat_key="100", account_id="a1",
             conversation_id=CONV, user_context=uc, chain="reply",
             inbound_text="再看看价格吧", now=NOW + 60)
-        assert block and "autochat-entry" in block
+        assert block and "recharge-50" in block
         assert "入门档" in block
         assert get_goal_stats().dump()["churn_steered"] >= 1
         assert isinstance(uc.get("_goal_cta"), dict)
@@ -2422,7 +2422,7 @@ class TestChurnOutcomesAndCalibration:
     def test_steer_note_suffix_entry_key(self):
         from src.companion.goals.service import _steer_note_suffix
         note = _steer_note_suffix("太贵", {}, product_id="chatx")
-        assert "入门档" in note and "autochat-entry" in note
+        assert "入门档" in note and "recharge-50" in note
         assert "折扣" in note
         assert "客服收口" in _steer_note_suffix("没用起来", {})
         assert _steer_note_suffix("", {}) == ""
@@ -2446,7 +2446,7 @@ class TestChurnOutcomesAndCalibration:
         wb = mem_store.find_active_goal(conversation_id=CONV)
         assert wb is not None and wb["created_by"] == "winback_auto"
         note = str((wb.get("params") or {}).get("note") or "")
-        assert "太贵" in note and "autochat-entry" in note
+        assert "太贵" in note and "recharge-50" in note
         assert "不承诺折扣" in note
 
     def test_readiness_route_includes_calibration(self):

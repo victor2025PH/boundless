@@ -252,12 +252,12 @@ def test_garbled_wired_into_preview_route_and_frontend():
     assert "_redispatch_garbled_to_edge" in vr
     assert 'clone_lang_garbled:' in vr
     for tree in ("shared", "desktop/renderer/shared"):
-        js = (repo / tree.replace("/", "\\") / "copilot" / "components"
-              / "cp-voice.js").read_text(encoding="utf-8")
+        # 不要把 / 换成 \：Linux 上那会把 desktop/renderer/shared 收成一个路径分量。
+        base = repo.joinpath(*tree.split("/"))
+        js = (base / "copilot" / "components" / "cp-voice.js").read_text(encoding="utf-8")
         assert "blockNoteKey" in js, tree
         assert '"garbled"' in js, tree
-        i18n = (repo / tree.replace("/", "\\") / "copilot" / "i18n"
-                / "cp-i18n.js").read_text(encoding="utf-8")
+        i18n = (base / "copilot" / "i18n" / "cp-i18n.js").read_text(encoding="utf-8")
         for k in ("cp.voice.garbled_note", "cp.voice.garbled_block_t",
                   "cp.voice.std_voice_note"):
             assert i18n.count(f'"{k}"') >= 2, f"{tree} 缺双语词条 {k}"

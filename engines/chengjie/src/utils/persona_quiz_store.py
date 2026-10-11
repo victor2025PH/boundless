@@ -102,6 +102,7 @@ class PersonaQuizStore:
             total = int(report.get("total") or 0)
             n = int(report.get("n") or total or 0)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in PersonaQuizStore.save_report", exc_info=True)
             return None
         persona_name = str(report.get("persona_name") or "")
         items = report.get("items") if isinstance(report.get("items"), list) else []
@@ -150,6 +151,7 @@ class PersonaQuizStore:
         try:
             rid = int(report_id)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in PersonaQuizStore.get_report", exc_info=True)
             return None
         if not pid or rid <= 0:
             return None

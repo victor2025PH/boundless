@@ -370,6 +370,7 @@ def find_stock_file(persona_id: str, template_id: str, *,
             if p.is_file() and p.stat().st_size >= MIN_STOCK_BYTES:
                 return p
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in find_stock_file", exc_info=True)
             continue
     return None
 

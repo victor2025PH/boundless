@@ -48,7 +48,7 @@ def _telegram_report(config: Dict[str, Any]) -> Dict[str, Any]:
 
 def _whatsapp_report_static(config: Dict[str, Any]) -> Dict[str, Any]:
     from src.integrations.whatsapp_baileys_login import (
-        protocol_enabled, service_base_url,
+        protocol_enabled, service_base_url, sidecar_auth_status,
     )
     enabled = protocol_enabled(config)
     url = service_base_url(config)
@@ -56,9 +56,17 @@ def _whatsapp_report_static(config: Dict[str, Any]) -> Dict[str, Any]:
     if not enabled:
         hints.append("未启用：config.platform_login.whatsapp.protocol_enabled: true")
     hints.append(f"Baileys 微服务地址：{url}（cd services/whatsapp-baileys && npm install && node server.js）")
+    try:
+        auth = sidecar_auth_status()   # 只含 configured/source/file，不含令牌值
+    except Exception:  # noqa: BLE001
+        auth = {"configured": False, "source": "", "file": ""}
+    if enabled and not auth.get("configured"):
+        hints.append("边车入站鉴权未配置：用 services/whatsapp-baileys/start.ps1 启动会自动生成独立令牌"
+                     f"（{auth.get('file') or 'wa_sidecar_token.key'}）")
     return {
         "mode_enabled": enabled,
         "service_url": url,
+        "sidecar_auth": auth,
         "service_reachable": None,   # 由 readiness() 异步补
         "ready": enabled,            # 静态层只能判到「已启用」，可达性见异步层
         "hints": hints,

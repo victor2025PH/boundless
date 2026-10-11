@@ -22,15 +22,25 @@ export interface Cx<T = string> {
  *  `manifest.json` / `announcements.json` 都在这一层，本页与自动更新只认它。 */
 export const CHATX_RELEASE_BASE = "/downloads";
 
-/** 内测渠道指针（L-5 / 老板决策 D-L1，2026-09-06）：smart 包（随包 seed-data 的内测形态）
- *  的自动更新源在 `/downloads/internal/`，更新清单叫 `latest-internal.yml`（electron-builder
- *  `publish.channel=latest-internal` 烘进包内 `resources/app-update.yml`，由 `npm run dist:win`
- *  出包、`website/scripts/publish_chatx.ps1 -Channel internal` 上架）。
- *  **刻意不在任何页面渲染、不进 JSON-LD、不进 manifest**：它不是客户下载物；写在这里只为
- *  把两条渠道的布局钉在同一个事实源旁边，改路径时两边一起改（`/dl/downloads/internal/...`
- *  同样走 R2 分流，见 lib/mirror.ts DL_PREFIXES）。 */
+/** 内测渠道（2026-10-04）：smart 包（随包 seed-data，含小界人设/声音/销售知识库）
+ *  的自动更新源在 `/downloads/internal/`，更新清单叫 `latest-internal.yml`。
+ *  公开按钮仍只认上面的 clean 包；内测是下载页上的第二链接，不进 JSON-LD、不进公开 manifest。
+ *  `/dl/downloads/internal/...` 走 R2 分流（lib/mirror.ts DL_PREFIXES）。 */
 export const CHATX_INTERNAL_RELEASE_BASE = "/downloads/internal";
 export const CHATX_INTERNAL_UPDATE_MANIFEST = `${CHATX_INTERNAL_RELEASE_BASE}/latest-internal.yml`;
+
+/** 内测安装包。公开 download 字段不要改成这一份。sha256/size 在安装包上架后填。 */
+export const CHATX_INTERNAL_BETA = {
+  version: "1.0.109",
+  filename: "ChatX-Setup-1.0.109.exe",
+  url: `${CHATX_INTERNAL_RELEASE_BASE}/ChatX-Setup-1.0.109.exe`,
+  size: { zh: "574 MB", en: "574 MB" },
+  sha256: "5700e0017496b0cdb192eadae414d63fd704b1454e0a205351a0069cb1c3a8c1",
+  label: {
+    zh: "内测更新渠道（与上面同一安装包）",
+    en: "Internal update channel (same installer as above)",
+  },
+};
 
 /** lite 定制档渠道（2026-09-06 老板「需要拍板的按建议做」）：`npm run dist:win:lite` 出的包
  *  烘入 `publish.channel=latest-lite`，自动更新只在 `/downloads/lite/` 内走——此前 lite 跟公共
@@ -45,14 +55,14 @@ export const CHATX = {
     // 会被 AI 当事实引用。2026-09-02 随 1.0.70 发版同步（发版流程：改这里四个值
     // version/size/filename/sha256，与 /downloads/manifest.json 对齐，gate:content 检查 5 钉住）。
     // 2026-09-04 随 1.0.73 发版同步；2026-09-06 随 1.0.74 发版同步（K-5 ③）；2026-09-06 随 1.0.75 发版同步（L-7 E）；2026-09-07 随 1.0.76 发版同步（M-6 C）；2026-09-08 随 1.0.77 发版同步（N-5 E）；2026-09-08 随 1.0.78 发版同步（R78）；2026-09-10 随 1.0.79 发版同步（R79）；2026-09-11 随 1.0.80 发版同步（R80）；2026-09-11 随 1.0.81 发版同步（R81，单一版本）；2026-09-11 随 1.0.82 发版同步（R82）；2026-09-12 随 1.0.84 发版同步（R84）；2026-09-13 随 1.0.85 发版同步（R85）；2026-09-16 随 1.0.86 发版同步（R86）；2026-09-17 随 1.0.87 发版同步（R87）；2026-09-18 随 1.0.88 发版同步（R88）；2026-09-18 随 1.0.89 发版同步（R89）。
-    version: "1.0.95",
-    size: { zh: "470 MB", en: "470 MB" },
-    filename: "ChatX-Setup-1.0.95.exe",
+    version: "1.0.109",
+    size: { zh: "574 MB", en: "574 MB" },
+    filename: "ChatX-Setup-1.0.109.exe",
     os: { zh: "Windows 10 / 11（64 位）", en: "Windows 10 / 11 (x64)" },
-    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.95.exe`,
+    url: `${CHATX_RELEASE_BASE}/ChatX-Setup-1.0.109.exe`,
     /** 与实际上架 /downloads/ 的安装包一致（scripts/gen-chatx-manifest.ps1 计算）；
      *  运行时会被 manifest.json 的值覆盖。 */
-    sha256: "89f0e59cd659c1ff173d7220cb7dd7c5b7dabdc518de310a1560f8224421061d",
+    sha256: "5700e0017496b0cdb192eadae414d63fd704b1454e0a205351a0069cb1c3a8c1",
     /** 运行时清单（打包脚本生成，含 version/size/sha256/signed）。 */
     manifestUrl: `${CHATX_RELEASE_BASE}/manifest.json`,
     macNote: {
@@ -106,8 +116,8 @@ export const CHATX = {
         title: { zh: "登录工作台并接入渠道", en: "Sign in and connect channels" },
         time: { zh: "约 5–10 分钟", en: "~5–10 min" },
         detail: {
-          zh: "用默认管理员账号登录后，在「渠道中心」接入你的聊天账号（Telegram / WhatsApp / Messenger / LINE 等）。**无需填写任何云 API Key**——翻译与智能回复经官网安全通道自动可用。",
-          en: "Sign in with the default admin account and connect chat accounts in Channel Center (Telegram / WhatsApp / Messenger / LINE and more). **No cloud API key to enter** — translation and smart replies work via our secure gateway.",
+          zh: "用默认管理员账号登录后，在「渠道中心」接入官方聊天账号（Telegram、WhatsApp、Messenger、LINE，以及抖音企业号、TikTok 官方客服等）。个人抖音号和个人 TikTok 号不能在智聊里网页登录，个人号获客是智拓；智控是另一套矩阵。**无需填写云 API Key**。AI 回复经官网安全通道；标准翻译走本部署自己的本地模型，本地模型没配好时这条翻译转人工，不会改用付费引擎。",
+          en: "Sign in with the default admin account and connect official chat accounts in Channel Center (Telegram, WhatsApp, Messenger, LINE, plus Douyin enterprise and TikTok official customer service). Personal Douyin and personal TikTok accounts cannot web-login inside ChatX — personal-account outreach is ReachX, and MatrixX is a separate fleet. **No cloud API key to enter.** AI replies use our secure gateway. Standard translation uses this deployment's own local model; if that model is not configured, the line waits for a person instead of switching to a paid engine.",
         },
       },
       {
@@ -130,8 +140,8 @@ export const CHATX = {
       {
         q: { zh: "需要自己配置 AI 的 API Key 吗？", en: "Do I need my own AI API key?" },
         a: {
-          zh: "不需要。智聊托管版启动后会经官网验证本机并走我们的云端 AI 通道，**Key 只在服务端**，工作台里看不到、也无需填写。AI 用量按 Token 计量（标准翻译免费、不耗 Token）；余额与流水在会员中心随时可查，用尽可自助购买 Token 包，也不会断线（自动降级到免费引擎）。",
-          en: "No. Managed ChatX verifies this PC with our site and routes AI through our cloud gateway — **the vendor key never leaves the server**. You don't enter or manage keys. AI usage meters in tokens (standard translation is free and costs none); check balance and ledger in the membership center, top up with packs anytime — and you never go offline (graceful fallback to free engines).",
+          zh: "不需要。智聊托管版启动后会经官网验证本机并走我们的云端 AI 通道，**Key 只在服务端**，工作台里看不到、也无需填写。AI 回复按 Token 计量。标准翻译走本部署自己的本地模型，不调用付费翻译接口；本地模型还没配好时，这条翻译会转人工，不会偷偷改用付费引擎。余额与流水在会员中心可查，用尽可自助购买 Token 包。专业/认证翻译才走付费引擎。",
+          en: "No. Managed ChatX verifies this PC with our site and routes AI replies through our cloud gateway — **the vendor key never leaves the server**. You don't enter or manage keys. AI replies meter in tokens. Standard translation uses this deployment's own local model and does not call a paid translation API; if that model is not configured yet, the line waits for a person instead of silently using a paid engine. Balance and ledger are in the membership center. Pro and certified translation still use the paid engines.",
         },
       },
       {
@@ -158,8 +168,8 @@ export const CHATX = {
       {
         q: { zh: "支持哪些聊天平台？", en: "Which chat platforms are supported?" },
         a: {
-          zh: "Telegram、WhatsApp、Messenger、LINE 等主流平台的消息可汇聚到统一收件箱；各平台的接入方式（协议 / 网页会话）在渠道中心里按向导完成。",
-          en: "Telegram, WhatsApp, Messenger, LINE and more aggregate into the unified inbox; each platform's onboarding (protocol / web session) is wizard-guided in Channel Center.",
+          zh: "Telegram、WhatsApp、Messenger、LINE、Instagram、Zalo、QQ 机器人、微信客服和网页聊天，以及抖音企业号小程序私信、TikTok 官方客服。抖音须客户先开口，24 小时内最多回 6 条；TikTok 同样只回复先开口的用户，48 小时内最多 10 条。个人抖音号和个人 TikTok 号没有这条官方私信接口，不能在智聊里网页登录；个人号获客是智拓 ReachX。智控 MatrixX 是另一套 Telegram 多账号矩阵，不是智聊。",
+          en: "Telegram, WhatsApp, Messenger, LINE, Instagram, Zalo, QQ Bot, WeChat Customer Service, web chat, plus Douyin enterprise mini-program DMs and TikTok official customer service. Douyin replies only after the customer writes first, at most 6 within 24 hours. TikTok likewise replies only after the other person writes first, at most 10 within 48 hours. Personal Douyin and personal TikTok accounts are not this official path and cannot web-login inside ChatX; personal-account outreach is ReachX. MatrixX is a separate Telegram fleet, not ChatX.",
         },
       },
       {
@@ -174,13 +184,29 @@ export const CHATX = {
         //（注册送 10,000 体验 Token，与 /pricing、下单页同源），不再引导「找顾问拿试用码」。
         q: { zh: "免费吗？怎么获得正式授权？", en: "Is it free? How do I get a license?" },
         a: {
-          zh: "下载即免费开始（非限时试用）：标准翻译永久免费不限字符 + 每月 1,000 Token，注册再送 10,000 体验 Token。要更多 AI 用量直接充值（50U 起、1U = 1,500 Token、首充最高 +40%；新人 6U 大礼包双倍到账），到账自动开通，无需找顾问。",
-          en: "The download is the free start (not a timed trial): unlimited standard translation forever plus 1,000 tokens/mo, with 10,000 bonus tokens on signup. Need more AI usage? Just top up (from 50U at 1U = 1,500 tokens, up to +40% on your first top-up; newcomer 6U pack at double rate) — auto-activation, no sales call required.",
+          zh: "下载即免费开始（非限时试用）：标准翻译走本地模型，不按字符扣 Token；每月另有 1,000 Token 给 AI 回复，注册再送 10,000 体验 Token。本地模型未配置时标准翻译转人工，而不是改走付费接口。要更多 AI 用量直接充值（50U 起、1U = 1,500 Token、首充最高 +40%；新人 6U 大礼包双倍到账），到账自动开通，无需找顾问。",
+          en: "The download is the free start (not a timed trial): standard translation runs on the local model and does not spend tokens per character, plus 1,000 tokens/mo for AI replies and 10,000 bonus tokens on signup. If the local model is not configured, standard translation waits for a person instead of switching to a paid API. Need more AI usage? Just top up (from 50U at 1U = 1,500 tokens, up to +40% on your first top-up; newcomer 6U pack at double rate) — auto-activation, no sales call required.",
         },
       },
     ],
   },
 } as const;
+
+/** 下载页三句渠道边界。与 product_facts 对齐：官方号进智聊，个人号是智拓，智控是另一套矩阵。 */
+export const CHATX_CHANNEL_LINES = [
+  {
+    zh: "智聊的抖音和 TikTok 只接官方接口：抖音企业号小程序私信、TikTok 官方客服。个人抖音号和个人 TikTok 号不能在智聊里网页登录。",
+    en: "ChatX connects Douyin and TikTok only through official APIs: Douyin enterprise mini-program DMs, and TikTok official customer service. Personal Douyin and personal TikTok accounts cannot web-login inside ChatX.",
+  },
+  {
+    zh: "个人号获客是智拓 ReachX，邀请制单独评估，不是智聊里的一个按钮。",
+    en: "Personal-account outreach is ReachX, invite-only and assessed separately. It is not a button inside ChatX.",
+  },
+  {
+    zh: "智控 MatrixX 是另一套 Telegram 多账号矩阵，和智聊不是同一个客户端。",
+    en: "MatrixX is a separate Telegram multi-account fleet. It is not the ChatX client.",
+  },
+] as const;
 
 /** 便捷取值：按语言取一段文案。 */
 export function cx(field: Cx, lang: BrandLang): string {
@@ -219,18 +245,18 @@ export function chatxDownloadJsonLd(lang: BrandLang, siteUrl: string): object[] 
     isAccessibleForFree: true,
     featureList: zh
       ? [
-          "全渠道统一收件箱（Telegram / WhatsApp / Messenger / LINE）",
+          "全渠道统一收件箱（含抖音企业号与 TikTok 官方客服；个人号获客是智拓，智控是另一套矩阵）",
           "AI 自动拟稿与自动回复",
-          "实时互译（标准翻译永久免费不限量）",
+          "实时互译（标准档走本部署的本地模型，不调用付费翻译接口）",
           "克隆声语音消息",
           "客户画像与跟进提醒",
           "数据保存在本机用户目录",
           "内置自动更新，SHA-256 可校验",
         ]
       : [
-          "Unified omni-channel inbox (Telegram / WhatsApp / Messenger / LINE)",
+          "Unified inbox including Douyin enterprise and TikTok official customer service; personal-account outreach is ReachX, MatrixX is a separate fleet",
           "AI drafting and auto-reply",
-          "Live two-way translation (standard translation free and unlimited)",
+          "Live two-way translation (standard tier uses this deployment's local model, not a paid API)",
           "Cloned-voice voice messages",
           "Customer profiles and follow-up reminders",
           "Data stored in your local user folder",

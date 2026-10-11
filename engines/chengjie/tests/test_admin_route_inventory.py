@@ -47,6 +47,8 @@ _BASELINE = """
 /api/admin/ai-safety-overview	GET
 /api/admin/alert-link-status	GET
 /api/admin/official-webhook-status	GET
+/api/admin/whatsapp-cloud/health	GET
+/api/admin/telegram-bot/health	GET
 /api/admin/buried-conversations	GET
 /api/admin/bug-intake	GET
 /api/admin/bug-intake/notify-pending	POST
@@ -214,7 +216,9 @@ _BASELINE = """
 /api/kb/duplicates	GET
 /api/kb/embed-all	POST
 /api/kb/embed-coverage	GET
+/api/kb/embed-health	GET
 /api/kb/embed-progress	GET
+/api/kb/embed-retry	POST
 /api/kb/embed-stats	GET
 /api/kb/entries	GET
 /api/kb/entries	POST
@@ -249,7 +253,10 @@ _BASELINE = """
 /api/kb/images/{img_id}	DELETE
 /api/kb/implicit-feedback	POST
 /api/kb/import	POST
+/api/kb/import-batches	GET
+/api/kb/import-batches/{batch_id}/undo	POST
 /api/kb/import-csv	POST
+/api/kb/import-template	GET
 /api/kb/import/save	POST
 /api/kb/maintenance-advice	GET
 /api/kb/miss-log	DELETE
@@ -489,6 +496,8 @@ _BASELINE = """
 /api/reply-settings/explain	GET
 /api/reply-settings/follow-slider	POST
 /api/reply-settings/health	GET
+/api/reply-settings/business-domain	GET
+/api/reply-settings/business-domain	POST
 /api/report/daily	GET
 /api/report/weekly	GET
 /api/rollback	POST
@@ -1545,6 +1554,23 @@ _ADDITIONS_2026_08_12_TG_MEMBERS = """
 /api/tg-members/members/export	GET
 /api/tg-members/quota	GET
 /api/tg-members/account-groups	GET
+/api/tg-members/outreach/age	POST
+/api/tg-members/outreach/preview	GET
+/api/tg-members/outreach/queue	POST
+/api/tg-members/outreach/compose	POST
+/api/tg-members/outreach/approve	POST
+/api/tg-members/outreach/skip	POST
+/api/tg-members/outreach/release	POST
+/api/tg-members/outreach/mode	POST
+/api/tg-members/outreach/settings	POST
+/api/tg-members/outreach/followup	POST
+/api/tg-members/outreach/stats	GET
+/api/tg-members/outreach/stop	POST
+/api/tg-members/outreach/resume	POST
+/api/tg-members/gtouch/preview	GET
+/api/tg-members/gtouch/compose	POST
+/api/tg-members/gtouch/skip	POST
+/api/tg-members/gtouch/send	POST
 /tools/tg-members	GET
 """
 _BASELINE += _ADDITIONS_2026_08_12_TG_MEMBERS
@@ -1625,6 +1651,19 @@ _ADDITIONS_2026_08_14_COCKPIT_RESOLVE = """
 /api/cockpit/resolve	POST
 """
 _BASELINE += _ADDITIONS_2026_08_14_COCKPIT_RESOLVE
+
+# 2026-10-08 待人工：「先不回」换浏览器仍在，客户新的一句自动回来。
+_ADDITIONS_2026_10_08_COCKPIT_SNOOZE = """
+/api/cockpit/snooze	POST
+/api/cockpit/unsnooze	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_08_COCKPIT_SNOOZE
+
+# 2026-10-08 待人工：页内回一句成功后计入「今天清掉」。发送仍走统一收件箱。
+_ADDITIONS_2026_10_08_COCKPIT_CLEARED = """
+/api/cockpit/cleared	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_08_COCKPIT_CLEARED
 
 # 2026-08-16 会话删除（boss 直接需求）：工作台删除单会话全部本地数据（全表硬删
 # + 防复活墓碑，真实新消息自动解除回显；拒 agent/viewer）。账号删除的连带清库
@@ -2281,6 +2320,40 @@ _ADDITIONS_2026_09_19_WECHAT_PC_VOICE = """
 /api/setup/wechat_pc/voice/align	POST
 """
 _BASELINE += _ADDITIONS_2026_09_19_WECHAT_PC_VOICE
+
+# 2026-09-21 微信 PC 多账号（`wechat_pc_setup_routes.py` P1/P2：accounts[] 登记 / 窗口枚举 / 24h 收发报表）
+# + 入账台账查询（`ops_inbound_ledger_routes.py`）。
+_ADDITIONS_2026_09_21_WECHAT_PC_MULTI_ACCOUNT = """
+/api/setup/wechat_pc/accounts	GET,POST
+/api/setup/wechat_pc/accounts/{account_id}	DELETE
+/api/setup/wechat_pc/accounts/{account_id}/report	GET
+/api/setup/wechat_pc/windows	GET
+/api/ops/inbound-ledger	GET
+"""
+_BASELINE += _ADDITIONS_2026_09_21_WECHAT_PC_MULTI_ACCOUNT
+
+# 语音表达力档位：会话级覆写（收件箱 cp-voice「语气」行 / 👎 太夸张）
+_ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS = """
+/api/voice/session-expressiveness	PUT
+"""
+_BASELINE += _ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS
+
+# 2026-10-08 把 feat-zhiliao-dm-integration 合并进 KB 自动向量化分支后，基线要对上
+# 集成支上已经合入的端点（Telegram 官方号设 webhook、群脉向导号、停联解冻）。
+# KB 自己的 /api/kb/embed-health 与 /api/kb/embed-retry 仍留在上面的主基线里。
+_ADDITIONS_2026_10_08_DM_INTEGRATION = """
+/api/admin/telegram-bot/set-webhook	POST
+/api/group-show/guide-account	GET
+/api/group-show/guide-account	POST
+/api/workspace/conv/{conversation_id}/stop-contact/unfreeze	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_08_DM_INTEGRATION
+
+# 2026-10-07 坐席把另一号的进行中目标抄到本会话。向导号钉选已在上面的集成基线里。
+_ADDITIONS_2026_10_07_GOAL_ADOPT = """
+/api/goals/adopt-sibling	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_07_GOAL_ADOPT
 
 
 def _parse_baseline():

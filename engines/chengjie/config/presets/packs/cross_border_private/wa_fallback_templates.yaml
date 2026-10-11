@@ -1,0 +1,43 @@
+# 跨境私域 · WhatsApp Cloud API 24h 窗口回退模板（公开包，中性 UTILITY）
+# 客户超过 24 小时没回复后，自由文本会被 Meta 拒（131047）。本文件是提交给 Meta 审核的正文，
+# 不是运行期自动外发。审核通过后，把 name 填进 whatsapp_cloud.window_fallback_template.by_language。
+# {{1}} 只放简短事项（订单/物流/售后问题），不要塞整段聊天，也不要写优惠。
+
+schema: zhiliao.wa_fallback_templates.v1
+pack: cross_border_private
+edition: public
+category: UTILITY
+purpose: window_expired_service_followup
+default_language: zh
+opt_out:
+  zh: 退订
+  en: STOP
+  tl: STOP
+templates:
+  - name: cbp_svc_followup_zh
+    category: UTILITY
+    lang: zh
+    language: zh_CN
+    text_param: true
+    param_max_chars: 80
+    body: "您好，关于您之前咨询的{{1}}，需要您回复后我们才能继续处理。请直接回复本消息，客服会接着帮您跟进。如不需要再收到消息，请回复「退订」。"
+    samples:
+      "1": "订单物流"
+  - name: cbp_svc_followup_en
+    category: UTILITY
+    lang: en
+    language: en
+    text_param: true
+    param_max_chars: 80
+    body: "Hello, about your earlier question on {{1}}, we can continue only after you reply. Please reply to this message and we will follow up on your request. Reply STOP to opt out."
+    samples:
+      "1": "your order status"
+  - name: cbp_svc_followup_fil
+    category: UTILITY
+    lang: tl
+    language: fil
+    text_param: true
+    param_max_chars: 80
+    body: "Kumusta po. Tungkol sa tanong ninyo kanina tungkol sa {{1}}, kailangan po ninyong sumagot para maipagpatuloy namin. Paki-reply lang po sa mensaheng ito. Kung ayaw na po tumanggap ng mensahe, i-reply ang STOP."
+    samples:
+      "1": "order status"

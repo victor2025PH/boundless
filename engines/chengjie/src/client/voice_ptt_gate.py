@@ -84,6 +84,7 @@ def ffprobe_codec_is_opus(path: str) -> Optional[bool]:
             return None
         return codec == "opus"
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in ffprobe_codec_is_opus", exc_info=True)
         return None
 
 
@@ -155,7 +156,7 @@ def ensure_ptt_ogg(
             try:
                 src.unlink(missing_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in ensure_ptt_ogg", exc_info=True)
         return None, why if why.startswith("ptt_") else "ptt_convert_failed"
 
     why2 = ptt_ready_reason(converted)
@@ -164,19 +165,19 @@ def ensure_ptt_ogg(
             if converted != str(src):
                 Path(converted).unlink(missing_ok=True)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in ensure_ptt_ogg", exc_info=True)
         if delete_src:
             try:
                 src.unlink(missing_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in ensure_ptt_ogg", exc_info=True)
         return None, why2 or "ptt_post_convert_invalid"
 
     if delete_src and Path(converted).resolve() != src.resolve():
         try:
             src.unlink(missing_ok=True)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in ensure_ptt_ogg", exc_info=True)
 
     plat = str(platform or "").strip().lower()
     if plat:

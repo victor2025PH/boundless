@@ -407,7 +407,7 @@ class StickerStore:
             with self._lock:
                 self._conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in StickerStore.close", exc_info=True)
 
 
 # ── 模块级单例 ───────────────────────────────────────────────────────────────

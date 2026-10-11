@@ -27,12 +27,12 @@ export const BOT_URL = `https://t.me/${BOT_HANDLE}`;
 // Mini App 深链（群/频道内用 url 按钮打开；如已在 BotFather 配置 Main Mini App 则直开小程序）
 export const MINIAPP_URL = `https://t.me/${BOT_HANDLE}?startapp=autochat`;
 
-// Telegram 频道（案例/动态沉淀）
-export const TELEGRAM_CHANNEL = process.env.NEXT_PUBLIC_TELEGRAM_CHANNEL || "hykj7";
+// Telegram 频道 / 交流群。2026-09-29 用户名由 hykj7 / hykjz 改为 bdccz / bdcc2。
+export const TELEGRAM_CHANNEL = process.env.NEXT_PUBLIC_TELEGRAM_CHANNEL || "bdccz";
 export const CHANNEL_URL = `https://t.me/${TELEGRAM_CHANNEL}`;
 
-// Telegram 讨论组 / 群（互动 + 裂变拉新）
-export const TELEGRAM_GROUP = process.env.NEXT_PUBLIC_TELEGRAM_GROUP || "hykjz";
+// Telegram 讨论组（频道帖会自动转发进这个群）
+export const TELEGRAM_GROUP = process.env.NEXT_PUBLIC_TELEGRAM_GROUP || "bdcc2";
 export const GROUP_URL = `https://t.me/${TELEGRAM_GROUP}`;
 
 /** 官网 UTM 深链：Telegram 出站按钮统一走这里，让「频道/群/机器人 → 官网 → 留资」可归因。

@@ -204,6 +204,19 @@ class HelpKB:
         return out
 
 
+MIN_SCORE_CJK = 57.0
+MIN_SCORE_LATIN = 35.0
+
+
+def min_score_for(query: str, cjk: float = MIN_SCORE_CJK, latin: float = MIN_SCORE_LATIN) -> float:
+    """「有依据」强命中线按问句文字分档：含汉字走中文线，否则走拉丁线。
+
+    两种文字的 BM25 分数不在一个量级：中文按二字切词、命中词多，正样本 75~200；
+    英文按词切，正样本 35~70。共用中文线 = 英文问题几乎全被当成「无依据」拒答。"""
+    q = str(query or "")
+    return float(cjk) if any("\u4e00" <= ch <= "\u9fff" for ch in q) else float(latin)
+
+
 _KB: HelpKB | None = None
 _KB_LOCK = threading.Lock()
 

@@ -314,7 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--llm", action="store_true", help="用真 LLM 生成台词")
     p.add_argument("--persona", action="store_true",
                    help="台词走人设发声链（隐含 --llm）")
-    p.add_argument("--temperature", type=float, default=0.9)
+    p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--seed", type=int, default=0, help="节奏随机种子")
     p.add_argument("--human", action="append", default=[],
                    metavar="位置:谁:说什么", help="模拟真人插话，可重复")

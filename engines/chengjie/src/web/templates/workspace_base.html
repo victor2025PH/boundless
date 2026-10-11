@@ -264,6 +264,25 @@
     --tk-radius-sm:7px;
     --tk-radius-lg:14px;   /* 大卡/向导卡（此前仅靠回落字面量，token 契约补齐） */
     --tk-gap:12px;
+    /* 旧名别名（2026-10-09）：引用在、主题块里没有，暗色恒走亮色回落。
+       接到已有日夜双档令牌上，不另起一套色值。 */
+    --tk-ink:var(--tk-text);
+    --tk-ink-2:var(--tk-text-muted);
+    --tk-ink-3:var(--tk-text-muted);
+    --tk-line:var(--tk-border);
+    --tk-fg-muted:var(--tk-text-muted);
+    --tk-warn:var(--tk-warn-ink);
+    --panel:var(--tk-surface);
+    --panel-2:var(--tk-surface-2);
+    --text:var(--tk-text);
+    --text-muted:var(--tk-text-muted);
+    --warn-fg:var(--tk-warn-ink);
+    --cg-accent:var(--tk-brand);
+    --wx-kf:var(--tk-brand);
+    --wx-badge:#4b5563;
+    --wx-on-badge:#fff;
+    --wx-muted:var(--tk-text-muted);
+    --wx-warn:var(--tk-amber);
   }
   [data-cp-theme="dark"]{
     /* color-scheme：UA 原生件（滚动条/日期控件/未显式着色表单件）跟随深色，消掉
@@ -293,6 +312,7 @@
     --tk-shadow:0 2px 12px rgba(0,0,0,.5);
     --tk-shadow-md:0 10px 32px rgba(0,0,0,.6);
     --tk-ring:color-mix(in srgb, var(--bl-growth,#1e8cf2) 45%, transparent);  /* 品牌智连蓝 focus ring（color-mix 引令牌，换肤自动跟随） */
+    --wx-badge:#6b7280;
   }
   *{box-sizing:border-box;}
   .ws-top a:focus-visible,.ws-top button:focus-visible,button:focus-visible,[role="button"]:focus-visible,a.ws-nav-item:focus-visible{outline:2px solid var(--tk-brand);outline-offset:2px;border-radius:6px;}
@@ -952,7 +972,7 @@
         按钮就该已经不见，而不是等重启。藏而不废：/workspace/cockpit 与
         /api/cockpit/overview 照旧可达，开发者页开该键即恢复本入口。 -#}
     {% if (ui_vis or {}).get('cockpit') %}
-    <a href="/workspace/cockpit" class="ws-nav-ic" data-i18n-title="ck.nav" title="驾驶舱" style="display:inline-flex;align-items:center;gap:5px;"><span data-ui-icon="zap" data-size="13"></span><span class="ws-nav-lbl" data-i18n="ck.nav">驾驶舱</span></a>
+    <a href="/workspace/cockpit" class="ws-nav-ic" data-i18n-title="ck.nav" title="待人工" style="display:inline-flex;align-items:center;gap:5px;"><span data-ui-icon="zap" data-size="13"></span><span class="ws-nav-lbl" data-i18n="ck.nav">待人工</span></a>
     {% endif %}
     {#- 「更多」下拉已删（2026-08-14）：全部条目在后台管理侧栏/命令面板或页面内
         既有入口可达（待办=顶栏跟进药丸+后台Ctrl+K、草稿=收件箱草稿队列按钮、
@@ -1129,7 +1149,7 @@
   var sh=window.__chatxShell;
   if(!sh || typeof sh.stripReady!=='function') return;   // 非桌面壳 / 旧壳（无 P2 能力）
   var readySent=false;
-  var PLAT_COLOR={telegram:'#2aabee',whatsapp:'#25d366',messenger:'#a334fa',instagram:'#e1306c',zalo:'#0068ff',x:'#111827',line:'#06c755',qq:'#1ebafc',qqbot:'#1e63ff'};
+  var PLAT_COLOR={telegram:'#2aabee',whatsapp:'#25d366',messenger:'#a334fa',instagram:'#e1306c',zalo:'#0068ff',x:'#111827',line:'#06c755',qq:'#1ebafc',qqbot:'#1e63ff',douyin:'#fe2c55',tiktok:'#25f4ee'};
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
   // health 词表与壳 railBadge dot 同源同义；查表（勿拼键，键覆盖门禁可 grep）
   var HEALTH_I18N={on:'inbox.acct.web_inj_on',warn:'inbox.acct.web_inj_warn',off:'inbox.acct.web_inj_off',idle:'inbox.acct.web_inj_idle'};
@@ -3133,6 +3153,9 @@ window._pillChainFail=window._pillChainFail||function(fn){
       ? window.Tf('base.sla.tip_head_mix',{n:n,crit:g.crit.length,warn:g.warn.length})
       : window.Tf('base.sla.tip_brk',{n:n});
     if(escN>0) head+=' · '+window.Tf('base.sla.tip_esc_n',{esc:escN});
+    // 和「待人工」页主句口径不同（那边只数近 3 天要人动手的），在 tooltip 里说一句，免得两个数对不上
+    var _ckNote=window.T('base.sla.tip_cockpit');
+    if(_ckNote && _ckNote!=='base.sla.tip_cockpit') head+='\n'+_ckNote;
     slaBadge.title=head+'\n'+g.all.slice(0,8).map(function(it){
       // title 是纯文本上下文：塞 SVG 标记会被原样显示成 <svg...> 乱码 → 用文字符号
       var er=g.escMap[it.conversation_id];
@@ -4920,7 +4943,7 @@ window.__wsMultiWin = (function(){
   }
   function probe(){
     if(done) return;
-    fetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
+    window.apiFetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
       return r.ok ? r.json() : null;
     }).then(function(b){
       if(b&&b.ok&&b.enabled){ inject(b); return; }

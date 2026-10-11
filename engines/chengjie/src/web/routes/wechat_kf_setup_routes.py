@@ -183,7 +183,7 @@ def register_wechat_kf_setup_routes(app: FastAPI, api_auth: Any) -> None:
                 try:
                     Path(tmp_path).unlink()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_wechat_kf_setup_routes.api_kf_account_add", exc_info=True)
         if not up.get("ok"):
             h = describe_kf_errcode(up.get("errcode"))
             return {"ok": False, "stage": "avatar", "errcode": int(up.get("errcode") or -1),

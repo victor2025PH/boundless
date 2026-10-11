@@ -266,6 +266,7 @@ ZH = {
     "base.um.theme_t": "日间 / 夜间 / 跟随系统 三态切换",
     "base.um.today": "今日概览",
     "base.workspace_label": "坐席工作台",
+    "base.sla.tip_cockpit": "这里按回复超时数全站会话：不分新旧，有草稿待审、接管中的也算。要你动手的人看「待人工」页。",
 }
 
 EN = {
@@ -527,8 +528,10 @@ EN = {
     "base.um.theme_t": "Cycle day / night / follow-system",
     "base.um.today": "Today’s overview",
     "base.workspace_label": "Agent Workspace",
+    "base.sla.tip_cockpit": "This counts every chat past the reply-time line, however old, including ones with a pending draft or under takeover. The people who need you are on the \"Needs a person\" page.",
 }
 
 ZH_HANT = {
     "base.pill.l4_clear_stale": "另有 {n} 條超齡稿，進審批台可一鍵清空",
+    "base.sla.tip_cockpit": "這裡按回覆逾時數全站會話：不分新舊，有草稿待審、接管中的也算。要你動手的人看「待人工」頁。",
 }

@@ -375,7 +375,7 @@ class ScheduledReporter:
                     claim = self._store.get_conversation_claim(cid) or {}
                     claimed_by = str(claim.get("agent_id") or claimed_by).strip()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in ScheduledReporter._run_sla_agent_alerts", exc_info=True)
 
                 sla_level = "crit" if wait_sec >= self._sla_crit_sec else "warn"
                 wait_min = round(wait_sec / 60, 1)

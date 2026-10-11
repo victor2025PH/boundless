@@ -33,7 +33,7 @@ def _tc_metric(name: str) -> None:
         from src.monitoring.metrics_store import get_metrics_store
         get_metrics_store().record_inbox_draft_event(name)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _tc_metric", exc_info=True)
 
 
 def _prompt_addenda(
@@ -1139,10 +1139,21 @@ async def _generate_persona_reply_impl(
     except Exception:
         logger.debug("[persona_reply] peer_bot hint 注入跳过", exc_info=True)
 
+    # 对面是智聊，或上一句已经在互相改写：拟稿只握手 / 只确认正事，不把闲聊还回去。
+    try:
+        from src.inbox.effective_mood import merge_agent_instruction as _cx_merge
+        from src.inbox.peer_bot_guard import chatx_draft_hint
+        _cx_hint = chatx_draft_hint(last_inbound, history)
+        if _cx_hint:
+            agent_instruction = _cx_merge(agent_instruction, _cx_hint)
+    except Exception:
+        logger.debug("[persona_reply] chatx hint 注入跳过", exc_info=True)
+
     reply = None
     used_persona = ""
     used_intent = ""
     kb_refs: list = []    # P2 证据链：本稿引用的 KB 条目（前端知识 chip / 工坊 chips 用）
+    kb_decision: Optional[Dict[str, Any]] = None   # P0-5：本稿知识库决策（已引用 N 条 / 未命中 / 未查·原因）
     used_unified = False  # 统一引擎已自带记忆写回 → 避免文末重复写
     goal_applied: Optional[Dict[str, Any]] = None  # P25：目标注入观测（透传前端）
     _goal_skip = _SkipGoalInject(sm, bool(_blocked_now))
@@ -1192,6 +1203,7 @@ async def _generate_persona_reply_impl(
                     used_unified = True
                     _gen_path = "unified"
                     kb_refs = list(_res.get("kb_refs") or [])
+                    kb_decision = _res.get("kb_decision") if isinstance(_res.get("kb_decision"), dict) else None
                     _ga = _res.get("goal_applied")
                     if isinstance(_ga, dict):
                         goal_applied = dict(_ga)
@@ -1345,7 +1357,7 @@ async def _generate_persona_reply_impl(
     try:
         _goal_skip.__exit__(None, None, None)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _generate_persona_reply_impl", exc_info=True)
 
     reply = (reply or "").strip()
     if reply and _cid_q6:
@@ -1359,7 +1371,7 @@ async def _generate_persona_reply_impl(
             from src.inbox.media_claim_block import tick_outbound
             tick_outbound(_cid_q6)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _generate_persona_reply_impl", exc_info=True)
     # ── 出站复读守卫（P0 2026-08-12）：生成稿与我方最近已发消息近重复 → 带
     # 负样本重生成一次（相似度归一化/阈值与 proactive_variety 生产校准同源）。
     # 实录：智能回复几乎逐字复读了 4 天前已发出的回答——对方看过的话原样再说
@@ -1446,6 +1458,8 @@ async def _generate_persona_reply_impl(
         "persona_tier": persona_tier,
         "intent": used_intent,
         "kb_refs": kb_refs,
+        # P0-5：知识库决策（mode/reason/kind/hit/refs/nohit_n/handoff）→ smart-reply 弹层「知识库」行
+        "kb_decision": kb_decision,
         # P25 观测：目标有没有进本条草稿、为什么（meta 缺失=生成走了无引擎
         # 兜底或旧引擎，如实标 unknown 不编原因）
         "goal_applied": goal_applied or {"injected": False, "reason": "unknown"},

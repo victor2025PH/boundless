@@ -161,6 +161,24 @@ def register_drafts_routes(app, *, api_auth):
                 d["l1_reason"] = _r
         except Exception:
             logger.debug("[drafts] L1 原因富集失败（忽略）", exc_info=True)
+        # 草稿条默认只露一条原因。停联 / 要钱单独标 sticky_alert，前端不折进「查看」。
+        try:
+            from src.inbox.cdraft_fold import sticky_alert as _sticky_alert
+            for d in drafts:
+                d["sticky_alert"] = _sticky_alert(d.get("risk_reasons"))
+        except Exception:
+            logger.debug("[drafts] sticky_alert 富集失败（忽略）", exc_info=True)
+        # P0-5（2026-09-29 8E56 实锤）：本稿知识库决策——已引用 N 条 / 未命中 / 本轮未查（原因）。
+        # 起草链（generate_inbox_draft）按会话登记到 kb_policy 进程注册表，这里读回给草稿条 chip；
+        # 「导了库却看不出有没有用上」的黑盒到此为止。无登记（重启 / 非 AI 稿）→ 不带字段。
+        try:
+            from src.utils.kb_policy import peek_decision as _kb_peek
+            for d in drafts:
+                _kd = _kb_peek(str(d.get("conversation_id") or ""))
+                if _kd:
+                    d["kb_decision"] = _kd
+        except Exception:
+            logger.debug("[drafts] kb_decision 富集失败（忽略）", exc_info=True)
         # Q-21 B（#302 / Y82GWM）：稿头「对方语言未知 · 按人设语言（English）回」——起草链登记的
         # 会话语言计划（outbound_translate.build_conv_lang_plan，进程注册表 → KV conv_lang_plan:<cid>）。
         try:

@@ -36,8 +36,17 @@ def test_page_renders_html_shell():
     assert "text/html" in r.headers.get("content-type", "")
     body = r.text
     for marker in ('id="gm-start"', 'id="gm-accts"', 'id="gm-jobs"', 'id="gm-mbody"',
-                   "/api/tg-members/jobs", "/api/accounts"):
+                   'id="gm-outreach"', 'id="gm-out-mode"', 'id="gm-out-compose"',
+                   'id="gm-out-approve-all"', 'id="gm-out-summary"', 'id="gm-out-save"',
+                   "/api/tg-members/jobs",
+                   "/api/tg-members/outreach/preview", "/api/tg-members/outreach/compose",
+                   "/api/tg-members/outreach/approve", "/api/tg-members/outreach/skip",
+                   "/api/tg-members/outreach/mode", "/api/tg-members/outreach/settings",
+                   "/api/tg-members/outreach/followup", "/api/tg-members/outreach/stats",
+                   'id="gm-out-followups"', 'id="gm-out-statsbox"', 'id="gm-out-replied"',
+                   "/api/accounts"):
         assert marker in body, f"管理台缺骨架 {marker}"
+    assert "window.prompt(" not in body     # 开场改稿在卡片里，不再弹 prompt
 
 
 def test_page_renders_even_when_feature_disabled():
@@ -48,10 +57,14 @@ def test_page_renders_even_when_feature_disabled():
 
 def test_page_is_self_contained():
     src = _TPL.read_text(encoding="utf-8")
-    assert "{{" not in src and "{%" not in src   # 无 Jinja（HTMLResponse 直出，braces 安全）
     assert "window.T(" not in src                 # 内联 t() i18n，不依赖 web_i18n
     assert "addEventListener" in src              # 事件绑定走 addEventListener
     assert 'onclick="' not in src and "onclick='" not in src  # 无内联 on* handler
+    # 套了 base.html 时，bare 直出必须先剥掉 Jinja，浏览器不能看到花括号。
+    bare = _client().get("/tools/tg-members?bare=1")
+    assert bare.status_code == 200
+    assert "{{" not in bare.text and "{%" not in bare.text
+    assert 'id="gm-start"' in bare.text
 
 
 def test_html_page_uses_page_auth_not_api_json():

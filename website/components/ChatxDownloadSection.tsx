@@ -25,7 +25,7 @@ import Reveal from "./fx/Reveal";
 import RichText from "./RichText";
 import ProductIcon from "./ProductIcon";
 import ProductScreenshots from "./ProductScreenshots";
-import { CHATX } from "@/lib/chatxContent";
+import { CHATX, CHATX_CHANNEL_LINES, CHATX_INTERNAL_BETA } from "@/lib/chatxContent";
 import { dlHref } from "@/lib/mirror";
 import { track } from "@/lib/track";
 import { CONTACT_EMAIL, CONTACT_EMAIL_URL, CONTACT_URL, TELEGRAM_DISPLAY } from "@/lib/site";
@@ -140,9 +140,14 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
           </div>
           <p className="mx-auto mt-3 max-w-2xl text-slate-400">
             {zh
-              ? "聚合 AI 聊天工作台：全渠道统一收件箱、AI 自动拟稿 / 自动回复、实时互译、语音消息与客户画像，一个桌面客户端全部就位。"
-              : "The omni-channel AI chat workspace: unified inbox, AI drafting / auto-reply, live translation, voice messages and customer profiles — all in one desktop client."}
+              ? "聚合 AI 聊天工作台：全渠道统一收件箱、AI 自动拟稿 / 自动回复、实时互译、语音消息与客户画像，一个桌面客户端全部就位。标准翻译走本部署的本地模型，不调用付费翻译接口；本地模型没配好时这条翻译转人工。"
+              : "The omni-channel AI chat workspace: unified inbox, AI drafting / auto-reply, live translation, voice messages and customer profiles — all in one desktop client. Standard translation uses this deployment's local model and does not call a paid translation API; if that model is not set, the line waits for a person."}
           </p>
+          <ul className="mx-auto mt-4 max-w-2xl space-y-1.5 text-left text-sm leading-relaxed text-slate-300">
+            {CHATX_CHANNEL_LINES.map((line) => (
+              <li key={line.zh}>{line[lang]}</li>
+            ))}
+          </ul>
           {/* 通译并入说明：找「通译客户端」的用户在这里得到确定答案 */}
           <p className="mx-auto mt-4 max-w-2xl rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] px-4 py-3 text-xs leading-relaxed text-slate-300">
             {zh ? (
@@ -182,6 +187,20 @@ export default function ChatxDownloadSection({ lang: forced }: { lang?: BrandLan
                   <Download className="h-4 w-4" />
                   {zh ? "下载" : "Download"} {filename}
                 </a>
+                <a
+                  href={dlHref(CHATX_INTERNAL_BETA.url.replace(/^\//, ""))}
+                  download
+                  onClick={() => track("chatx_download_click", { os: "windows", ver: CHATX_INTERNAL_BETA.version, channel: "internal" })}
+                  className="mt-3 block text-sm text-neon-cyan underline-offset-2 hover:underline"
+                >
+                  {CHATX_INTERNAL_BETA.label[lang]} · v{CHATX_INTERNAL_BETA.version}
+                  {CHATX_INTERNAL_BETA.size[lang] ? ` · ${CHATX_INTERNAL_BETA.size[lang]}` : ""}
+                </a>
+                {CHATX_INTERNAL_BETA.sha256 ? (
+                  <div className="mt-2 break-all font-mono text-[11px] text-slate-600">
+                    SHA-256: {CHATX_INTERNAL_BETA.sha256}
+                  </div>
+                ) : null}
               </div>
               <div className="mt-4 break-all rounded-lg bg-ink-950/60 px-3 py-2 font-mono text-[11px] text-slate-600">
                 SHA-256: {sha256 || (zh ? "发布时公布" : "published at release")}

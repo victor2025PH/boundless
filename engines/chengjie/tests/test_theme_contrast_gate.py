@@ -420,11 +420,10 @@ _COPILOT_DIR = _REPO / "shared" / "copilot"
 _TINY_FONT_CEILINGS = {
     "app.html": 8,
     "components/cp-accounts.js": 6,
-    "components/cp-chain-exec.js": 6,
+    # cp-chain-exec.js / cp-goal.js / cp-nurture.js：2026-10-09 把 <12px 硬编码
+    # 字号改成 var(--cp-fs-tiny,12px)，实测归零，从台账除名（未登记＝天花板 0）。
     "components/cp-collab.js": 2,
-    "components/cp-goal.js": 24,
     "components/cp-kb.js": 5,
-    "components/cp-nurture.js": 7,
     "components/cp-origin.js": 1,
     "components/cp-persona.js": 9,
     "components/cp-tg-members.js": 2,
@@ -546,3 +545,21 @@ def test_gate_detects_violation():
     poisoned["--t3"] = "#cbd5e1"  # 1.5:1 的灾难值
     bad = _run_pairs(_PAIRS_BOTH_THEMES, poisoned, "poisoned")
     assert any("三级文字" in b for b in bad), "篡改 --t3 未被检出，门禁失效"
+
+
+def test_slash_11px_uses_text_sub_on_elevated_panel():
+    """斜杠面板 11px 用 --text-sub。gray3 仍是深底浅字，不改生成表。"""
+    inbox = (_REPO / "src/web/templates/unified_inbox.html").read_text(encoding="utf-8")
+    css = (_REPO / "src/web/static/workspace/unified-inbox.css").read_text(encoding="utf-8")
+    hdr = css.split(".slash-panel-hdr{", 1)[1].split("}", 1)[0]
+    hint = css.split(".slash-hint{", 1)[1].split("}", 1)[0]
+    assert "color:var(--text-sub)" in hdr and "#94a3b8" not in hdr
+    assert "color:var(--text-sub)" in hint and "#94a3b8" not in hint
+    assert 'id="slash-cmd-hint" style="font-size:11px;color:var(--text-sub);"' in inbox
+    tokens = (_REPO / "src/web/static/theme-tokens.css").read_text(encoding="utf-8")
+    assert "--th-ink-gray3:#d1d5db;" in tokens
+    light = _vars_of(_block(_strip_comments(inbox), r":root"))
+    dark = {**light, **_vars_of(_block(_strip_comments(inbox), r'\[data-cp-theme="dark"\]'))}
+    for name, pal in (("light", light), ("dark", dark)):
+        got = contrast("--text-sub", ["--bg-elev"], pal)
+        assert got >= _TEXT_AA, f"{name} --text-sub on --bg-elev is {got:.2f}"

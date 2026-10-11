@@ -27,7 +27,12 @@ KEY_PREFIX = "peer_guard_skip:"
 TEXT_KEYS = {
     "colleague": "inbox.cs.held.colleague",
     "ops_group": "inbox.cs.held.ops_group",
+    "chatx_peer": "inbox.cs.held.chatx_peer",
+    "chatx_handshake": "inbox.cs.held.chatx_handshake",
+    "echo_loop": "inbox.cs.held.echo_loop",
 }
+#: 软停里仍然要上状态带的原因（稿可以拟，但不能让坐席以为还会自动发出）
+VISIBLE_SOFT_HEADS = ("chatx_handshake", "echo_loop")
 GENERIC_TEXT_KEY = "inbox.cs.held.peer_guard"
 
 
@@ -97,7 +102,7 @@ def _parse(raw: Any) -> Optional[Dict[str, Any]]:
         if isinstance(got, dict) and str(got.get("reason") or ""):
             return got
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _parse", exc_info=True)
     return None
 
 
@@ -109,6 +114,7 @@ def get(store: Any, cid: str) -> Optional[Dict[str, Any]]:
     try:
         return _parse(store.get_app_setting(_key(cid), ""))
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in get", exc_info=True)
         return None
 
 

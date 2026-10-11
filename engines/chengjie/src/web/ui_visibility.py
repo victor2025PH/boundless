@@ -11,8 +11,7 @@ simple=True 的既有哲学一致）：
                   cp-tg-members 组件 / App 模式宿主 shared/copilot/app.html
                   的链接卡（静态 hidden 打底 + ui-flags 揭示，2026-08-15 补漏
                   ——首批只接了 collab，这张卡漏了导致桌面副驾常显）。
-                  后端 /api/tg-members* 仍由 group_members.enabled 独立守卫，
-                  两层正交。
+                  后端 /api/tg-members* 在 group_members.enabled 或本键为真时放行。
 - matrix_nav      真机矩阵导航组：侧栏「真机矩阵」组 + 命令面板矩阵项 +
                   矩阵上下文导航（页面本身可直达，仅藏导航面）。
 - group_show      群脉导播台：侧栏「真机矩阵」组内的导播台项 + 命令面板项
@@ -98,8 +97,14 @@ simple=True 的既有哲学一致）：
 
 契约：
 - 配置键 ``ui_visibility.{manual_console,group_extract,matrix_nav,group_show,
-  team_collab,ai_settings}``，缺省 **False=隐藏**（新子系统默认关约定；开启是
+  team_collab,ai_settings}``，代码缺省 **False=隐藏**（新子系统默认关约定；开启是
   运营/开发决策，走 /developer 页写 overlay）。
+- **桌面包例外（1.0.104，老板 2026-10-01「内测用户都可以使用全功能」）**：
+  group_extract / manual_console / team_collab / ai_settings / cockpit 五键进
+  ``feature_registry`` A 类基线（种子显式 true + ``_ensure_baseline`` 补缺席 +
+  ``ConfigManager._migrate_ui_visibility_full_open_1104`` 一次性翻开内测种子写进
+  overlay 的显式 false）。matrix_nav / group_show 不进（真机矩阵导航，桌面包无 RPA
+  真机＝死入口）。服务器实例（无 AITR_DESKTOP_MODE）代码缺省不变。
 - ``ui_visibility.flavor`` / ``ui_visibility.seat_mode`` 是**字符串**键，刻意
   不进 ``UI_VISIBILITY_KEYS`` 布尔家族（``resolve_ui_visibility`` 只搬已知布尔
   键，不会把它们透传进 ``/api/desktop/ui-flags`` 的 flags 里）。
@@ -112,6 +117,7 @@ simple=True 的既有哲学一致）：
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any, Dict, Optional
@@ -124,7 +130,7 @@ UI_VISIBILITY_KEYS = (
     ("group_show", "群脉导播台（侧栏「真机矩阵」组内项 + 命令面板）"),
     ("team_collab", "团队协作（副驾协作注解卡，web + 桌面双宿主）"),
     ("ai_settings", "AI 与转接设置（AI 提示词 & 行为配置卡 / 人工客服转接卡 / 侧栏「人工转接」项）"),
-    ("cockpit", "驾驶舱（工作台顶栏「驾驶舱」入口 /workspace/cockpit）"),
+    ("cockpit", "待人工（工作台顶栏「待人工」入口 /workspace/cockpit）"),
 )
 
 DEFAULTS: Dict[str, bool] = {k: False for k, _ in UI_VISIBILITY_KEYS}
@@ -174,7 +180,7 @@ def _desktop_mode(config: Any) -> bool:
         from src.bootstrap.env_probe import _is_desktop_mode
         return bool(_is_desktop_mode(config))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _desktop_mode", exc_info=True)
     try:
         if str(os.environ.get("AITR_DESKTOP_MODE") or "").strip().lower() in _TRUTHY:
             return True
@@ -247,7 +253,7 @@ def _seat_roles() -> frozenset:
         if roles:
             return frozenset(roles)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _seat_roles", exc_info=True)
     return _SEAT_ROLES_FALLBACK
 
 
@@ -366,5 +372,5 @@ def seat_mode_verdict(config: Any = None, presence: Any = None, *,
             out["mode"] = SEAT_MULTI
             out["source"] = "presence"
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in seat_mode_verdict", exc_info=True)
     return out

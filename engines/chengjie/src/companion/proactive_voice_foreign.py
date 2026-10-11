@@ -175,12 +175,13 @@ async def stage_foreign_voice_file(
         with open(audio_path, "rb") as fh:
             data = fh.read()
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in stage_foreign_voice_file", exc_info=True)
         return None
     finally:
         try:
             os.remove(audio_path)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in stage_foreign_voice_file", exc_info=True)
     if not data:
         return None
     try:

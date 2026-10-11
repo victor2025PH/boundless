@@ -38,6 +38,46 @@ _STOPWORDS = frozenset({
 # 不 import kb_store（避免循环依赖），口径一致性由单测锚定。
 _WORD_RE = re.compile(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]")
 
+# 英文 / 他加禄 / 宿务功能词（2026-10-08 智语 · KB 可用化）：此前只有中文停用词，
+# 于是 "how / you / po / paano / ang" 都算实词——"paano"(5) 还够「强词」，一个疑问词就
+# 让任意含 paano 的条目放行；"po" 又按子串命中 deposit / promo。宁少勿多：只收功能词，
+# "much / magkano / presyo / refund" 这类真信息词不收。
+_LATIN_STOPWORDS = frozenset({
+    # en
+    "how", "what", "when", "where", "why", "who", "which", "can", "could", "would",
+    "should", "will", "me", "you", "we", "they", "he", "she", "him", "her", "our",
+    "us", "them", "have", "has", "had", "get", "got", "please", "pls", "hi", "hello",
+    "hey", "thanks", "thank", "ok", "okay", "yes", "no", "not", "so", "just", "with",
+    "from", "about", "any", "there", "here", "if", "then", "than", "also", "too",
+    "very", "know", "want", "need", "like", "dont", "don", "im", "its", "is", "are",
+    "the", "an", "and", "or", "but", "to", "of", "in", "on", "at", "for", "it", "my",
+    "your", "this", "that", "do", "does", "did", "be", "am", "was", "were",
+    # tl / taglish
+    "ang", "ng", "mga", "sa", "si", "ni", "na", "at", "ay", "po", "opo", "ho", "ba",
+    "naman", "lang", "din", "rin", "pa", "ko", "mo", "ka", "ako", "ikaw", "siya",
+    "kami", "tayo", "kayo", "sila", "ito", "iyan", "yan", "yun", "iyon", "dito",
+    "diyan", "doon", "paano", "pano", "ano", "anong", "saan", "kailan", "bakit",
+    "sino", "may", "meron", "wala", "hindi", "di", "oo", "sige", "salamat", "nga",
+    "kasi", "pero", "kung", "kapag", "pag", "para", "yung", "nang", "gusto",
+    "kailangan", "pwede", "puwede", "talaga", "ha", "eh", "sir", "maam", "mag", "nag",
+    # ceb
+    "unsa", "asa", "ngano", "kinsa", "ug", "nimo", "nako", "kita", "kini", "kana",
+    "dili", "naa", "adto", "diri", "ra", "pud", "sad", "man", "gyud", "palihug",
+    "unsaon",
+})
+
+_LATIN_TOKEN_RE = re.compile(r"^[a-z0-9]+$")
+_BLOB_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _latin_overlaps(token: str, blob_words: "set") -> bool:
+    """拉丁实词按整词比对（容忍单复数 s），不再按子串（po ⊂ deposit 的误放行）。"""
+    if token in blob_words:
+        return True
+    if token.endswith("s") and token[:-1] in blob_words:
+        return True
+    return (token + "s") in blob_words
+
 
 def _tokenize_query(text: str) -> List[str]:
     """查询侧分词：英数整词 + 中文相邻二元组（与 BM25 索引口径对齐）。"""
@@ -69,7 +109,7 @@ def content_tokens(text: str) -> List[str]:
     """提取"实词"token：剔除停用词与单字。"""
     return [
         t for t in _tokenize_query(text)
-        if len(t) >= 2 and t not in _STOPWORDS
+        if len(t) >= 2 and t not in _STOPWORDS and t not in _LATIN_STOPWORDS
     ]
 
 
@@ -108,13 +148,57 @@ def lexical_overlap_ok(
         return False, "query_no_content_tokens"
     blob = entry_blob(entry)
     blob_low = blob.lower()
-    overlap = [t for t in q_tokens if t in blob_low]
+    blob_words = set(_BLOB_WORD_RE.findall(blob_low))
+    overlap = [
+        t for t in q_tokens
+        if (_latin_overlaps(t, blob_words) if _LATIN_TOKEN_RE.match(t) else t in blob_low)
+    ]
     for t in overlap:
         if len(t) >= strong_token_len:
             return True, f"strong:{t}"
     if len(overlap) >= min_content_overlap:
         return True, f"overlap={len(overlap)}"
     return False, (f"weak_overlap={len(overlap)}" if overlap else "no_overlap")
+
+
+# 命中口径（2026-10-08 智语 · KB 可用化）。此前 skill_manager 用 ``hit = bool(kb_ctx)``：
+# kb_ctx 里总带全局硬规则 / 对话示例，而且向量检索永远返回最近邻，于是只要库不空，
+# hits 就恒等于 queries（173：241/241），命中率失去意义。新口径只看首条条目本身：
+# 首条和查询有足够实词重叠，或者首条的向量余弦相似度 ≥ vec_min_sim，才算真命中。
+DEFAULT_VEC_HIT_MIN_SIM = 0.55
+
+
+def judge_kb_hit(
+    query: str,
+    result: Dict[str, Any],
+    *,
+    vec_min_sim: float = DEFAULT_VEC_HIT_MIN_SIM,
+) -> Tuple[bool, str]:
+    """按检索结果的首条判定这次 KB 检索算不算真命中。
+
+    - 没有条目 → ``(False, "no_entries")``（只剩规则 / 示例不算命中）；
+    - 首条实词重叠够（``lexical_overlap_ok``）→ ``(True, "lexical:<why>")``；
+    - 首条带 ``_vec_sim``（kb_store 混合检索时回填的余弦）且 ≥ 阈值 → ``(True, "vector:<sim>")``；
+    - 否则 ``(False, "weak:<why>[,sim=..]")``。
+
+    纯函数：skill_manager 的查询日志、``_EMBED_STATS``、评测 ``src.eval.kb_hit_eval``
+    都走这一处，不让两套口径漂移。
+    """
+    entries = (result or {}).get("entries") or []
+    if not entries or not isinstance(entries[0], dict):
+        return False, "no_entries"
+    top = entries[0]
+    ok, why = lexical_overlap_ok(query, top)
+    if ok:
+        return True, f"lexical:{why}"
+    sim = top.get("_vec_sim")
+    try:
+        sim_f = float(sim) if sim is not None else None
+    except (TypeError, ValueError):
+        sim_f = None
+    if sim_f is not None and sim_f >= float(vec_min_sim):
+        return True, f"vector:{sim_f:.3f}"
+    return False, f"weak:{why}" + (f",sim={sim_f:.3f}" if sim_f is not None else "")
 
 
 def is_media_desc_text(text: str) -> bool:
@@ -148,6 +232,8 @@ _INTERROGATIVE_MARKERS = (
     "几点", "幾點", "几时", "幾時", "哪里", "哪裡", "哪儿", "哪个", "哪個",
     "能不能", "可不可以", "可以吗", "可以嗎", "行吗", "行嗎", "是不是",
     "有没有", "有沒有", "吗", "嗎", "点解", "點解", "咩",
+    # P1-1（2026-09-29）：客服问句常见形态补齐（「注册要多久」「有哪些活动」「啥活动」）
+    "多久", "哪些", "啥",
 )
 
 _REQUEST_PREFIXES = (
@@ -196,6 +282,50 @@ def should_log_kb_miss(text: str) -> bool:
     return looks_like_kb_query(text)
 
 
+def looks_like_info_query(text: str) -> bool:
+    """文本是不是「在问一件事」（P1-1，2026-09-29）：提问样式 **且** 带实词。
+
+    与 :func:`looks_like_kb_query`（学习漏斗入池，偏召回）的差别在实词门：
+    「为什么？」「怎么办呢」全是虚词，不算在问某件事；「那都有什么活动」「注册要多久」
+    有「活动」「注册」这样的实词才算。kb_policy 用它在**人设没表态 kind** 时绕过陪聊闲聊闸
+    （客户明明在问事，不该按闲聊把知识库整段跳过）；显式 / 推断为陪聊的人设不受影响。
+    """
+    t = str(text or "").strip()
+    if not looks_like_kb_query(t):
+        return False
+    return len(_strip_function_words(t)) >= 2
+
+
+# 「在问一件事」的实词判据：剥掉疑问标记 / 求助前缀 / 语气助词 / 高频虚字 / 英文功能词后
+# 还剩 ≥2 个字符才算带实词。二元组分词对「怎么办呢」会留下「么办 / 办呢」这类伪实词，
+# 故这里不用 content_tokens，改按字符层剥离。
+_FUNCTION_CHARS = frozenset("呢吗嗎啊呀哦哈嘛吧咩的了都那这這有是我你他她它们們就还還也又能要会會给給到在和与與跟个個下点點")
+_EN_FUNCTION_WORDS = frozenset({
+    "how", "what", "whats", "why", "where", "which", "when", "who", "can", "could", "do", "does",
+    "did", "is", "are", "was", "were", "i", "you", "we", "it", "there", "this", "that", "the", "a",
+    "an", "to", "of", "me", "my", "your", "please", "any", "have", "has", "get", "want", "need",
+})
+_PUNCT_RE = re.compile(r"[\s，。！？、；：“”‘’（）《》【】,.!?;:'\"()\[\]<>~～\-—_/\\|]+")
+
+
+def _strip_function_words(text: str) -> str:
+    t = str(text or "")
+    for m in sorted(set(_INTERROGATIVE_MARKERS) | set(_REQUEST_PREFIXES), key=len, reverse=True):
+        t = t.replace(m, " ")
+    words = []
+    for w in _PUNCT_RE.split(t):
+        if not w:
+            continue
+        if re.fullmatch(r"[A-Za-z]+", w):
+            if w.lower() not in _EN_FUNCTION_WORDS:
+                words.append(w)
+            continue
+        kept = "".join(ch for ch in w if ch not in _FUNCTION_CHARS)
+        if kept:
+            words.append(kept)
+    return "".join(words)
+
+
 def persona_kb_suppressed(
     persona: Any,
     tier: str,
@@ -220,6 +350,7 @@ __all__ = [
     "is_media_desc_text",
     "is_system_placeholder",
     "lexical_overlap_ok",
+    "looks_like_info_query",
     "looks_like_kb_query",
     "persona_kb_suppressed",
     "should_log_kb_miss",

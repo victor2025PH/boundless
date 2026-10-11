@@ -83,6 +83,14 @@ class Channel:
     #: 单一事实源＝与 /modes 的 notice 同键，保证「弹窗」与「向导」两处话术一致。
     #: 空＝不渲染（官方渠道等无需建议的形态）。
     login_notice_key: str = ""
+    #: official 账号 id 由 **token 推导**时的 token 配置键（Telegram Bot：``<bot_id>:<secret>``，
+    #: account_id＝冒号前的数字 id，与 webhook 入站镜像 / worker 校验同一口径）。非空时优先于
+    #: ``official_account_id_key``，推不出 id（token 格式不对）就**不开通**账号行（不回落 official）。
+    official_account_id_from_token: str = ""
+    #: 凭证保存后是否自动 upsert 一行 ``mode=official`` 账号。
+    #: 抖音 / TikTok 的 account_id 是 OAuth 回来的 open_id，向导里没有静态 id。
+    #: 回落成 ``"official"`` 会和入站镜像对不上号，所以这两家只存凭证，账号行留给授权回调。
+    official_auto_account: bool = True
 
 
 CHANNELS: List[Channel] = [
@@ -106,6 +114,35 @@ CHANNELS: List[Channel] = [
                   help="同 my.telegram.org 页面，与 API ID 配对"),
             Field("telegram.phone_number", "手机号", required=False,
                   help="可选；登录账号时也可现填，格式 +8613800000000"),
+        ],
+    ),
+    Channel(
+        id="telegram_bot",
+        name="Telegram 机器人",
+        # 官方 Bot API 轨（与上面「用你自己的 Telegram 账号」并列、互不影响）：platform=telegram，
+        # mode=official，account_id＝bot 数字 id。与 QQ / QQ 机器人同构，单独一张卡。
+        enable_key="telegram_bot.enabled",
+        official_platform="telegram",
+        official_account_id_from_token="telegram_bot.bot_token",
+        console_url="https://t.me/BotFather",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        intro=(
+            "接入 Telegram 官方机器人（Bot API）：客户私聊你的 bot 即进统一收件箱，"
+            "AI / 坐席都能回复，支持发图片、语音、视频和文件。与「Telegram」个人号是两个独立渠道。"
+        ),
+        api_intro=(
+            "在 @BotFather 建 bot 拿 Bot Token，自拟一个回调密钥；保存后再点下方「设置 Webhook」"
+            "把回调指到 https://<你的域名>/tg/bot/webhook（只在你点按钮时才会改 Telegram 侧设置）。"
+        ),
+        fields=[
+            Field("telegram_bot.bot_token", "Bot Token", secret=True,
+                  help="@BotFather → /newbot 后给的 token（形如 123456:ABC…）"),
+            Field("telegram_bot.webhook_secret", "回调密钥", secret=True,
+                  help="自拟 1-256 位字母、数字、_ 或 -；设置 Webhook 时同值传给 Telegram，回调不带它一律拒收"),
+            Field("telegram_bot.webhook_path", "Webhook 路径", required=False,
+                  help="默认 /tg/bot/webhook；改了要重启后再点「设置 Webhook」"),
+            Field("telegram_bot.start_reply", "/start 欢迎语", required=False,
+                  help="可选；客户首次点「开始」时回这句（留空＝交给 AI 打招呼）"),
         ],
     ),
     Channel(
@@ -346,6 +383,64 @@ CHANNELS: List[Channel] = [
                   secret=True, help="可选；43 位 EncodingAESKey，与 Token 配对"),
             Field("wechat_kf.welcome_text", "欢迎语", required=False,
                   help="可选；客户进入会话时自动发送（官方 20 秒有效期，仅文字）"),
+        ],
+    ),
+    Channel(
+        id="douyin",
+        name="Douyin",
+        enable_key="douyin.enabled",
+        official_platform="douyin",
+        official_auto_account=False,
+        console_url="https://developer.open-douyin.com/",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        intro=(
+            "接入抖音企业号官方私信（小程序 IM）：填好开放平台凭证后，用企业号扫码授权。"
+            "只能回复客户先发来的消息。个人号不是这条通道。"
+        ),
+        api_intro=(
+            "开放平台控制台创建应用，把 Webhook 指到 https://<你的域名>/webhook/douyin，"
+            "订阅 im_receive_msg / im_send_msg / im_enter_direct_msg。"
+            "保存凭证后到接入页用企业号扫码；账号按授权回来的 open_id 登记，不在这里手填。"
+            "24 小时内最多回 6 条，可发图片，上传的视频发不了，没有正在输入和已读回执。"
+        ),
+        fields=[
+            Field("douyin.client_key", "Client Key",
+                  help="抖音开放平台应用的 Client Key"),
+            Field("douyin.client_secret", "Client Secret", secret=True,
+                  help="同页 Client Secret；同时用于 Webhook 验签"),
+            Field("douyin.webhook_path", "Webhook 路径", required=False,
+                  help="默认 /webhook/douyin"),
+            Field("douyin.enter_greeting", "进私问候", required=False,
+                  help="可选；客户进入私信 30 秒内自动发的文字，不要带外链"),
+        ],
+    ),
+    Channel(
+        id="tiktok",
+        name="TikTok",
+        enable_key="tiktok.enabled",
+        official_platform="tiktok",
+        official_auto_account=False,
+        console_url="https://business-api.tiktok.com/",
+        enable_on_ready=["platform_login.orchestrator_enabled"],
+        intro=(
+            "接入 TikTok 企业号官方私信（Business Messaging）：填好应用凭证后按注册地授权。"
+            "只能回复对方先发来的消息。个人号没有官方私信接口。"
+        ),
+        api_intro=(
+            "TikTok for Business 开发者后台创建应用，把 Webhook 指到 "
+            "https://<你的域名>/webhook/tiktok。账号必须带注册地：部分地区没有私信 API，"
+            "图片是否可发也看注册地。48 小时内最多回 10 条，没有正在输入。"
+            "店铺客服是同一平台的另一路（tiktok.shop），不在这张卡里。"
+        ),
+        fields=[
+            Field("tiktok.app_id", "App ID",
+                  help="TikTok for Business 应用的 App ID"),
+            Field("tiktok.secret", "Secret", secret=True,
+                  help="应用 Secret；缺省也用作 Webhook 验签"),
+            Field("tiktok.webhook_secret", "Webhook Secret", required=False, secret=True,
+                  help="可选；留空则用上面的 Secret 验签"),
+            Field("tiktok.webhook_path", "Webhook 路径", required=False,
+                  help="默认 /webhook/tiktok"),
         ],
     ),
     Channel(

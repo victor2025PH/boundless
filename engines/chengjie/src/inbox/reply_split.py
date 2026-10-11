@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import logging
 import random
 import re
 import threading
@@ -494,7 +495,7 @@ def split_reply_parts(
             try:
                 s = collapse_paragraphs(s) or s
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in split_reply_parts", exc_info=True)
         if s.strip():
             out.append(s)
     return out
@@ -663,7 +664,7 @@ def should_split_for_delivery(
         if is_quota_platform(platform):
             return False
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in should_split_for_delivery", exc_info=True)
     if cfg.get("skip_groups", True):
         ct = str(chat_type or "").strip().lower()
         if ct and ct not in ("private", ""):

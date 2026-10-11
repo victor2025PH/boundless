@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import threading
 import time
@@ -72,7 +73,7 @@ def record_instr_sample(
                     tail = [ln for ln in lines if ln.strip()][-_KEEP:]
                     p.write_text("\n".join(tail) + "\n", encoding="utf-8")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in record_instr_sample", exc_info=True)
         return True
     except Exception:
         return False
@@ -100,6 +101,7 @@ def read_instr_samples(
         try:
             row = json.loads(ln)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in read_instr_samples", exc_info=True)
             continue
         if isinstance(row, dict) and row.get("instruction"):
             out.append(row)

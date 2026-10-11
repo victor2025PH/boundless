@@ -350,6 +350,8 @@ ZH = {
     "inbox.acct.qq_driver_demo_t": "QQ 个人号连接边车已随安装包装好，但底层真驱动尚未接入：当前扫码与收发都是演示数据，不能真收发。真驱动通过去风险验证后自动开放。",
     # 微信客服（企业微信官方通道，实施97 线 A，2026-09-07）：与「个人微信」是两个独立渠道
     "inbox.acct.note_wechat_kf": "企业微信官方通道：填自建应用凭证即接通（不扫码），客户扫客服二维码即可咨询；五步引导页约 10 分钟",
+    "inbox.acct.note_douyin": "官方小程序 IM：填 Client Key / Secret 后用企业号扫码授权；只能回复客户先发来的私信，个人号不是这条通道",
+    "inbox.acct.note_tiktok": "官方 Business Messaging：填 App ID / Secret 后按注册地授权；只能回复对方先发来的私信，个人号没有官方接口",
     # ── 账号详情二级面板 P1（概览 / 归属 / 官方资料编辑 / 变更记录）──
     "inbox.acct.head_view_t": "查看账号详情",
     "inbox.acct.detail_title": "账号详情",
@@ -431,6 +433,23 @@ ZH = {
     "inbox.acct.align_fields_lbl": "对齐字段：",
     "inbox.acct.badge_persona": "已绑人设",
     "inbox.acct.badge_persona_t": "该账号已绑定人设「{id}」，可在详情页一键对齐官方资料",
+    # P1-4（2026-09-29）：账号菜单身份行——人设 · 工作类型 · 知识库 · 档位
+    "inbox.acct.ident_unselected": "未选人设",
+    "inbox.acct.kind_support": "客服",
+    "inbox.acct.kind_sales": "销售",
+    "inbox.acct.kind_companion": "陪聊",
+    "inbox.acct.kind_other": "其他",
+    "inbox.acct.kb_must": "知识库必查",
+    "inbox.acct.kb_open": "知识库已开",
+    "inbox.acct.kb_skip": "闲聊不查",
+    "inbox.acct.kb_unselected": "未选人设",
+    "inbox.acct.mode_pending": "半自动（待确认）",
+    "inbox.acct.mode_review": "半自动",
+    "inbox.acct.mode_auto_ai": "全自动",
+    "inbox.acct.mode_manual": "手动",
+    "inbox.acct.mode_multi_choice": "多选一",
+    "inbox.acct.mode_global": "跟随全局",
+    "inbox.acct.ident_t": "这个号现在：{persona} · {kind} · {kb} · {mode}",
     "inbox.acct.badge_churn": "改资料 {n} 次/7天",
     "inbox.acct.badge_churn_t": "近 7 天已成功修改官方资料 {n} 次，改动偏频繁，建议放缓以免平台风控",
     "inbox.acct.align_same_plat_warn": "⚠ 同平台多号将使用相同官方昵称/头像，平台可能将其识别为关联账号：",
@@ -558,6 +577,7 @@ ZH = {
     "inbox.cdraft.dismiss": "忽略",
     "inbox.cdraft.dismiss_t": "本会话内忽略这条草稿",
     "inbox.cdraft.expand": "查看",
+    "inbox.cdraft.sticky_t": "停联或要钱，不折进查看",
     "inbox.cdraft.n": "共 {n} 条",
     "inbox.cdraft.overwrite_confirm": "输入框已有内容，用 AI 草稿覆盖？",
     # ── K-3 B（#183 #177，J-10 交办）：草稿旁「本轮用了 N 条记忆」chips ──
@@ -1116,8 +1136,9 @@ ZH = {
         "客户再发则重置；超窗/超条的发送会被平台丢弃。本系统会在用完前自动停发并等客户回复，"
         "且不拆条、不发缓冲话术。这是平台规则，不是本系统限制。",
     "inbox.connect.win_note_whatsapp":
-        "「24 小时客服窗」＝WhatsApp Cloud API 政策：用户最后一次发消息后 24 小时内可自由回复，"
-        "超窗只能发送预先审核的模板消息。平台规则，非本系统限制。",
+        "个人号 / 协议通道全自动自由文本回复，不需要 Meta 模板。"
+        "「24 小时客服窗」只约束官方 Cloud API：用户最后一次发消息后 24 小时内可自由回复，"
+        "超窗只能发送预先审核的模板；模板可选，没配就进待人工。平台规则，非本系统限制。",
     "inbox.connect.win_note_messenger":
         "Messenger 平台政策：标准消息窗为用户最后互动后 24 小时，超窗发送受平台消息标签规则约束。",
     "inbox.connect.win_note_instagram":
@@ -1309,6 +1330,12 @@ ZH = {
     "inbox.connect.instr_wechat_kf":
         "微信客服走企业微信官方接入：在「接入向导」里填好企微自建应用的 CorpID / Secret 即自动上线，"
         "无需扫码；应用需配可信 IP，客户扫客服二维码即可咨询。",
+    "inbox.connect.instr_douyin":
+        "抖音企业号走官方小程序 IM：在「接入向导」里填好 Client Key / Client Secret，"
+        "再用企业号扫码授权。只能回复客户先发来的私信；个人号不是这条通道。",
+    "inbox.connect.instr_tiktok":
+        "TikTok 走官方 Business Messaging：在「接入向导」里填好 App ID / Secret，"
+        "再按注册地完成授权。只能回复对方先发来的私信；个人号没有官方私信接口。",
     "inbox.connect.instr_ig_web":
         "服务器上已打开 Instagram 官方登录窗口，请在该机器上完成登录（账密 / 2FA）。"
         "完成后本窗口会自动确认——本方式不使用二维码，无需用手机扫描。",
@@ -1621,6 +1648,11 @@ ZH = {
     # #170（L-3 B）：被埋横幅挪出可折叠筛选头、常驻直到归零；文案带「最久多少小时」
     "inbox.buried.banner": "有 {n} 条未读在已归档会话里（最久 {h} 小时）",
     "inbox.buried.banner_nohours": "有 {n} 条未读在已归档会话里",
+    "inbox.langunk.banner": "有 {n} 个会话还不知道对方语言",
+    "inbox.langunk.banner_t": "这是库里记下的会话语言，不是最后一条的猜测。回填脚本默认只预览，--apply 只补 unknown，不会改已经判出来的语言。",
+    "inbox.langunk.view": "只看当前列表里的",
+    "inbox.langunk.view_off": "返回全部",
+    "inbox.langunk.window": "当前列表里能看到 {shown} 个，库里一共 {n} 个",
     "inbox.buried.view_each": "逐条查看",
     "inbox.acct.unread_pop_hint": "角标数字就是下面这几条：点开任一条，或点「全部标已读」即可清零。归档会话里的未读不计入角标，看列表上方的琥珀横幅。",
     # #170 一键取消归档被埋会话（当前平台/账号视角下全部；可撤回）
@@ -2067,6 +2099,20 @@ ZH = {
     "inbox.l1r.global_default": "全局默认半自动",
     "inbox.l1r.other": "需确认：{code}",
     "inbox.l1r.generic": "需要你确认",
+    # P0-5（2026-09-29 8E56）：草稿条「知识库」chip——本稿有没有查库、查到没有、为什么没查
+    "inbox.kbd.cited": "知识库 · 已引用 {n} 条",
+    "inbox.kbd.miss": "知识库 · 未命中",
+    "inbox.kbd.miss_fixed": "知识库 · 未命中 · 已按固定话术",
+    "inbox.kbd.handoff": "知识库 · 连续查无 · 已标需人工",
+    "inbox.kbd.skip": "本轮未查知识库 · {reason}",
+    "inbox.kbd.r.companion_chat": "陪聊闲聊",
+    "inbox.kbd.r.persona_bound": "陪聊人设",
+    "inbox.kbd.r.media_desc": "图片/视频描述",
+    "inbox.kbd.r.other": "{code}",
+    "inbox.kbd.chip_t": "这条草稿的知识库使用情况：客服 / 销售人设每条必查；陪聊人设闲聊不查。查无时按固定话术回一次，客户再追问自动标需人工",
+    "inbox.kbd.miss_add_t": "知识库里没有这一题——点击按客户原话新建条目（标题 / 触发词已预填，保存即向量化）",
+    "inbox.kbd.miss_health": "查看覆盖",
+    "inbox.kbd.miss_health_t": "打开知识库健康行：黄灯会说明是还没配嵌入、正在重试，还是已经失败。每小时草稿上限不变。",
     # Q-21 B（#302 / Y82GWM）：会话语言计划 chip（lp-）——对方语言判不出时按人设 / 账号默认语言起草，明说
     "inbox.lp.fallback_persona": "对方语言未知 · 按人设语言（{lang}）回",
     "inbox.lp.fallback_default": "对方语言未知 · 按账号默认语言（{lang}）回",
@@ -2343,6 +2389,8 @@ ZH = {
     "inbox.plat.qqbot_desc": "QQ 开放平台官方机器人 · 单聊 / 群 @ 被动回复（60 分钟内 4 条）· 填 AppID/AppSecret 即用（无扫码）",
     "inbox.plat.qq_desc": "QQ 个人号 · 用你自己的 QQ 号 · 文字/图片/语音/视频 · 智聊内置连接，扫码即用",
     "inbox.plat.wechat_kf_desc": "微信客服（企业微信官方通道）· 微信用户扫客服二维码即聊，不用加好友 · 填企微凭证即接通，不扫码",
+    "inbox.plat.douyin_desc": "抖音企业号官方私信 · 客户先开口才能回 · 24 小时内最多 6 条 · 填凭证后扫码授权",
+    "inbox.plat.tiktok_desc": "TikTok 企业号官方私信 · 对方先开口才能回 · 48 小时内最多 10 条 · 注册地决定能否发图",
     "inbox.kf.transfer": "转企微人工",
     "inbox.kf.transfer_t": "把这个客户转给企业微信客服后台的接待人员：之后由他们在企微里应答，本端 AI 停手",
     "inbox.kf.transfer_confirm": "转给企微客服后台的接待人员？转出后本端 AI 不再自动回复这位客户。",
@@ -2462,6 +2510,7 @@ ZH = {
     # #144（0902）：出站近重复守卫拦下 AI 回复且没救回、客户在等 → 进待处理并说明原因
     "inbox.handoff.r_dup_guard_blocked": "近重复拦截：AI 回复与刚发过的内容相近未发出，客户在等回复",
     "inbox.handoff.r_fact_gate_blocked": "事实门拦截：AI 回复提到了客户没说过的人或事，未发出，客户在等回复",
+    "inbox.handoff.r_outreach_stalled": "同群开口：对方在等我们回话，已超过两天没人接（含接上过又断了的）——回一句就自动摘标",
     # #207（L-3 A）：打开带「需人工」标的会话 → 顶部原因条（为何/何时/谁打的 + 两条出路）
     "inbox.handoff.r_crisis": "客户消息触发危机升级，需要人看一眼",
     "inbox.handoff.bar": "需人工：{why}——{when} 由{src}打标",
@@ -3045,6 +3094,8 @@ ZH = {
     "inbox.xl.eng_eff_t": "目标语 {tgt}：实际由 {eff} 处理",
     "inbox.xl.eng_no_avail_t": "目标语 {tgt}：无可用引擎",
     "inbox.xl.eng_notready": "翻译未就绪",
+    "inbox.xl.local_mt_gap": "标准翻译转人工：还没配本地模型",
+    "inbox.xl.local_mt_gap_t": "免费档只用本部署的本地翻译模型。没配地址和模型名时不会改打付费引擎，这条需要人来处理。",
     "inbox.xl.eng_off": "未启用",
     "inbox.xl.eng_origin": "原文",
     "inbox.xl.eng_pick": "引擎",
@@ -3601,6 +3652,8 @@ EN = {
     "inbox.acct.qq_driver_demo": "Sidecar installed · driver not wired (demo mode)",
     "inbox.acct.qq_driver_demo_t": "The QQ personal-account connector sidecar ships with the installer, but the real low-level driver is not wired yet: QR login and messages are demo data and nothing is actually sent or received. It opens automatically once the driver passes risk validation.",
     "inbox.acct.note_wechat_kf": "WeCom official channel: connect with your self-built app credentials (no QR); customers scan the service QR to chat; the 5-step guide takes about 10 minutes",
+    "inbox.acct.note_douyin": "Official mini-program IM: save Client Key / Secret, then authorize with the enterprise account. Replies only after the customer writes first; personal accounts are not this path",
+    "inbox.acct.note_tiktok": "Official Business Messaging: save App ID / Secret, then authorize for the account region. Replies only after the other person writes first; personal accounts have no official DM API",
     # ── Account detail panel P1 (overview / attribution / official profile editor / change history) ──
     "inbox.acct.head_view_t": "View account details",
     "inbox.acct.detail_title": "Account details",
@@ -3682,6 +3735,22 @@ EN = {
     "inbox.acct.align_fields_lbl": "Fields to align:",
     "inbox.acct.badge_persona": "Persona",
     "inbox.acct.badge_persona_t": "This account is bound to persona \"{id}\"; align its official profile from the detail panel",
+    "inbox.acct.ident_unselected": "No persona",
+    "inbox.acct.kind_support": "Support",
+    "inbox.acct.kind_sales": "Sales",
+    "inbox.acct.kind_companion": "Companion",
+    "inbox.acct.kind_other": "Other",
+    "inbox.acct.kb_must": "KB required",
+    "inbox.acct.kb_open": "KB on",
+    "inbox.acct.kb_skip": "Skip KB on chit-chat",
+    "inbox.acct.kb_unselected": "No persona",
+    "inbox.acct.mode_pending": "Semi-auto (confirm)",
+    "inbox.acct.mode_review": "Semi-auto",
+    "inbox.acct.mode_auto_ai": "Full auto",
+    "inbox.acct.mode_manual": "Manual",
+    "inbox.acct.mode_multi_choice": "Pick one",
+    "inbox.acct.mode_global": "Follow global",
+    "inbox.acct.ident_t": "This account: {persona} · {kind} · {kb} · {mode}",
     "inbox.acct.badge_churn": "{n} edits/7d",
     "inbox.acct.badge_churn_t": "Official profile changed {n} times in 7 days — slow down to avoid platform risk controls",
     "inbox.acct.align_same_plat_warn": "⚠ Multiple accounts on the same platform will share the same official name/avatar — the platform may treat them as linked:",
@@ -3808,6 +3877,7 @@ EN = {
     "inbox.cdraft.dismiss": "Dismiss",
     "inbox.cdraft.dismiss_t": "Hide this draft for the current conversation",
     "inbox.cdraft.expand": "View",
+    "inbox.cdraft.sticky_t": "Stop-contact or a money ask stays out of View",
     "inbox.cdraft.n": "{n} total",
     "inbox.cdraft.overwrite_confirm": "The composer already has text. Replace it with the AI draft?",
     # ── K-3 B (#183 #177): "memories used this turn" chips next to the draft ──
@@ -4362,9 +4432,10 @@ EN = {
         "before the quota runs out and waits for the customer, never splits replies into bubbles "
         "and never sends holding text. A platform rule, not a limit of this system.",
     "inbox.connect.win_note_whatsapp":
-        "The “24-hour service window” is WhatsApp Cloud API policy: reply freely within 24 hours "
-        "of the user's last message; outside the window only pre-approved template messages can "
-        "be sent. A platform rule, not a limit of this system.",
+        "Personal and protocol WhatsApp replies in full-auto free text and does not need a Meta "
+        "template. The 24-hour service window applies only to the official Cloud API: reply freely "
+        "within 24 hours of the user's last message; outside it only a pre-approved template can "
+        "be sent, and that template is optional. A platform rule, not a limit of this system.",
     "inbox.connect.win_note_messenger":
         "Messenger platform policy: the standard messaging window is 24 hours after the user's "
         "last interaction; sending outside it is governed by message-tag rules.",
@@ -4562,6 +4633,14 @@ EN = {
         "WeChat Customer Service connects via the WeCom official API: save your WeCom self-built "
         "app CorpID / Secret in the Setup Wizard and it goes online automatically — no QR scan. "
         "The app needs a trusted-IP allowlist; customers scan the service QR code to chat.",
+    "inbox.connect.instr_douyin":
+        "Douyin enterprise accounts use official mini-program IM: save the Client Key / Client Secret "
+        "in the Setup Wizard, then authorize with the enterprise account. You can reply only after "
+        "the customer writes first. Personal accounts are not this path.",
+    "inbox.connect.instr_tiktok":
+        "TikTok uses official Business Messaging: save the App ID / Secret in the Setup Wizard, "
+        "then authorize for the account's region. You can reply only after the other person writes "
+        "first. Personal accounts have no official DM API.",
     "inbox.connect.instr_ig_web":
         "An Instagram login window is open on the server — complete login there (password / 2FA). "
         "This window confirms automatically once done. No QR code, no phone scan needed.",
@@ -4855,6 +4934,11 @@ EN = {
     # #170 (L-3 B): buried banner moved out of the collapsible filter header; persistent until zero; carries "oldest N hours"
     "inbox.buried.banner": "{n} unread message(s) sit in archived conversations (oldest {h} h)",
     "inbox.buried.banner_nohours": "{n} unread message(s) sit in archived conversations",
+    "inbox.langunk.banner": "{n} conversations still have an unknown language",
+    "inbox.langunk.banner_t": "This is the language stored on the conversation, not a guess from the latest line. The backfill script previews by default; --apply only fills unknown and does not overwrite a language already decided.",
+    "inbox.langunk.view": "Show the ones in this list",
+    "inbox.langunk.view_off": "Show all",
+    "inbox.langunk.window": "{shown} of them are in this list; {n} are in the library",
     "inbox.buried.view_each": "View one by one",
     "inbox.acct.unread_pop_hint": "The badge number is exactly these conversations: open any of them or click \"Mark all read\" to clear it. Unread in archived conversations is not counted here — see the amber banner above the list.",
     "inbox.buried.unarch": "Unarchive these {n}",
@@ -5291,6 +5375,20 @@ EN = {
     "inbox.l1r.global_default": "Global default: semi-auto",
     "inbox.l1r.other": "Needs confirmation: {code}",
     "inbox.l1r.generic": "Needs your confirmation",
+    # P0-5 (2026-09-29 8E56): draft-bar knowledge-base chip
+    "inbox.kbd.cited": "Knowledge base · {n} entries cited",
+    "inbox.kbd.miss": "Knowledge base · no match",
+    "inbox.kbd.miss_fixed": "Knowledge base · no match · fixed line used",
+    "inbox.kbd.handoff": "Knowledge base · repeated no-match · flagged for a human",
+    "inbox.kbd.skip": "Knowledge base not queried this round · {reason}",
+    "inbox.kbd.r.companion_chat": "companion small talk",
+    "inbox.kbd.r.persona_bound": "companion persona",
+    "inbox.kbd.r.media_desc": "image/video description",
+    "inbox.kbd.r.other": "{code}",
+    "inbox.kbd.chip_t": "How this draft used the knowledge base: support / sales personas query it on every reply; companion personas skip it for small talk. With no match it sends one fixed line, and a repeat question is flagged for a human",
+    "inbox.kbd.miss_add_t": "The knowledge base has no entry for this question — click to create one from the customer's words (title / triggers pre-filled, vectorized on save)",
+    "inbox.kbd.miss_health": "Coverage",
+    "inbox.kbd.miss_health_t": "Open the knowledge health row. Yellow means the embedding endpoint is not configured, a retry is in progress, or the last run failed. The hourly draft cap is unchanged.",
     # Q-21 B (#302 / Y82GWM): conversation language-plan chip (lp-)
     "inbox.lp.fallback_persona": "Peer language unknown · replying in persona language ({lang})",
     "inbox.lp.fallback_default": "Peer language unknown · replying in account default ({lang})",
@@ -5564,6 +5662,8 @@ EN = {
     "inbox.plat.qqbot_desc": "QQ Open Platform official bot · private / group @-mention passive replies (4 per 60 min) · AppID/AppSecret only (no QR)",
     "inbox.plat.qq_desc": "QQ personal account · your own QQ number · text / image / voice / video · built-in connector, just scan to use",
     "inbox.plat.wechat_kf_desc": "WeChat Customer Service (WeCom official channel) · WeChat users scan the service QR to chat, no friend request · connect with WeCom credentials, no QR login",
+    "inbox.plat.douyin_desc": "Douyin enterprise official DM · reply only after the customer writes · at most 6 within 24 hours · credentials, then authorize",
+    "inbox.plat.tiktok_desc": "TikTok business official DM · reply only after they write · at most 10 within 48 hours · region decides image sending",
     "inbox.kf.transfer": "Hand to WeCom agent",
     "inbox.kf.transfer_t": "Hand this customer to a human agent in the WeCom customer-service console; they reply from WeCom and our AI stops",
     "inbox.kf.transfer_confirm": "Hand over to a WeCom console agent? Our AI will stop auto-replying to this customer.",
@@ -5681,6 +5781,7 @@ EN = {
     "inbox.handoff.r_off_hours": "outside business hours",
     "inbox.handoff.r_dup_guard_blocked": "near-duplicate guard: the AI reply was too close to what was just sent and was withheld; the customer is waiting",
     "inbox.handoff.r_fact_gate_blocked": "fact gate: the AI reply mentioned someone or something the customer never talked about and was withheld; the customer is waiting",
+    "inbox.handoff.r_outreach_stalled": "group outreach: they are waiting on us and nobody has answered for over two days (including chats that went quiet again) - reply once and the tag clears itself",
     # #207 (L-3 A): opening a conversation tagged needs-human → reason bar on top (why / when / who + two exits)
     "inbox.handoff.r_crisis": "the customer's message triggered a crisis escalation; a human should take a look",
     "inbox.handoff.bar": "Needs human: {why} — tagged {when} by {src}",
@@ -6261,6 +6362,8 @@ EN = {
     "inbox.xl.eng_eff_t": "Target {tgt}: actually handled by {eff}",
     "inbox.xl.eng_no_avail_t": "Target {tgt}: no available engine",
     "inbox.xl.eng_notready": "Translation not ready",
+    "inbox.xl.local_mt_gap": "Standard translation needs a person: no local model yet",
+    "inbox.xl.local_mt_gap_t": "The free tier uses only this deployment's local translation model. Until its address and model name are set, it will not call a paid engine.",
     "inbox.xl.eng_off": "Off",
     "inbox.xl.eng_origin": "Original",
     "inbox.xl.eng_pick": "Engine",
@@ -6471,6 +6574,7 @@ EN = {
 
 # 本批新增确认框标题/按钮（尚未 regen 进 zh_hant_auto；不覆盖已有 confirm_unr/confirm_safety 以免与生成物撞键）
 ZH_HANT = {
+    "inbox.cdraft.sticky_t": "停聯或要錢，不折進檢視",
     "inbox.mp.confirm_unr_hd": "切換到無限制？",
     "inbox.mp.confirm_unr_ok": "切換",
     "inbox.mp.confirm_safety_hd": "關閉安全剎車？",

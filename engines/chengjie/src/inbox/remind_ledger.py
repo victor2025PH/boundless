@@ -58,6 +58,7 @@ def state_path(config_dir: Optional[Path]) -> Optional[Path]:
     try:
         return Path(config_dir) / STATE_FILENAME
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in state_path", exc_info=True)
         return None
 
 

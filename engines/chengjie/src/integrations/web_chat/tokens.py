@@ -6,6 +6,7 @@ secret 取 web_chat.token_secret，留空则回落 web_admin.secret_key。
 
 from __future__ import annotations
 
+import logging
 import base64
 import hashlib
 import hmac
@@ -47,6 +48,7 @@ def verify_visitor_token(secret: str, token: str, *, max_age_sec: float = 0) -> 
     try:
         payload = json.loads(_b64d(body))
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in verify_visitor_token", exc_info=True)
         return None
     vid = str(payload.get("vid") or "")
     if not vid:

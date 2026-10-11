@@ -56,7 +56,7 @@ def _t(key: str, lang: str = "zh", **fmt: Any) -> str:
         try:
             s = s.format(**fmt)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _t", exc_info=True)
     return s
 
 
@@ -77,7 +77,7 @@ def _peer_name(platform: str, account_id: str, jid: str, app: Any) -> str:
             if name:
                 return name[:30]
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _peer_name", exc_info=True)
     j = str(jid or "")
     return f"…{j[-4:]}" if len(j) > 4 else (j or "?")
 

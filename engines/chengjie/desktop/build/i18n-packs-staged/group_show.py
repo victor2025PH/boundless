@@ -10,15 +10,15 @@ ZH = {
     "gs_guide_title": "第一次用？30 秒看懂这个台子",
     "gs_guide_lead": "把它想成一个微缩剧组：",
     "gs_guide_meta": (
-        "「导演」（系统）拿着剧本大纲，让几个 AI 账号在同一个真实群里，即兴演一场"
-        "看起来像真人闲聊的对话，把产品自然地带进去；旁边的「风控体检」卡片盯着别让"
-        "这批号被看出是一伙机器人。这个页面是它的排练厅——离线彩排 + 风险体检，"
-        "本页永远不发一条真消息。"),
+        "几个 AI 账号在同一个真实群里按一个目标正常聊天。没人自己提到那件事，"
+        "就只聊天；有人提到了，向导才说自己是 AI，并只讲这一件。"
+        "旁边的「风控体检」卡片盯着别让这批号被看出是一伙机器人。"
+        "这个页面可以离线彩排和体检，彩排不发一条真消息。"),
     "gs_guide_flow_h": "推荐顺序（点下面的步骤可直接跳到对应卡片）",
     "gs_guide_glo_h": "名词速查",
     "gs_guide_hide": "收起后不再自动弹出，随时点右下角「?」或本标题展开。",
     "gs_step1": "① 选戏",
-    "gs_step1_d": "挑一个剧本，右边看它每一拍怎么演，确认「校验」是通过",
+    "gs_step1_d": "挑一场已经写了目标的戏。右边没有逐拍列表是正常的：按目标聊天，不念稿",
     "gs_step2": "② 彩排",
     "gs_step2_d": "设演员数，先用占位台词秒出看编排；想看真实文案再勾「用真 LLM」",
     "gs_step3": "③ 体检真号",
@@ -32,7 +32,7 @@ ZH = {
     "gs_gl_soft": "软广",
     "gs_gl_soft_d": "把产品带进对话的力度：0＝只闲聊完全不提，数字越大越明示；* 表示这一拍单独调过、覆盖了剧本默认值",
     "gs_gl_beat": "拍 / beat",
-    "gs_gl_beat_d": "剧本的一个节拍：第几步、由谁说、想表达什么意图——只写意图不写死台词，台词由该号人设 AI 现场生成，所以每次演都不一样",
+    "gs_gl_beat_d": "旧戏才有逐拍大纲：第几步、谁说、什么意图，台词现场生成。现在上场的戏没有拍，按目标聊天",
     "gs_gl_nat": "自然度",
     "gs_gl_nat_d": "这场戏像不像真人：绿＝像真人，黄＝各说各话不像对话，红＝模板复读一眼假。三个指标——熵（用词多样度）、间隔 CV（发言节奏像真人还是像定时器）、均衡度（是不是一个号包场）",
     "gs_gl_cooccur": "共现",
@@ -72,6 +72,9 @@ ZH = {
     "gs_out_js_shows": "真发场次",
     "gs_out_js_rate": "有人接话的比例",
     "gs_out_js_conv": "私聊转化",
+    "gs_out_js_added": "向导添加",
+    "gs_out_js_tested": "开始测试",
+    "gs_out_js_fallback": "可兜底",
     "gs_out_js_reply": "群内回应条数",
     "gs_out_js_lat": "平均首次响应",
     "gs_out_js_pending": "窗口未走完",
@@ -79,6 +82,7 @@ ZH = {
     "gs_out_js_th_group": "群",
     "gs_out_js_th_resp": "开口人数 / 条数",
     "gs_out_js_th_conv": "私聊转化",
+    "gs_out_js_th_guide": "添加 / 测完",
     "gs_out_js_th_verdict": "判词",
     "gs_out_js_v_pending": "窗口未走完",
     "gs_out_js_v_cold": "无人接话",
@@ -86,6 +90,7 @@ ZH = {
     "gs_out_js_v_hot": "带来私聊",
     "gs_out_js_floor": "⚠ 转化数是**下限**：潜水看完戏才来私聊的人无从归因，系统不会假装能算。"
                        "这里只认「在群里发过言、且首次私聊发生在演出之后」这条硬证据链。",
+    "gs_out_js_guide_note": "向导添加＝本群成员在开演后自己先私聊向导号。开始测试＝对方做了这一项功能（guide_trial 事件点了名）。私聊里多说一句不算。可兜底只列人数：窗口走完后向导在群里接过话、人仍没来加。不发兜底私聊。",
     "gs_out_js_trunc": "⚠ 有场次的群内消息取满了上限，反响数被截断（实际只多不少）。",
     "gs_out_js_blind": "⚠ 台账少读了一本（{src}），效果读数偏低——少一本账恰好长得像「没效果」，别当结论看。",
     # 后端 .py 不热更新：接口还没装载时如实说「等重启」，别显示成 404 报错吓人
@@ -235,6 +240,9 @@ ZH = {
     "gs_js_src_inbox": "收件箱",
     "gs_js_src_budget": "开口预算",
     "gs_js_src_roles": "角色台账",
+    "gs_js_src_members": "群成员",
+    "gs_js_src_guide_dm": "向导私聊",
+    "gs_js_src_guide_reply": "向导群内回复",
     # ── 角色集中度（单号自曝，与上面的号对读数是两回事）──
     "gs_role_js_title": "角色集中度：这个号自己像不像托",
     "gs_role_js_max": "最多在几个群演主推",
@@ -273,6 +281,13 @@ ZH = {
     "gs_live_group": "群 key",
     "gs_live_plat": "平台",
     "gs_live_spk": "最多几人开口（可选）",
+    "gs_guide_acct": "固定向导号",
+    "gs_guide_acct_none": "不钉（没有向导）",
+    "gs_guide_acct_save": "钉住这个号",
+    "gs_guide_acct_hint": "只有这个号可以说自己是 AI，并邀请对方私聊试一项功能。不轮换，也不发私聊。",
+    "gs_guide_acct_saved": "已钉住",
+    "gs_guide_acct_cleared": "已取消向导号",
+    "gs_guide_acct_fail": "没钉上",
     "gs_live_run": "只体检，不发消息",
     "gs_live_empty": "选好剧本、填好群 key，点「只体检，不发消息」",
     "gs_live_js_running": "体检中…",
@@ -331,6 +346,7 @@ ZH = {
     # ── 后端响应文案（tr(request, ...)）──
     "err.gs.unavailable": "群戏子系统不可用（模块缺失或未部署）",
     "err.gs.playbook_required": "请先选择剧本",
+    "err.gs.guide_account": "这个号不在注册表里，不能钉成向导",
     "err.gs.playbook_not_found": "没有这个剧本：{pid}",
     "err.gs.rehearse_timeout": "排练超时（真 LLM 生成过慢），请改用占位台词或稍后重试",
     "err.gs.rehearse_failed": "排练失败：{err}",
@@ -352,16 +368,16 @@ EN = {
     "gs_guide_title": "First time here? Get this console in 30 seconds",
     "gs_guide_lead": "Think of it as a tiny film crew:",
     "gs_guide_meta": (
-        "A \"director\" (the system) takes a script outline and has a few AI accounts "
-        "improvise a real-looking peer chat in one real group, weaving a product in "
-        "naturally; the \"risk-check\" cards make sure the accounts don't look like a "
-        "coordinated bot ring. This page is the rehearsal room - offline run-throughs "
-        "plus risk checks. It never sends a single real message."),
+        "A few AI accounts chat normally in one real group toward a single goal. "
+        "Until someone in the room opens that topic, they only chat; once someone "
+        "does, the guide says it is the AI and mentions that one thing. "
+        "The risk-check cards watch that the accounts do not look like one bot ring. "
+        "This page can rehearse and check offline. A rehearsal sends nothing."),
     "gs_guide_flow_h": "Recommended order (click a step below to jump to its card)",
     "gs_guide_glo_h": "Glossary",
     "gs_guide_hide": "Once collapsed it won't pop up again; reopen from the \"?\" button or this title.",
     "gs_step1": "1 Pick",
-    "gs_step1_d": "Choose a playbook; see every beat on the right and confirm it passes validation",
+    "gs_step1_d": "Pick a show that already has a goal. An empty beat list on the right is expected: it chats toward the goal and does not read a script",
     "gs_step2": "2 Rehearse",
     "gs_step2_d": "Set the cast size; stub lines are instant - tick \"real LLM\" to preview actual copy",
     "gs_step3": "3 Check accounts",
@@ -375,7 +391,7 @@ EN = {
     "gs_gl_soft": "Soft ad",
     "gs_gl_soft_d": "How hard the product is woven into the chat: 0 = pure chit-chat, never mentioned; higher = more explicit. * means this beat overrides the playbook default.",
     "gs_gl_beat": "Beat",
-    "gs_gl_beat_d": "One script step: which step, who speaks, what intent - intent only, never fixed lines. The line is generated live by that account's persona AI, so every run differs.",
+    "gs_gl_beat_d": "Only an older show has a beat list: which step, who speaks, what intent, with the line generated live. Shows that ship now have no beats and chat toward a goal.",
     "gs_gl_nat": "Naturalness",
     "gs_gl_nat_d": "How human the show looks: green = human, amber = talking past each other, red = robotic repetition. Three metrics - entropy (word variety), interval CV (human rhythm vs a timer), balance (whether one account hogs the floor).",
     "gs_gl_cooccur": "Co-occurrence",
@@ -416,6 +432,9 @@ EN = {
     "gs_out_js_shows": "Live shows",
     "gs_out_js_rate": "Shows that got a reply",
     "gs_out_js_conv": "DM conversions",
+    "gs_out_js_added": "Added the guide",
+    "gs_out_js_tested": "Started a test",
+    "gs_out_js_fallback": "Fallback",
     "gs_out_js_reply": "In-group replies",
     "gs_out_js_lat": "Avg first response",
     "gs_out_js_pending": "Window still open",
@@ -423,6 +442,7 @@ EN = {
     "gs_out_js_th_group": "Group",
     "gs_out_js_th_resp": "People / messages",
     "gs_out_js_th_conv": "DM conversions",
+    "gs_out_js_th_guide": "Added / tested",
     "gs_out_js_th_verdict": "Verdict",
     "gs_out_js_v_pending": "Window still open",
     "gs_out_js_v_cold": "No one replied",
@@ -431,6 +451,7 @@ EN = {
     "gs_out_js_floor": "⚠ Conversions are a floor: lurkers who DM after watching cannot be "
                        "attributed, and the system will not pretend otherwise. Only the hard "
                        "chain counts - spoke in the group, and first DM came after the show.",
+    "gs_out_js_guide_note": "Guide adds = members of this group who privately messaged the guide account first, after the show started. A test counts only when they did the one named feature (a guide_trial event). Another private message does not count. Fallback is a count only: people the guide answered in the group who still had not added the guide when the window closed. No fallback DM is sent.",
     "gs_out_js_trunc": "⚠ Some shows hit the in-group message cap, so response counts are truncated (the real number is higher).",
     "gs_out_js_blind": "⚠ One ledger could not be read ({src}); outcomes read low - a missing ledger looks exactly like \"no effect\". Don't treat it as a conclusion.",
     "gs_out_js_need_restart": "This capability just shipped; the running process doesn't have the endpoint yet - it activates on the next service restart.",
@@ -587,6 +608,9 @@ EN = {
     "gs_js_src_inbox": "inbox",
     "gs_js_src_budget": "speaker budget",
     "gs_js_src_roles": "role ledger",
+    "gs_js_src_members": "group members",
+    "gs_js_src_guide_dm": "guide DMs",
+    "gs_js_src_guide_reply": "guide replies in group",
     # ── role concentration (a single account outing itself) ──
     "gs_role_js_title": "Role concentration: does this account look like a shill",
     "gs_role_js_max": "Most groups shilled in",
@@ -632,6 +656,13 @@ EN = {
     "gs_live_group": "Group key",
     "gs_live_plat": "Platform",
     "gs_live_spk": "Max speakers (optional)",
+    "gs_guide_acct": "Pinned guide account",
+    "gs_guide_acct_none": "None (no guide)",
+    "gs_guide_acct_save": "Pin this account",
+    "gs_guide_acct_hint": "Only this account may say it is an AI and invite a private try of one feature. It is not rotated, and it does not send a cold DM.",
+    "gs_guide_acct_saved": "Pinned",
+    "gs_guide_acct_cleared": "Guide account cleared",
+    "gs_guide_acct_fail": "Could not pin",
     "gs_live_run": "Check only, don't send",
     "gs_live_empty": "Pick a playbook, fill in the group key, then hit \"Check only, don't send\"",
     "gs_live_js_running": "Checking...",
@@ -690,6 +721,7 @@ EN = {
     # ── backend response copy (tr(request, ...)) ──
     "err.gs.unavailable": "Group-show subsystem unavailable (module missing or not deployed)",
     "err.gs.playbook_required": "Select a playbook first",
+    "err.gs.guide_account": "That account is not in the registry, so it cannot be the guide",
     "err.gs.playbook_not_found": "No such playbook: {pid}",
     "err.gs.rehearse_timeout": "Rehearsal timed out (real-LLM generation too slow). Use stub lines or retry later.",
     "err.gs.rehearse_failed": "Rehearsal failed: {err}",

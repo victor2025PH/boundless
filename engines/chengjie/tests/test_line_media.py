@@ -953,6 +953,7 @@ def test_download_401_refreshes_token_then_retries(monkeypatch):
     """OBS 走裸 GET，不在 okline 的 401 自动刷新圈内（那个钩子只挂在 thrift
     ``post_json`` 上）——token 陈旧时文字链自愈、媒体全灭，必须显式刷新重试。"""
     monkeypatch.setattr(LM.time, "sleep", lambda s: None)
+    monkeypatch.setattr(LM.time, "monotonic", lambda: 1.0)
     refreshed = []
     import src.integrations.line_pull_sync as LPS
     monkeypatch.setattr(LPS, "refresh_client_token",
@@ -979,6 +980,7 @@ def test_download_401_refresh_failure_stops_early(monkeypatch):
 def test_refresh_cooldown_prevents_hammering(monkeypatch):
     """同一 client 冷却窗内只刷一次：refresh token 已死时别每条媒体都白打。"""
     monkeypatch.setattr(LM.time, "sleep", lambda s: None)
+    monkeypatch.setattr(LM.time, "monotonic", lambda: 1.0)
     calls = []
     import src.integrations.line_pull_sync as LPS
     monkeypatch.setattr(LPS, "refresh_client_token",

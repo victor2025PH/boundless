@@ -121,7 +121,7 @@ async def zalo_send_text(
                 logger.warning("[zalo][kill-switch] 冻结发送，跳过（scope=%s）", scope)
                 return {"ok": False, "error": f"kill_switch:{scope}"}
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in zalo_send_text", exc_info=True)
     text = _truncate(text)
     if not text:
         return {"ok": True, "data": {"skipped": "empty"}}

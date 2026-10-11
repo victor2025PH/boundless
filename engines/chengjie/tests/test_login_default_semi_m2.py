@@ -52,8 +52,14 @@ def test_config_yaml_default_is_semi():
     import yaml
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
-    for name in ("config/config.yaml", "config/config.desktop.min.yaml",
-                 "config/config.desktop.internal.yaml"):
+    # config.yaml 被 gitignore，CI 没有这份本机文件。提交的基线是
+    # config.example.yaml；本机若放了 config.yaml，两份都要是 review。
+    names = ["config/config.example.yaml",
+             "config/config.desktop.min.yaml",
+             "config/config.desktop.internal.yaml"]
+    if (root / "config" / "config.yaml").is_file():
+        names.insert(0, "config/config.yaml")
+    for name in names:
         cfg = yaml.safe_load((root / name).read_text("utf-8")) or {}
         ad = ((cfg.get("inbox") or {}).get("auto_draft") or {})
         assert ad.get("automation_mode") == "review", name

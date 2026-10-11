@@ -59,7 +59,7 @@ export const CHATX_TUTORIALS: readonly TutorialEpisode[] = [
   ep("E3", 3, "translate", 63.6,
     { zh: "用客户的母语聊，像老乡一样", en: "Chat in your customer's language" },
     { zh: "拟人互译", en: "Human-like translation" },
-    { zh: "入站一键显示译文，出站用中文写、发出去是对方母语；粤语 / 日文 / 韩文进同一收件箱。标准翻译永久免费。", en: "Inbound shows translations in one tap; write in Chinese and it lands in the customer's language. Standard translation stays free forever." }),
+    { zh: "入站一键显示译文，出站用中文写、发出去是对方母语；粤语 / 日文 / 韩文进同一收件箱。标准翻译走本部署的本地模型；没配好时转人工，不改用付费引擎。", en: "Inbound shows translations in one tap; write in Chinese and it lands in the customer's language. Standard translation uses this deployment's local model; if it is not set, a person takes the line instead of a paid engine." }),
   ep("E4", 4, "ai-reply", 40.9,
     { zh: "仅建议、值守中、全自动", en: "Suggest, standby, or fully automatic" },
     { zh: "AI 拟稿与自动回复", en: "AI drafts & auto-reply" },
@@ -95,7 +95,7 @@ export const CHATX_TUTORIALS: readonly TutorialEpisode[] = [
   ep("E12", 12, "billing", 41.6,
     { zh: "免费开始，用多少充多少", en: "Start free, pay as you go" },
     { zh: "充值与额度", en: "Top-up & quota" },
-    { zh: "会员中心看额度与档位；购买 / 续费按量充值；标准翻译永久免费，余额用尽也不断线。", en: "See quota and tier in the membership centre; top up as you go; standard translation stays free and you never get cut off." }),
+    { zh: "会员中心看额度与档位；购买 / 续费按量充值。标准翻译走本地模型，不调用付费接口；本地模型没配好时转人工。Token 用尽不会改用付费翻译引擎。", en: "See quota and tier in the membership centre; top up as you go. Standard translation uses the local model and does not call a paid API; if the local model is not set, a person takes the line. Running out of tokens does not switch translation onto a paid engine." }),
 ];
 
 export const CHATX_TUTORIALS_PATH = "/chatx/tutorials";

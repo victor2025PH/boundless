@@ -69,9 +69,10 @@ async def test_translate_document_engine_passthrough():
     s = TranslationService(ai_client=None)
     s._router = EngineRouter([_StubEngine("ai"), _StubEngine("deepl")])
     svc = DocumentTranslateService(s)
-    out = await svc.translate_document("x", target_lang="zh", source_lang="en", engine="deepl")
+    # 单字符走 identity 早退，到不了引擎；用一个有正文的词验证首选引擎透传。
+    out = await svc.translate_document("hello", target_lang="zh", source_lang="en", engine="deepl")
     assert out["segments"][0]["provider"] == "deepl"
-    assert out["translated_text"] == "x·deepl"
+    assert out["translated_text"] == "hello·deepl"
 
 
 async def test_translate_document_empty():

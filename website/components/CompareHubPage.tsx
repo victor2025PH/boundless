@@ -169,7 +169,7 @@ export default function CompareHubPage() {
             className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-neon-cyan to-neon-violet px-7 py-3 text-sm font-medium text-ink-950 transition hover:opacity-90"
           >
             <Download className="h-4 w-4" />
-            {zh ? "免费下载智聊（标准翻译不限量）" : "Download ChatX free"}
+            {zh ? "免费下载智聊（标准翻译走本地模型）" : "Download ChatX free"}
           </a>
           <a
             href={zh ? "/pricing" : "/en/pricing"}

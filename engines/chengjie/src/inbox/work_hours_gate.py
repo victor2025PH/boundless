@@ -289,7 +289,7 @@ def off_hours_hold_tag_labels() -> List[str]:
             if s and s not in labels:
                 labels.append(str(s))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in off_hours_hold_tag_labels", exc_info=True)
     return labels
 
 

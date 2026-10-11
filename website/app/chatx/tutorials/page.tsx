@@ -45,7 +45,7 @@ export default function ChatxTutorialsPage() {
           </Link>
           <Link href="/pricing" className="glass rounded-2xl border border-white/10 p-5 transition hover:border-neon-cyan/40">
             <div className="text-sm font-semibold text-white">费率与充值档位</div>
-            <p className="mt-1 text-xs leading-relaxed text-slate-400">标准翻译永久免费；Token 按量计费，用多少充多少，无月费无席位费。</p>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">标准翻译走本地模型，没配好转人工；Token 按量计费，用多少充多少，无月费无席位费。</p>
             <span className="mt-3 inline-block text-xs text-neon-cyan">→ 看价格</span>
           </Link>
           <Link href="/videos" className="glass rounded-2xl border border-white/10 p-5 transition hover:border-neon-cyan/40">

@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Mapping, Optional
 
 from src.assistant import actions as act
@@ -244,7 +245,7 @@ def parse_plan_json(raw: str) -> Optional[Dict[str, Any]]:
         obj = json.loads(s)
         return obj if isinstance(obj, dict) else None
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in parse_plan_json", exc_info=True)
     start = s.find("{")
     if start < 0:
         return None
@@ -272,6 +273,7 @@ def parse_plan_json(raw: str) -> Optional[Dict[str, Any]]:
                     obj = json.loads(s[start:i + 1])
                     return obj if isinstance(obj, dict) else None
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in parse_plan_json", exc_info=True)
                     return None
     return None
 

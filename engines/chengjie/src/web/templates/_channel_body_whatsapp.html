@@ -1388,9 +1388,9 @@ function _intentBadge(tag){
   if(!t || t === 'general') return '';
   const colors = (typeof _INTENT_COLORS !== 'undefined') ? _INTENT_COLORS : {};
   const labels = (typeof _INTENT_LABELS !== 'undefined') ? _INTENT_LABELS : {};
-  const bg = colors[t] || 'var(--th-bg-slate4,#94a3b8)';
+  const bg = colors[t] || 'var(--bd,#94a3b8)';
   return '<span class="wa-intent-badge" style="margin-left:6px;font-size:.68rem;padding:1px 7px;border-radius:8px;background:'
-    + bg + ';color:var(--th-ink-slate9,#0f172a);font-weight:600;vertical-align:middle">'
+    + bg + ';color:var(--t,#0f172a);font-weight:600;vertical-align:middle">'
     + rpa.esc(labels[t] || t) + '</span>';
 }
 

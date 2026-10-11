@@ -178,8 +178,8 @@ export function buildPricing(lang: BotLang) {
   // 2026-08-21 充值唯一化：智聊按充值档报价（名称/数字全取事实源 SKU，一次性无周期）；
   // 免费开始不是 SKU，单独一行讲清；查不到的档省略该行（宁可漏报不错报）。
   const freeLine = lang === "zh"
-    ? "· <b>免费开始</b> — 0（下载即用 · 标准翻译免费不限量 · 每月 1,000 Token）"
-    : "· <b>Free start</b> — 0 (download & go · unlimited standard translation · 1,000 tokens/mo)";
+    ? "· <b>免费开始</b> — 0（下载即用 · 标准翻译走本地模型，没配好转人工 · 每月 1,000 Token）"
+    : "· <b>Free start</b> — 0 (download and go · standard translation on the local model; a person takes the line if it is not set · 1,000 tokens/mo)";
   const plans = [freeLine]
     .concat(
       CHATX_TOPUP_SKUS.map((id) => {

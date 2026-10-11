@@ -402,8 +402,8 @@ function resolve(draftId, action, text, btn){
   });
 }
 
-function forceOverride(draftId, btn){
-  if(!confirm(window.T('draft.override_confirm'))) return;
+async function forceOverride(draftId, btn){
+  if(!await AITRNotify.confirm(window.T('draft.override_confirm'),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})) return;
   if(btn){ btn.disabled=true; btn.textContent='…'; }
   apiFetch('/api/drafts/'+encodeURIComponent(draftId)+'/force-override',{
     method:'POST', headers:{'Content-Type':'application/json'},
@@ -587,11 +587,11 @@ function refreshStaleBtn(){
     btn.setAttribute('data-stale-n', String(n));
   }).catch(function(){});
 }
-function clearStale(){
+async function clearStale(){
   var btn=document.getElementById('btn-clear-stale');
   var n=Number(btn&&btn.getAttribute('data-stale-n'))||0;
   if(n<=0) return;
-  if(!confirm(window.Tf('draft.bulk.clear_stale_confirm',{n:n}))) return;
+  if(!await AITRNotify.confirm(window.Tf('draft.bulk.clear_stale_confirm',{n:n}),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})) return;
   apiFetch('/api/drafts/bulk-resolve',{
     method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({action:'reject',reason:'bulk_stale'})
@@ -681,11 +681,11 @@ function clearSel(){
   document.querySelectorAll('.dr-chk:checked').forEach(function(c){ c.checked=false; });
   updateSelectBar();
 }
-function bulkAct(action){
+async function bulkAct(action){
   var ids=getSelectedIds();
   if(!ids.length) return;
   var label=action==='approve'?window.T('draft.bulk.approve'):window.T('draft.bulk.reject');
-  if(!confirm(window.Tf('draft.bulk.confirm',{label:label,n:ids.length}))) return;
+  if(!await AITRNotify.confirm(window.Tf('draft.bulk.confirm',{label:label,n:ids.length}),{okText:window.T('confirm'),cancelText:window.T('cancel'),danger:true})) return;
   apiFetch('/api/drafts/bulk-resolve',{
     method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({action:action,draft_ids:ids})
@@ -1082,8 +1082,8 @@ function _trackKbClick(recId, usedInDraft, draftId){
 }
 
 // P2: 知识库归档
-window.kbArchive = function(draftId, btn){
-  var title = prompt(window.T('draft.kb.prompt'));
+window.kbArchive = async function(draftId, btn){
+  var title = await AITRNotify.prompt(window.T('draft.kb.prompt'),{okText:window.T('confirm'),cancelText:window.T('cancel')});
   if(!title || !title.trim()) return;
   var origText = btn.textContent;
   btn.disabled = true;

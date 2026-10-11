@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import logging
 import contextvars
 from contextlib import contextmanager
 from typing import Iterator
@@ -35,7 +36,7 @@ def manual_send_scope(enabled: bool = True) -> Iterator[None]:
         try:
             _MANUAL.reset(token)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in manual_send_scope", exc_info=True)
 
 
 __all__ = ["is_manual_send", "manual_send_scope"]

@@ -1,0 +1,70 @@
+# 博彩运营商（持牌）· WhatsApp Cloud API 24h 窗口回退模板
+# edition: internal_only —— 只在 config/presets/internal/，公开桌面包省略该目录。
+# 名字一律 wa_fb_gamble_ 前缀：公开形态（CHATX_FLAVOR=public/clean）的选择器会丢掉这些名字。
+# 定位仍是会员客服跟进（UTILITY），不推送下注、不给投注建议、不写优惠。年龄与账户问题转人工。
+
+schema: zhiliao.wa_fallback_templates.v1
+pack: gambling_operator
+edition: internal_only
+category: UTILITY
+purpose: window_expired_member_service_followup
+default_language: zh
+opt_out:
+  zh: 退订
+  en: STOP
+  tl: STOP
+templates:
+  - name: wa_fb_gamble_member_zh
+    category: UTILITY
+    lang: zh
+    language: zh_CN
+    text_param: true
+    param_max_chars: 80
+    body: "您好，会员服务跟进您之前的咨询：{{1}}。请直接回复本消息，我们才能继续处理；年龄与账户问题会转人工核实。如不需要再收到消息，请回复「退订」。"
+    samples:
+      "1": "账户协助"
+  - name: wa_fb_gamble_member_en
+    category: UTILITY
+    lang: en
+    language: en
+    text_param: true
+    param_max_chars: 80
+    body: "Hello, member services is following up on {{1}}. Please reply to this message so we can continue. Questions about age or the account go to a person. Reply STOP to opt out."
+    samples:
+      "1": "your account request"
+  - name: wa_fb_gamble_member_fil
+    category: UTILITY
+    lang: tl
+    language: fil
+    text_param: true
+    param_max_chars: 80
+    body: "Kumusta po. Nagfo-follow up ang member services tungkol sa {{1}}. Paki-reply po sa mensaheng ito para maipagpatuloy. Ang tanong sa edad o account ay iaasa sa tao. Kung ayaw na po ng mensahe, i-reply ang STOP."
+    samples:
+      "1": "account request"
+  - name: wa_fb_gamble_pause_zh
+    category: UTILITY
+    lang: zh
+    language: zh_CN
+    text_param: true
+    param_max_chars: 80
+    body: "您好，您之前申请的账户暂停协助（{{1}}）还没处理完。请直接回复本消息，我们会转人工继续办。如不需要再收到消息，请回复「退订」。"
+    samples:
+      "1": "暂停账户"
+  - name: wa_fb_gamble_pause_en
+    category: UTILITY
+    lang: en
+    language: en
+    text_param: true
+    param_max_chars: 80
+    body: "Hello, your earlier request to pause the account ({{1}}) is still open. Please reply to this message and a person will continue it. Reply STOP to opt out."
+    samples:
+      "1": "pause request"
+  - name: wa_fb_gamble_pause_fil
+    category: UTILITY
+    lang: tl
+    language: fil
+    text_param: true
+    param_max_chars: 80
+    body: "Kumusta po. Bukas pa po ang hiling ninyong i-pause ang account ({{1}}). Paki-reply po sa mensaheng ito at ipapasa namin sa tao. Kung ayaw na po ng mensahe, i-reply ang STOP."
+    samples:
+      "1": "pause request"

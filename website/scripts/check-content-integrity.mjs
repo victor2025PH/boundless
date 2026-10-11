@@ -43,6 +43,12 @@ const BANNED_CLAIMS = [
   "98%",    // 虚构百分比（无评测口径支撑的"98% 准确率/满意度"）
   "300+",   // 虚构数量级（无清单支撑的"300+ 企业/功能"）
   "封号自动换号", // 高风险表述：公开承诺规避平台风控 = 自证违反平台 ToS，法务红线
+  // 免费档翻译已改为本部署本地模型；没配好转人工，不许再承诺用尽后自动换免费引擎且永不断线，
+  // 也不许再写「标准翻译永久免费 / 免费不限量」。
+  "永不断线",
+  "用尽自动降级",
+  "标准翻译永久免费",
+  "标准翻译免费不限量",
   // （2026-07-26 政策更新：幻缘/FateX 获批独立落地页 /fate，销售面解禁，从黑名单移除；
   //   「九产品」仍禁——销售面禁止手写产品数量数字，防与 brand.ts PRODUCT_COUNT 双源漂移。）
   "九产品", // 品牌层口径（brand.ts PRODUCT_COUNT 驱动）；销售面禁止手写产品数量数字
@@ -66,6 +72,32 @@ const BANNED_TARGET_FILES = [
   "components/AIChat.tsx",
   "lib/bot-knowledge.ts",
   "lib/telegram-bot.ts",
+  // 下载页 / 报价页：渠道边界与免费档翻译口径（2026-10-10）
+  "lib/order-hero.ts",
+  "lib/chatx-pricing.ts",
+  "lib/pricing-faq.ts",
+  "components/PricingPage.tsx",
+  "components/OrderPanel.tsx",
+  "components/RechargeOrderZone.tsx",
+  "components/ChatxDownloadSection.tsx",
+  "app/pricing/page.tsx",
+  "app/en/pricing/page.tsx",
+  "app/llms.txt/route.ts",
+  // 对比文、教程、首页下单与演示（2026-10-10）：活营销面跟免费档本地模型口径
+  "lib/compare-content.ts",
+  "lib/chatx-tutorials.ts",
+  "lib/order-lines.ts",
+  "components/TutorialPlaylist.tsx",
+  "components/CompareHubPage.tsx",
+  "components/TranslateDemo.tsx",
+  "components/EnterprisePage.tsx",
+  "app/chatx/tutorials/page.tsx",
+  "app/en/chatx/tutorials/page.tsx",
+  "app/order/page.tsx",
+  "app/en/order/page.tsx",
+  // 报价注释与生成事实源（2026-10-10）：标准档句子跟 product.yaml
+  "lib/pricing.ts",
+  "lib/generated/product-facts.json",
 ];
 
 // ---------------------------------------------------------------------------
@@ -245,6 +277,32 @@ function checkPrices() {
 // ---------------------------------------------------------------------------
 // 检查 3：禁用宣传语黑名单
 // ---------------------------------------------------------------------------
+function checkChatxChannelCopy() {
+  const problems = [];
+  const content = readFileSync(join(websiteRoot, "lib", "chatxContent.ts"), "utf8");
+  const homepage = readFileSync(join(websiteRoot, "lib", "content.ts"), "utf8");
+  const download = readFileSync(join(websiteRoot, "components", "ChatxDownloadSection.tsx"), "utf8");
+  for (const term of ["抖音企业号", "TikTok", "智拓", "MatrixX", "本地模型", "转人工", "不能在智聊里网页登录"]) {
+    if (!content.includes(term)) problems.push(`lib/chatxContent.ts 缺少「${term}」`);
+  }
+  if (!download.includes("CHATX_CHANNEL_LINES")) {
+    problems.push("components/ChatxDownloadSection.tsx 没有渲染 CHATX_CHANNEL_LINES");
+  }
+  // Instagram / Zalo 官方接口已在公开包默认可接，不得再标成陆续接入。
+  for (const name of ["Instagram", "Zalo"]) {
+    if (!homepage.includes(`name: "${name}"`)) {
+      problems.push(`lib/content.ts 在线平台缺少 ${name}`);
+    }
+  }
+  const coming = homepage.match(/platformsComing:\s*\[([^\]]*)\]/g) || [];
+  for (const block of coming) {
+    if (block.includes("Instagram") || block.includes("Zalo")) {
+      problems.push("lib/content.ts 仍把 Instagram 或 Zalo 放在陆续接入");
+    }
+  }
+  return problems;
+}
+
 function checkBannedClaims() {
   const hits = [];
   for (const relFile of BANNED_TARGET_FILES) {
@@ -620,6 +678,16 @@ if (changelog.problems.length > 0) {
   for (const problem of changelog.problems) console.log(`  - ${problem}`);
 } else {
   console.log("[gate:content] ✓ 版本更新记录结构合法且覆盖已发布版本");
+}
+
+console.log("[gate:content] ── 检查 7 渠道边界与免费翻译口径 ──");
+const channelCopy = checkChatxChannelCopy();
+if (channelCopy.length > 0) {
+  failed = true;
+  console.log(`[gate:content] ✗ ${channelCopy.length} 项渠道/翻译口径缺失：`);
+  for (const problem of channelCopy) console.log(`  - ${problem}`);
+} else {
+  console.log("[gate:content] ✓ 下载页与安装文案保留官方渠道和本地模型口径");
 }
 
 if (failed) {

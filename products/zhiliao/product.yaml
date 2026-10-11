@@ -1,7 +1,8 @@
 # products/zhiliao/product.yaml — 智聊 ChatX（照 tongyi 模板）
 #
 # ── 2026-08-21 定价改版（充值唯一化：订阅全线停售，只留「免费开始 + 按充值计费」，老板拍板）──
-# 免费开始（非 SKU 档位）：下载即用、标准翻译永久免费不限量（公平使用 200 万字符/日/授权）、
+# 免费开始（非 SKU 档位）：下载即用、标准翻译走本部署本地模型（不调用付费接口，
+# 没配好转人工；公平使用 200 万字符/日/授权只提醒不拦截）、
 # 每月 1,000 Token、注册再送 10,000 体验 Token、1 账号防薅护栏——chatx-free 条目保留承载该口径。
 # 充值八档（唯一付费通道）：6U 新人包 + 50/100/200/500/1000/5000/10000 USD；1 USD = 1,500 Token；
 # 首笔充值按档一次性加赠 +5/10/20/30/35/40%（每人一次，履约侧按 账号+支付指纹+设备指纹 核验，
@@ -12,7 +13,8 @@
 # 承接旧旗舰版「可选私有化」叙事）。
 # Token 计价（跨 ChatX/LingoX 通用）：AI 回复 10/条 · 专业翻译 10/千字符 ·
 # DeepL 认证翻译 40/千字符 · 克隆语音 10/100字符 · AI 配图 50/张 · ASR 5/分钟；
-# 标准翻译（内置引擎）0 Token 永久免费（公平使用 200 万字符/日/授权）。
+# 标准翻译（本部署本地模型）0 Token，不调用付费接口；没配好转人工
+# （公平使用 200 万字符/日/授权，只提醒不拦截）。
 # 充值实付 12 个月有效（≥500U 档 24 个月）、赠送 6 个月先扣；扣减顺序=先赠送、
 # 再存量订阅含量（停售订阅履约期内仍有效）、后充值实付。
 # 停售台账（保留条目供历史订单反查，勿删）：chatx-entry/chatx-team（2026-08-19）、
@@ -24,8 +26,8 @@ brand_key: chatx
 name:   { zh: 智聊, en: ChatX }
 category: growth
 tagline:
-  zh: 多平台统一收件箱 + AI 人设承接 + 免费翻译 + 转人工，全自动开发客户推进成交
-  en: Omni-channel unified inbox + AI persona + free translation + human handoff
+  zh: 多平台统一收件箱 + AI 人设承接 + 本地模型标准翻译 + 转人工，全自动开发客户推进成交
+  en: Omni-channel unified inbox + AI persona + local-model standard translation + human handoff
 engine: chengjie
 engine_services: [main.py]         # 统一收件箱/AI 承接/handoff（src/inbox·ai·integrations）
 
@@ -41,7 +43,7 @@ website:
 
 # 充值唯一化（2026-08-21 决议；website/lib/chatx-pricing.ts 派生展示）；单位 USD、结算支持 USDT（dual）
 skus:
-  - { id: chatx-free,      name: { zh: 免费开始, en: Free start },  unit: month, price: "0",   currency: USD, note: "非卖品条目/下载即用/1,000 Token 每月/标准翻译免费不限量/1 账号防薅护栏/注册送 10,000" }
+  - { id: chatx-free,      name: { zh: 免费开始, en: Free start },  unit: month, price: "0",   currency: USD, note: "非卖品条目/下载即用/1,000 Token 每月/标准翻译走本部署本地模型，没配好转人工/1 账号防薅护栏/注册送 10,000" }
   # Token 充值（2026-08-21 起唯一付费通道；1U=1,500 Token；首充按档一次性加赠——每人一次，
   # 履约侧按 账号+支付指纹+设备指纹 核验；实付 12 个月有效（≥500U 档 24 个月）、赠送 6 个月先扣）
   - { id: recharge-50,   name: { zh: 充值 50U,  en: Top up 50U },  unit: one-time, price: "50",   currency: USD, note: "75,000 Token 到账/首充无加赠/实付 12 个月有效" }

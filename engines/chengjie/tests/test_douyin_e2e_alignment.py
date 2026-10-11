@@ -173,7 +173,8 @@ def test_registry_json_served_and_inbox_falls_back_to_it(auth_client):
     from pathlib import Path
     html = (Path(__file__).resolve().parents[1] / "src/web/templates/unified_inbox.html").read_text(
         encoding="utf-8")
-    assert "fetch('/static/platform_registry.json'" in html
+    # 工作台统一走 apiFetch（带鉴权），不再用裸 fetch。回落契约不变。
+    assert "apiFetch('/static/platform_registry.json'" in html
     assert "function platColor(p){ return PC[p]||(_PREG[p]&&_PREG[p].color)" in html
     # 实施97 起 platName 先查两个微信平台的 i18n 显示名，再回落 PN / 注册表：只钉「注册表回落仍在」这一契约
     import re as _re
@@ -202,11 +203,28 @@ def test_reply_window_and_policy_hint_wired_in_inbox_ui():
     assert zh["inbox.rw.open"].startswith("{plat}") and "{remaining}/{cap}" in en["inbox.rw.open"]
 
 
-def test_douyin_planned_status_is_honest_in_login_modes(auth_client, app):
-    """接入向导 / 登录方式：抖音尚未实现 → 必须如实报「规划中」而不是给一张点了没反应的卡。"""
-    r = auth_client.get("/api/platforms/douyin/login/modes")
-    # 未登记平台可能 404，也可能返回空/不可用列表——两者都算「没有假出口」
-    assert r.status_code in (200, 400, 404), r.text
-    if r.status_code == 200:
-        modes = r.json().get("modes") or []
-        assert all(not m.get("available", False) for m in modes), modes
+def test_douyin_official_login_mode_is_real_not_a_placeholder(auth_client, app):
+    """官方通道已接线：默认登录方式只有 official，不能标成「规划中」。
+
+    空配置下不可用（缺凭证），也不能给出一张已经可用的假卡。
+    web / device 不进默认清单（边车没做）。旧路径 ``/login/modes`` 从未注册，
+    这里打真正的 ``/api/platforms/{platform}/modes``。
+    """
+    for platform, field_bit in (("douyin", "Client Key"), ("tiktok", "App ID")):
+        r = auth_client.get(f"/api/platforms/{platform}/modes")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body.get("ok") is True
+        modes = body.get("modes") or []
+        by = {m["mode"]: m for m in modes}
+        assert set(by) == {"official"}, modes
+        off = by["official"]
+        assert off["login_kind"] == "credentials"
+        assert off["available"] is False
+        assert off["reason_code"] != "not_implemented"
+        blockers = off.get("blockers") or []
+        assert any(b.get("code") == "official_creds_missing" for b in blockers), blockers
+        field = str(next(b for b in blockers if b.get("code") == "official_creds_missing")
+                    .get("params", {}).get("field") or "")
+        assert field_bit in field
+        assert "缺少" not in field

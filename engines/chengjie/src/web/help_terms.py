@@ -156,8 +156,8 @@ HELP_TERMS: dict = {
         "en": "Developer Tools",
         "desc": "API 密钥、底层参数、安全令牌、Bot 行为（含是否处理私聊）、回复逻辑、意图路由等高级配置（需密码）",
         "desc_en": "Advanced config — API keys, low-level params, security tokens, bot behavior (incl. private chats), reply logic, intent routing (password required)",
-        "usage": "输入开发者密码进入 → 「Bot 行为配置」中勾选「私聊消息」可允许私聊 → 保存",
-        "usage_en": "Enter the developer password → tick \"Private messages\" under Bot Behavior to allow DMs → save"
+        "usage": "侧栏「更多」点「开发者工具」（完整模式在「支持」里；也可按 Ctrl+K 搜「开发者」）→ 输入开发者密码 → 「内部功能显隐」勾选要显示的功能后刷新。人工操作台要退出智聊再打开一次。私聊开关在「Bot 行为配置」里勾选「私聊消息」并保存",
+        "usage_en": "In the sidebar open More → Developer Tools (under Support in full mode; or press Ctrl+K and search Developer) → enter the developer password → under Internal feature visibility tick what should show, then refresh. The manual console needs ChatX closed and opened once. For DMs, tick Private messages under Bot Behavior and save"
     },
     "nav_audit": {
         "zh": "操作记录",
@@ -244,8 +244,8 @@ HELP_TERMS: dict = {
         "en": "Persona Studio",
         "desc": "管理 AI 人设池、会话绑定与全局人设规则，决定 AI 用什么身份和口吻说话",
         "desc_en": "Manage the persona pool, session bindings and global persona rules — deciding the AI's identity and tone",
-        "usage": "创建/编辑人设 → 设为默认或绑定到指定会话 → 配置全局规则",
-        "usage_en": "Create/edit a persona → set as default or bind to sessions → configure global rules"
+        "usage": "打开人设 → 「工作类型」选客服 / 销售 / 陪聊（做客服必须选客服，回复才会每条先查知识库）→ 保存 → 绑定到账号或会话",
+        "usage_en": "Open a persona → set Work type to Support / Sales / Companion (Support is required for every reply to check the knowledge base) → save → bind to an account or chat"
     },
     "nav_rpa_overview": {
         "zh": "矩阵总览",
@@ -825,13 +825,37 @@ HELP_TERMS: dict = {
         "usage": "输入模拟用户消息 → 查看命中的条目和 AI 生成的回复",
         "usage_en": "Enter a simulated user message → see the matched entry and the AI-generated reply"
     },
+    "persona_kind": {
+        "zh": "工作类型",
+        "en": "Work type",
+        "desc": "人设是做客服、销售还是陪聊。客服 / 销售每条回复先查知识库；陪聊闲聊不查库",
+        "desc_en": "Whether the persona is Support, Sales or Companion. Support / Sales check the knowledge base on every reply; Companion skips it for small talk",
+        "usage": "人设工作室 → 打开人设 → 「工作类型」下拉选择 → 保存。账号菜单能看到这个号当前的类型",
+        "usage_en": "Persona Studio → open the persona → Work type → save. The account menu shows the type on that account"
+    },
+    "business_domain": {
+        "zh": "业务域",
+        "en": "Business domain",
+        "desc": "这台机器做什么生意：陪伴或销售。影响工作目标模板、知识库预置分类，不覆盖单个人设的工作类型",
+        "desc_en": "What this machine is for: Companion or Sales. Affects goal templates and default knowledge categories; does not override a persona's work type",
+        "usage": "自动回复设置 → 「这台机器做什么生意」→ 选陪伴或销售。人设标成客服后仍按人设查库",
+        "usage_en": "Auto-reply Settings → What this machine is for → Companion or Sales. A Support persona still queries the knowledge base"
+    },
+    "kb_miss_chip": {
+        "zh": "知识库未命中",
+        "en": "Knowledge miss",
+        "desc": "本轮查了知识库但没有条目能回答客户这句。客服人设会先用一句固定话术，再追问会标需人工",
+        "desc_en": "This turn queried the knowledge base and found no matching entry. Support personas send one fixed line first; a repeat question is flagged for a human",
+        "usage": "点草稿条上的「知识库 · 未命中」→ 按客户原话预填新建条目 → 写好示例回复保存（有嵌入端点会自动向量化）",
+        "usage_en": "Click Knowledge base · no match on the draft bar → a new entry is pre-filled from the customer's words → write the sample reply and save (vectorized automatically when an embedding endpoint is available)"
+    },
     "vectorize": {
         "zh": "向量化",
         "en": "Vectorize",
         "desc": "将所有知识条目转为数学向量，启用语义搜索（理解含义而非仅关键词匹配）",
         "desc_en": "Convert all knowledge entries into vectors to enable semantic search (meaning, not just keyword matching)",
-        "usage": "点击后等待处理完成。新增条目后建议重新向量化",
-        "usage_en": "Click and wait for processing. Re-vectorize after adding new entries"
+        "usage": "知识库 → 更多 → 向量化 → 开始向量化，等进度走完。导入完成页也有这个按钮。已有向量的条目会跳过，不用重新导入",
+        "usage_en": "Knowledge → More → Vectorize → Start, and wait for the bar. The import-done page has the same button. Entries that already have vectors are skipped; do not re-import"
     },
     "batch_translate": {
         "zh": "批量翻译",
@@ -840,6 +864,14 @@ HELP_TERMS: dict = {
         "desc_en": "Auto-translate all untranslated KB entries into English/Urdu/Portuguese/Arabic",
         "usage": "点击后自动翻译，翻译结果可在「翻译审核」标签页中审核",
         "usage_en": "Click to auto-translate; review the results in the \"Translation Review\" tab"
+    },
+    "kb_import": {
+        "zh": "批量导入",
+        "en": "Bulk Import",
+        "desc": "把现成的 FAQ 表格（Excel / CSV）或 JSON 备份一次导入成知识条目，导入前先预览每行会新增、更新还是跳过",
+        "desc_en": "Turn an existing FAQ sheet (Excel / CSV) or a JSON backup into knowledge entries in one go, with a preview of which rows will be added, updated or skipped",
+        "usage": "先下载模板照着填 → 选文件看预览 → 确认导入；导错了可在「更多 → 导入记录」整批撤销",
+        "usage_en": "Download the template and fill it in → pick the file and check the preview → confirm; undo a whole batch later from More → Import history"
     },
     "hit_rate": {
         "zh": "命中率",
@@ -854,8 +886,8 @@ HELP_TERMS: dict = {
         "en": "Miss Log",
         "desc": "用户消息没有匹配到任何 KB 条目时的记录，用于发现知识盲区",
         "desc_en": "Records of user messages that matched no KB entry, used to find knowledge gaps",
-        "usage": "定期查看未命中记录 → 为高频未命中创建新的知识条目",
-        "usage_en": "Review misses regularly → create new entries for frequent misses"
+        "usage": "工作台草稿条点「知识库 · 未命中」按客户原话预填新建；也可定期打开知识库「未命中记录」给高频问题补条目",
+        "usage_en": "Click Knowledge base · no match on the draft bar to prefill a new entry from the customer's words; or review the miss log on the Knowledge page for frequent gaps"
     },
     "kb_feedback": {
         "zh": "效果反馈",
@@ -1142,26 +1174,28 @@ HELP_TERMS: dict = {
     "gs_softad": {
         "zh": "软广强度",
         "en": "Soft-ad level",
-        "desc": "把产品带进对话的力度，0=只闲聊完全不提，数字越大越明示。剧本里前低后高再回落最像真人；* 表示这一拍单独调过、覆盖了剧本默认值",
-        "desc_en": "How hard the product is woven into the chat: 0 = pure chit-chat, higher = more explicit. Low-then-high-then-ease reads most human; * means this beat overrides the playbook default"
+        "desc": "把产品带进对话的力度，0=只闲聊完全不提，数字越大越明示。按目标聊天时平时是 0，只有有人自己说到那件事之后的那一句才提起。旧戏才按拍前低后高；* 表示这一拍单独调过",
+        "desc_en": "How hard the product is woven into the chat: 0 = pure chit-chat, higher = more explicit. A goal show stays at 0 until someone in the room opens the topic, then one line may mention it. Only older shows ramp beat by beat; * means this beat was tuned on its own"
     },
     "gs_pace": {
         "zh": "语速档",
         "en": "Pace",
-        "desc": "这一拍的发言节奏：chatty=你一言我一语抢着说，normal=常规群聊，slow=有人在思考或刚看到。节奏本身也会出卖机器人，故按拍设定",
-        "desc_en": "This beat's rhythm: chatty = fast back-and-forth, normal = regular chat, slow = someone thinking or just noticing. Rhythm itself can betray a bot, so it's set per beat"
+        "desc": "发言节奏：chatty=你一言我一语，normal=常规群聊，slow=有人在想或刚看到。按目标聊天时跟普通闲聊走，不按拍念稿",
+        "desc_en": "Speaking rhythm: chatty = fast back-and-forth, normal = regular chat, slow = someone thinking or just noticing. A goal show uses ordinary chat rhythm and does not read a beat list"
     },
     "gs_beatcount": {
         "zh": "拍数",
         "en": "Beats",
-        "desc": "这出戏由几拍组成。每一拍是一句节拍（谁说、什么意图），台词不写死、由人设 AI 现场生成",
-        "desc_en": "How many beats the show has. Each beat is one step (who speaks, what intent); lines aren't fixed - the persona AI generates them live"
+        "desc": "现在上场的戏按目标聊天，拍数是 0，这是正常的：没人自己提到那件事就只聊天，有人提到了，向导才说自己是 AI 并只讲这一件。有逐拍列表的是旧戏，每一拍只写意图，台词现场生成",
+        "desc_en": "Shows that ship now chat toward a goal, so a beat count of 0 is expected: they only chat until someone in the room opens the topic, then the guide says it is the AI and mentions that one thing. A beat list belongs to an older show; each beat is an intent, and the line is generated live",
+        "usage": "管理台打开群脉导播台（/group-show），选一场已经写了目标的戏再开演。桌面安装包侧栏默认没有这一项",
+        "usage_en": "Open the CrowdX console in the admin app at /group-show and start a show that already has a goal. The desktop installer's sidebar leaves this entry off"
     },
     "gs_prodline": {
         "zh": "产品线",
         "en": "Product line",
-        "desc": "这出戏软推的产品系：growth 获客系 / studio 内容陪伴系 / lingo 翻译系。选戏其实就是选产品",
-        "desc_en": "Which product family the show seeds: growth (acquisition), studio (content companion), lingo (translation). Picking a show is picking a product"
+        "desc": "这出戏要带到的那一件事属于哪条产品线：growth 获客系 / studio 内容陪伴系 / lingo 翻译系。选戏就是选这一件，不是选一份逐拍稿",
+        "desc_en": "Which product family the one thing in this show belongs to: growth (acquisition), studio (content companion), lingo (translation). Picking a show picks that one thing, not a beat-by-beat script"
     },
     "gs_naturalness": {
         "zh": "自然度",

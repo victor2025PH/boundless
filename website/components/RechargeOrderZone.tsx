@@ -467,8 +467,8 @@ export function StickyOrderBar({
             </div>
             <div className="mt-0.5 hidden text-[10px] text-slate-500 md:block">
               {zh
-                ? "到账自动开通 ≈5 分钟 · USDT / 银行卡 · 单号随时可查 · 用尽自动降级永不断线"
-                : "Auto-activation in ~5 min · USDT / card · self-serve order tracking · graceful fallback, never offline"}
+                ? "到账自动开通 ≈5 分钟 · USDT / 银行卡 · 单号随时可查 · 标准翻译不改走付费引擎"
+                : "Auto-activation in ~5 min · USDT / card · self-serve order tracking · standard translation does not switch to a paid engine"}
             </div>
           </div>
           <button

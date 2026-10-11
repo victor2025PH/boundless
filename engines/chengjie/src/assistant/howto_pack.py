@@ -14,6 +14,8 @@ id 稳定（howto:<slug>），重跑 = 幂等 upsert。path 供前端「带我�
 """
 from __future__ import annotations
 
+import logging
+
 # (slug, title, title_en, content, content_en, keywords, path)
 _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     (
@@ -298,11 +300,14 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "kb-add",
         "知识库怎么添加条目",
         "How to add a knowledge base entry",
-        "打开「知识库」页 → 新建条目：填分类/标题/触发词/回复模板，保存后建议"
-        "点「向量化」让语义检索生效。也可一键播种起步包快速备货。",
-        "Open the Knowledge page → New entry (category/title/triggers/reply), "
-        "then run embed-all so semantic search picks it up. Starter packs can "
-        "seed a domain in one click.",
+        "打开「知识库」页。新建一条：填分类/标题/触发词/回复，保存。"
+        "已有表格：顶栏「导入」→ 先下载 Excel 模板照着填 → 选文件看预览 → 确认导入。"
+        "导错了到「更多 → 导入记录」整批撤销。"
+        "导入或新建之后点「更多 → 向量化」（导入完成页也有这个按钮），等进度走完，同义问法才能命中；已有向量的条目会跳过，不用把表再导一遍。",
+        "Open Knowledge. New entry: category, title, triggers, reply, then save. "
+        "Existing sheet: Import on the toolbar → download the Excel template → preview → confirm. "
+        "Undo a bad batch from More → Import history. "
+        "After import or a new entry, open More → Vectorize (the import-done page has the same button) and wait for the bar; entries that already have vectors are skipped, so do not re-import the sheet.",
         "知识库 加条目 新建 KB 词条 话术 添加",
         "/knowledge",
     ),
@@ -317,6 +322,75 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "persona; voice preferences auto-correct after rebinding.",
         "人设 换人设 编辑人设 persona 身份 角色",
         "/personas",
+    ),
+    (
+        "persona-kind",
+        "客服人设为什么不查知识库 / 怎么让回复先查库",
+        "Why a support persona skips the knowledge base and how to make replies check it first",
+        "「人设工作室」→ 打开人设 → 「工作类型」选客服或销售，保存。客服 / 销售人设每条回复先查知识库，"
+        "命中就按条目回答；库里没有的会先按一句固定话术回（知识库「系统话术」里建 template_key 为 "
+        "kb_nohit_fallback 的条目可改这句），客户再追问同一件事就自动标「需人工」。"
+        "留「自动」时按角色 / 标签里的客服、导购、陪聊等词推断；陪聊人设闲聊不查库。"
+        "草稿条会显示「知识库 · 已引用 N 条 / 未命中 / 本轮未查」。点「未命中」会打开知识库新建抽屉，"
+        "标题和触发词已按客户原话填好，写好示例回复保存即向量化这一条。"
+        "账号菜单也能看见这个号的人设、工作类型、知识库必查还是闲聊不查、档位。",
+        "Persona Studio → open the persona → set Work type to Support or Sales and save. "
+        "Support / sales personas check the knowledge base on every reply and answer from matching entries; "
+        "with no match they send one fixed line (edit it via a Knowledge entry with template_key kb_nohit_fallback), "
+        "and a repeat question is flagged for a human. Leaving it on Auto infers the type from role / tags; "
+        "companion personas skip the knowledge base for small talk. The draft bar shows "
+        "\"Knowledge base · N cited / no match / not queried\". Click no match to open a new-entry "
+        "drawer with the customer's words pre-filled; saving vectorizes that entry. "
+        "The account menu also shows this account's persona, work type, knowledge-base status and mode.",
+        "知识库 不查库 没用知识库 客服人设 工作类型 kind 必查 查无 转人工 固定话术 knowledge base not used support persona",
+        "/personas",
+    ),
+    (
+        "kb-miss-add",
+        "知识库未命中怎么补一条",
+        "How to add a knowledge entry when a draft missed the knowledge base",
+        "工作台草稿条上点「知识库 · 未命中」（带 ＋ 的那颗）。会打开知识库新建抽屉，"
+        "标题、触发词、场景已按客户原话预填。把「示例回复」写成能直接发给客户的话，保存。"
+        "有嵌入端点时这一条会自动向量化，不用再整库重跑。做客服请先把人设「工作类型」改成客服，"
+        "分类表才会出现「活动优惠 / 注册登录 / 账户会员」。",
+        "On the workbench draft bar, click Knowledge base · no match (the chip with ＋). "
+        "That opens the new-entry drawer with title, triggers and scenario pre-filled from "
+        "the customer's words. Write the sample reply as something you could send, then save. "
+        "If an embedding endpoint is configured the entry is vectorized automatically. "
+        "For support work, set the persona Work type to Support first so categories like "
+        "Promotions / Sign-in / Membership appear.",
+        "未命中 补条目 新建知识 点chip 活动优惠 miss add knowledge entry vectorize",
+        "/knowledge",
+    ),
+    (
+        "business-domain-machine",
+        "这台机器做什么生意 / 陪伴和销售怎么切",
+        "What this machine is for / how to switch Companion vs Sales",
+        "打开「自动回复设置」，第一张卡「这台机器做什么生意」。陪伴：工作目标不出现转化成交、"
+        "知识库不预置支付话术、人设默认按陪聊闸。销售：保留商机标签与成交字段。"
+        "某个人设在人设工作室标成客服 / 销售后，那个号仍按人设查知识库，不受这项影响。"
+        "改完模板和标签即时生效；知识库分类重启后跟随。不必进开发者模式。",
+        "Open Auto-reply Settings. The first card is What this machine is for. Companion hides "
+        "conversion goals and payment scripts; Sales keeps opportunity tags and deal fields. "
+        "A persona marked Support / Sales in Persona Studio still queries the knowledge base "
+        "regardless of this setting. Templates and tags apply immediately; knowledge-base "
+        "categories follow after a restart. Developer mode is not required.",
+        "业务域 做什么生意 陪伴 销售 companion sales 自动回复设置 转化成交 business domain",
+        "/reply-settings",
+    ),
+    (
+        "account-ident-line",
+        "账号菜单怎么看这个号是做客服还是陪聊",
+        "How to see whether an account is doing support or companion work",
+        "工作台左侧点当前账号，打开账号菜单。每行底下会显示人设名、工作类型（客服 / 销售 / 陪聊）、"
+        "知识库状态（必查 / 已开 / 闲聊不查 / 未选人设）和档位（半自动 / 全自动 / 手动）。"
+        "未选人设会标黄。要改工作类型去「人设工作室」打开这号绑的人设，改「工作类型」后保存。",
+        "Click the current account on the left of the workbench. Each row shows the persona name, "
+        "work type (Support / Sales / Companion), knowledge-base status (required / on / skip on "
+        "chit-chat / no persona) and automation mode. No persona is marked in amber. "
+        "Change the work type in Persona Studio on the bound persona, then save.",
+        "账号菜单 身份 客服 陪聊 知识库必查 档位 ident persona kind account menu",
+        "/workspace",
     ),
     (
         "persona-album",
@@ -428,7 +502,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "里切换。",
         "Workspace: the language button in the top bar switches zh⇄en for the "
         "whole page; admin pages switch it from the user menu.",
-        "语言 英文 中文 切换语言 language english",
+        "语言 英文 中文 切换语言 英文界面 中文界面 界面语言 换成英文 language english",
         "",
     ),
     (
@@ -510,7 +584,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "档案里改（personality/style）。改动即时生效。",
         "Tune temperature/length on the Reply Strategies page; per-persona "
         "speaking style lives in Persona Studio profiles.",
-        "风格 语气 回复长度 温度 temperature 策略",
+        "风格 语气 回复长度 温度 temperature 策略 啰嗦 太长 调短 简短 话太多 字数",
         "/strategies",
     ),
     (
@@ -565,7 +639,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Connect LINE from the account drawer in the agent workspace. The "
         "channel page has Monitor / Review / Config / Ops / Funnel tabs, with "
         "run-now, pause and manual-send controls at the top.",
-        "line 接入 接账号 扫码 渠道 暂停 触发 手动发送 登录 登陆 上号 line号",
+        "line 接入 接账号 扫码 渠道 暂停 触发 手动发送 登录 登陆 上号 line号 line号登录 line登录 line账号",
         "/workspace/channels/line",
     ),
     (
@@ -744,7 +818,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "photos or identity, repeated follow-ups after low satisfaction. Claim "
         "it, open the conversation, add a note, then close it. In simple mode "
         "this is the home page.",
-        "案例 案例跟进 开案 认领 结案 需要人工 转人工 风险会话",
+        "案例 案例跟进 开案 认领 结案 需要人工 转人工 风险会话 亲自处理 需要我处理 哪些对话",
         "/cases",
     ),
     (
@@ -1167,9 +1241,10 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "工作台「账号管理 → 个人微信 · PC 副驾」三步（检测微信 → 选档位 → 点启动），半自动只发你批准的稿，"
         "全自动需勾风险知情同意后可代发文字；全自动档还可发人设语音（电脑微信 4.1.9+ + VB-CABLE，引导第 ① 步检测）。"
         "教程 /help/onboarding/wechat_pc。账号接入在坐席工作台的账号抽屉或「接入向导」完成。"
-        "抖音官方私信仍在接入中（默认关）。TikTok：**个人号没有官方私信接口**；可选获客真机"
-        "（非官方、默认关）接管对方开口之后的对话，不代发首触。TikTok Shop 店铺客服走官方 API（默认关）。"
-        "官方 Business Messaging 等权限，个人号不在范围内。需要接入其他平台，请切到「报障」标签把需求提交给产品团队。",
+        "抖音企业号走官方小程序 IM（接入向导填 Client Key / Secret 后扫码授权，默认关）："
+        "只能回复客户先发来的私信。TikTok 企业号走官方 Business Messaging，店铺客服走官方 API（都默认关）。"
+        "**个人号没有官方私信接口**；可选获客真机（非官方、默认关）接管对方开口之后的对话，不代发首触。"
+        "需要接入其他平台，请切到「报障」标签把需求提交给产品团队。",
         "Supported today: Telegram, WhatsApp, LINE, Messenger (Facebook), Instagram, Zalo, "
         "and WeChat Customer Service (the WeCom official channel — a 5-step guide under Accounts → "
         "WeChat Service → Connect; enter your WeCom self-built app credentials, no QR login; WeChat users "
@@ -1178,11 +1253,13 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "tier → Start). Semi-auto sends only approved drafts; full-auto can send text after risk ack, and "
         "voice in the persona's voice (WeChat 4.1.9+ and VB-CABLE, detected in step 1). See "
         "/help/onboarding/wechat_pc. Accounts "
-        "are connected from the account drawer or the Setup Wizard. Douyin official DMs are still being "
-        "wired (off by default). TikTok: there is no official DM API for personal accounts; an optional "
-        "capture-phone path (unofficial, off by default) can take over a chat after the other person writes "
-        "first. TikTok Shop CS uses the official API (off by default). Business Messaging is pending access "
-        "and does not cover personal accounts. To request another platform, submit it via the Report tab.",
+        "are connected from the account drawer or the Setup Wizard. Douyin enterprise accounts use the "
+        "official mini-program IM (save Client Key / Secret in the Setup Wizard, then authorize; off by "
+        "default) and can reply only after the customer writes first. TikTok business accounts use official "
+        "Business Messaging, and Shop customer service uses the official API (both off by default). "
+        "There is no official DM API for personal accounts; an optional capture-phone path (unofficial, "
+        "off by default) can take over a chat after the other person writes first. "
+        "To request another platform, submit it via the Report tab.",
         # ⚠ 词表刻意不含裸「支持/接入/渠道/哪些」：宽词把「支持多少个并发坐席」
         # （189.92 假命中）与「**哪些**对话需要我亲自处理」这类别家问题吸过来；
         # 标题已自带「支持哪些平台/支持抖音吗」锚点，词表只留平台名。
@@ -1280,7 +1357,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
     ),
     (
         "set-address-names",
-        "怎么设置我和客户怎么互相称呼",
+        "设置我和客户之间的互相称呼",
         "How to set what I call the customer and what they call me",
         "打开会话后，右栏「客户关系」身份区有两个输入框：「我怎么叫对方」"
         "和「对方怎么叫我」。改完点别处即保存。空着则沿用人设默认称呼；"
@@ -1288,7 +1365,7 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "Open a conversation. On the Customer tab, the two address fields "
         "set how you call them and how they call you. Changes save on blur. "
         "Leave blank to inherit the persona default; clear a field to drop a nickname.",
-        "称呼 怎么叫 爱称 对方怎么叫我 call_peer peer_calls_you 双向称呼",
+        "称呼 爱称 称谓 叫法 我叫对方 对方叫我 call_peer peer_calls_you 双向称呼",
         "/workspace",
     ),
     (
@@ -1669,13 +1746,16 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "会话里模型和模式有什么区别 / 怎么选上下文深度",
         "What is the difference between Model and Mode / how to set context depth",
         "打开会话，输入框上方两个等宽按钮。「模型」选谁来答：云厂商＝标准模式（规则全开）；"
-        "ChatX聊天模型＝无限制（规则让路）。「模式」可再调上下文深度、力度、思考，或从无限制改回标准。"
+        "ChatX聊天模型＝无限制（规则让路），这一行路径写着「SVIP企业搭建」。"
+        "外网安装升级到本版后，模型列表里同样有这一行，点它即无限制，和办公室这台一样。"
+        "「模式」可再调上下文深度、力度、思考，或从无限制改回标准。"
         "密钥在侧栏「模型与密钥」，登录即可改。选完应有保存提示。",
         "Open a thread: two equal buttons sit above the composer. Model picks who answers: a cloud vendor = Standard "
-        "(all rules on); ChatX chat model = Unrestricted (rules step aside). Mode still adjusts context "
+        "(all rules on); ChatX chat model = Unrestricted (rules step aside), and that row's path reads SVIP企业搭建. "
+        "After this version, remote installs show the same row; choosing it turns on Unrestricted. Mode still adjusts context "
         "depth, effort and thinking, or switches Unrestricted back to Standard. Keys live under Models & keys "
         "in the sidebar. A toast confirms the save.",
-        "模型 模式 上下文深度 无限制 ChatX聊天模型 模型与密钥 composer model mode unrestricted depth",
+        "模型 模式 上下文深度 无限制 ChatX聊天模型 SVIP企业搭建 模型与密钥 composer model mode unrestricted depth",
         "/workspace",
     ),
     (
@@ -1881,6 +1961,20 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "/workspace",
     ),
     (
+        "takeover-resume-catchup",
+        "接管期间客户发的消息没回，切回自动后 AI 会补答吗",
+        "Will AI answer the message the customer sent while I had taken over",
+        "会。会话头从「人工」切回自动档（或开了自动接回、到点自动交还 AI）时，如果客户最后一条消息还没人回，"
+        "AI 会马上按当前档位补写一条回复，不用等客户再发一句。只补私聊、只补 24 小时内的消息；"
+        "最后一条是你自己发的、或这条会话已有待发草稿时不补，避免重复。",
+        "Yes. When the thread header goes from Manual back to an automatic mode (or auto hand-back returns it "
+        "to AI), and the customer's last message is still unanswered, AI drafts a reply right away under the "
+        "current mode instead of waiting for the next inbound. Private chats only, messages within 24 hours; "
+        "skipped when the last message is yours or the thread already has a pending draft, to avoid duplicates.",
+        "切回自动 接管结束 交还AI 补答 补回复 没回 漏回 自动接回 takeover resume catch up hand back",
+        "/workspace",
+    ),
+    (
         "adult-policy-open",
         "人设成人政策「不设限」怎么用 / 开了还会转人工吗",
         "How persona adult policy Unrestricted works",
@@ -1895,6 +1989,233 @@ _HOWTO: list[tuple[str, str, str, str, str, str, str]] = [
         "不设限 成人 黄腔 未成年 人设政策 adult open unrestricted",
         "/workspace/personas",
     ),
+    (
+        "tg-phone-sidebar",
+        "Telegram 手机号登录后侧边栏为什么没有账号",
+        "Why a Telegram phone login does not show the account in the sidebar",
+        "工作台账号面板选 Telegram，用手机号登录，验证码通过后左侧会话列表会出现这个账号，和扫码登录一样。"
+        "旧版会显示已登录，但侧边栏是空的。升级到本版后，用手机号再登录一次即可，不用重装、不用改数据。",
+        "In the workbench account panel choose Telegram and sign in with the phone number. After the code is accepted "
+        "the account appears in the left conversation list, the same as a QR login. Older builds showed signed-in "
+        "but left the sidebar empty. After this version, sign in with the phone number once more; do not reinstall "
+        "and do not wipe data.",
+        "手机号登录 扫码 侧边栏 没有账号 telegram phone login sidebar",
+        "/workspace",
+    ),
+    (
+        "tg-group-members",
+        "怎么提取 Telegram 群成员 / 工具箱里的「群成员提取」怎么用",
+        "How to extract Telegram group members (Group member extraction tool)",
+        "收件箱右栏切到「工具箱」页签 → 「群成员提取」卡点「🧲 打开管理台」（或直接访问 /tools/tg-members）。"
+        "管理台四步：① 发起提取——勾选用哪些在线的 Telegram 号拉（多选＝多号并行、各拉不同批次），"
+        "选目标群（选号后自动列出，或高级里手输群 id / @用户名），选过滤器（默认「发过言且非管理员」），"
+        "填每号每日上限，点「🧲 发起提取」；② 提取任务——看进度、可停止；③ 成员库——按群查看、搜名字，"
+        "点「导出 CSV」；④ 今日开口——给提取到的人发第一条私聊（见「同群开口」条目）。①–③ 是只读提取，"
+        "不会私聊任何人。1.0.104 起本功能出厂即开，若看不到卡片：开发者工具 → 「内部功能显隐」勾选"
+        "「群成员提取」后刷新。",
+        "In the inbox right rail open the Toolbox tab → Group member extraction card → \"Open console\" "
+        "(or visit /tools/tg-members). Four steps: (1) Start: pick online Telegram accounts (multi-select = "
+        "parallel, disjoint batches), choose the target group (auto-listed, or type an id / @username under "
+        "Advanced), choose the filter (default: spoke and not admin), set the daily cap per account, click Start; "
+        "(2) Jobs: watch progress or stop; (3) Member DB: browse by group, search, Export CSV; (4) Today's "
+        "openers: send the first private line to extracted people (see the same-group outreach entry). Steps 1-3 "
+        "are read-only and never message anyone. Shipped on by default since 1.0.104; if the card is missing, "
+        "tick it under Developer Tools → Internal feature visibility and refresh.",
+        "群成员提取 提取群成员 拉群成员 群成员 工具箱 导出成员 telegram group members extract scrape toolbox",
+        "/tools/tg-members",
+    ),
+    (
+        "persona-reply-style",
+        "怎么让人设说话更像真人 / 每条都发语音 / 语音和文字说不一样的内容",
+        "How to make a persona sound more human, send voice on every reply, or split voice and text",
+        "人设页 → 编辑人设 → 语音区的「语气表达」卡（语音选「不发语音」时这张卡隐藏），四个下拉，默认都是「跟随全局」，"
+        "改完点保存：①「真人感」——活泼＝合成前把句子改成口语，带思考声（嗯……）、轻笑、偶尔一次自我纠正；"
+        "自然＝只改口语不加小动作；关闭＝照稿念。对这个人设的所有语音生效，全局口语化开关关着也生效。"
+        "②「何时发语音」——每条回复都发 / 对方发语音时才发 / 智能判断 / 不发语音。"
+        "③「语音文字分开说」——开＝一条回复前半句用语音说、后半句发文字，内容不重复；太短拆不开的回复照常整条处理。"
+        "④「语音失败时」——改发文字＝语音合成失败（引擎掉线、超时等）时照常把整段回复以文字发出，客户不会收不到；"
+        "转待发＝不发，回复进工作台待发队列、主机弹窗提醒，等人放行（跟随全局时默认就是转待发）。"
+        "②③④ 作用于 Telegram 自动回复，前提是语音页的 Telegram 语音回复总开关是开的（总开关关着，人设设置不会强行发语音）。",
+        "Personas page → edit a persona → the \"Tone\" card in the voice section (hidden when voice is set to "
+        "\"No voice\"). Four dropdowns, all default to \"Follow global\"; save after changing. (1) Human feel: "
+        "Lively rewrites the line conversationally before synthesis with a thinking sound, a light laugh and the "
+        "odd self-correction; Natural only makes it conversational; Off reads the text as written. Applies to all "
+        "of this persona's voice, even when global colloquial rewriting is off. (2) When to send voice: every reply / "
+        "only when they send voice / smart / never. (3) Split voice and text: On = the first part of a reply is "
+        "spoken and the rest is sent as text, without repeating; replies too short to split are handled as before. "
+        "(4) If voice fails: Send as text = when synthesis fails (engine offline, timeout) the full reply is sent as "
+        "text so the customer is never left hanging; Hold = nothing is sent, the reply goes to the workbench queue "
+        "with a host alert until someone approves it (Follow global defaults to Hold). "
+        "(2)-(4) apply to Telegram auto-replies and need the Telegram voice-reply master switch on the Voice "
+        "page to be on.",
+        "真人感 口语化 思考声 笑声 口误 每条都发语音 语音和文字 分开说 语气表达 人设语音 语音失败 语音发不出去 改发文字 "
+        "human feel voice every reply split voice text voice fails send as text",
+        "/personas",
+    ),
+    (
+        "tg-group-outreach",
+        "怎么给提取到的群成员自动发第一条私聊（同群开口 / AI 开场 / 批准后自动发）",
+        "How to auto-message extracted group members (same-group outreach, AI openers, approve-then-send)",
+        "群成员管理台（/tools/tg-members）顶部步骤条：① 提取群成员 → ② 群里先接话 → ③ 私聊开口 → ④ 效果与成交；"
+        "开口账号在页面中间的吸顶条里选，②③共用。第③步「私聊开口」规则先说清：只有「当时拉到这个人的那个号」"
+        "能给他发；每号每天 5–10 个新人（新号从 3 条起 14 天爬到上限）；只在本地 10–21 点发；两条之间至少 25 分钟；"
+        "每条都计入这个号的总发送额度；同一个人只开口一次。操作：选号 → 「生成今日队列」→ 「AI 拟稿」"
+        "（按这个号的人设 + 默认工作目标 + 对方在群里最近说的话写一句开场，不卖货、不带链接、不要联系方式，"
+        "AI 不在时用模板）→ 每人一张卡可改可跳过 → 「批准」。开口方式三档：「手动」逐条点「现在发这一条」；"
+        "「批准后自动发」由后台在时段内每 25–90 分钟随机发一条已批准的；「全自动」自己排队、拟稿、发——"
+        "只有注册满 14 天、近 7 天没撞过风控、回复率不低于地板的号才能切，调度器每轮复核，不达标自动退回"
+        "「批准后自动发」。发出 72 小时没回音会补**一句**跟进（只一次，给台阶不追问），再 72 小时没回就封存。"
+        "发出去的开场和跟进都会镜像进收件箱（我方出站），所以对方回话时回复链知道我们先说了什么，"
+        "接着用这个号的人设聊；页面「今日回音」列出谁回了、回了什么，点名字直达工作台会话。"
+        "还在排队的人如果先来找我们，会自动出队（标「对方先来找」），不再冷开口。对方回了但 48 小时内这个号还没回一句"
+        "（AI 没触发或没人接）→ 页面顶部「回了但没接上」橙色提醒 + 审计记一条，同时给收件箱那条会话打「需人工」"
+        "（原因写明是同群开口没接上，进待人工列表），任何一方回一句就自动摘标。接上过、对方又来话而我方 48 小时没再回的"
+        "（「接上后又断了」）同样提醒和打标。每轮只打一次标：坐席手动摘了不会被打回去，对方再来消息才算新一轮。"
+        "对方说「别发了」则跨群跨号都不再碰。"
+        "AI 拟稿会在三种切入方式间做 A/B（接话茬 / 从群切入 / 轻问一句），按近 30 天回复率自动偏向好的那种、留一部分探索；"
+        "没发言的人只能从群切入。人设工作室里勾了「公开 AI 身份」的人设（如小界）多一种切入「坦白是 AI」，"
+        "开场可以大方说自己是 AI，但绝不冒充真人；没勾的人设仍不许自称 AI。"
+        "先找谁：人设工作室编辑人设 →「目标客户（群成员获客）」填意向关键词和排除词（可按行业一键套用：跨境电商、外贸 B2B、"
+        "客服/私域、教育培训、本地生活），命中对方群发言的先排，卡片上显示「意向 分数：命中词」；命中排除词（如 博彩）的直接不开口。"
+        "不填意向词则不按意向排序，「群里先接话」也不会列人。"
+        "第④步「效果与成交」按切入方式 / 文案来源 / 人设 / 发出小时看回复率和首回时延，"
+        "样本小于 10 的行先别下结论；还有「群里接话」一层：接了多少人、后来多少人回应（其中多少主动私聊来），"
+        "以及「先在群里接过话再私聊」和「冷私聊」两组回复率对比。开了「目标」功能时还会算成交：给这个号或人设设了默认获客目标，"
+        "回了话的人就会自动挂上，下单链接带会话标记，官网付款或手动「标成交」后，漏斗多一级「成交」，切入方式表多一列成交数，"
+        "并按群列出成交和最近成交名单（只算开口或群里接话之后的成交，群里接话后来找的会标出来）。"
+        "「停止这个号」随时急停；时段与每日条数可在页面直接改。"
+        "任何号（老号新号都行）切到销售人设（如小界）就能用；系统里的号龄是登进本系统的天数，老号在第③步"
+        "「这个号的真实号龄」填一下，按大的那个算每日额度。填大了就少了新号爬坡保护，封号风险由这个号承担；"
+        "申报过号龄的号要先在这里发满 10 条私聊开口（近 7 天）才能切全自动；撞一次 Telegram 风控，申报自动作废、回到新号爬坡。"
+        "第②步「群里先接话」：用同一个号，在群里公开回复有意向的人近 48 小时说的那句（挂在 TA 那条下面），"
+        "AI 拟稿只帮忙不推销、不带链接、不说「私聊我」、不 @ 人，可一键「AI 拟稿今天这批」；坐席逐条点「发到群里…」，"
+        "页面里再确认一次（显示回复给 TA 的哪句话）才发；每号每天 5 条、每群每天 2 条、两条隔 10 分钟。"
+        "一个人只在群里被接一次（在多个群也只接一次）。接过话的人 6 小时内不会被私聊，之后排到私聊最前面，私信会顺着群里那句开口；"
+        "如果 TA 已经排在私聊队列里，接话后那条开场会退回重拟（坐席手改过的保留），批准后发的模式要重新批准。"
+        "有人在群里回了你那条（挂在你那条下面回复），第②步会列出「群里回你了」（谁回的、回了什么、"
+        "「去群里接着聊」直达工作台那个群），统计里算作回应；本人回的，之后的私聊开场会顺着 TA 回的那句往下聊。"
+        "私聊被隐私挡住的人也只能这样够到：TA 之后主动私聊这个号，会记为「群里接话后来找」，回复链知道你们是在群里认识的，成交也算这条线。"
+        "接话只回最近 48 小时的发言，隔一两天要重新提取一次（列表为空时有「用这个号去重新提取」入口）。"
+        "群开慢速模式会稍后再发；这个号在某群被禁言则那个群不再列人。",
+        "The group-members console (/tools/tg-members) has a step bar: 1 Extract members -> 2 Reply in the group "
+        "first -> 3 DM openers -> 4 Results and deals; the sending account is picked in the sticky bar mid-page and "
+        "shared by steps 2 and 3. Step 3 \"DM openers\" rules first: only the "
+        "account that captured a person can message them; 5-10 new people per account per day (new accounts ramp "
+        "from 3 over 14 days); sends go out 10:00-21:00 local only; at least 25 min between two; every send counts "
+        "toward the account's overall cap; each person is opened once. Flow: pick the account → Build today's "
+        "queue → AI draft (one line per person from this account's persona + default goal + what they last said "
+        "in the group; no pitch, no links, no contact asks; templates when the LLM is down) → edit or skip on "
+        "each card → Approve. Three modes: Manual (click Send now per person); Approve then auto-send (the "
+        "scheduler sends one approved person every 25-90 min inside the window); Fully automatic (queues, drafts "
+        "and sends on its own) - only for accounts 14+ days old with no flood limit in the last 7 days and a reply "
+        "rate above the floor; re-checked every cycle and demoted automatically. After 72h without a reply one "
+        "follow-up nudge is sent (once; soft, no chasing), then closed after another 72h. Every opener and nudge "
+        "is mirrored into the inbox as our outbound line, so when they reply the reply chain knows what we said "
+        "and continues in this account's persona; the 'Replies today' list shows who replied and what, with a "
+        "link into the workspace conversation. Someone still queued who messages us first is pulled out of the "
+        "queue automatically. If they replied and this account has not answered within 48h (AI did not fire or "
+        "nobody picked up) the page shows an orange 'Replied but unanswered' list, an audit entry is written and "
+        "the inbox conversation gets the 'needs human' tag (reason: group outreach unanswered, so it lands in the "
+        "cockpit queue); one reply from our side clears the tag automatically. The same applies when a chat "
+        "went quiet again (we answered once, they wrote again, and we have not replied for 48h). The tag is set "
+        "once per wait: if an agent clears it by hand it is not re-added until they send a new message. "
+        "A 'stop messaging me' blocks that person everywhere. AI drafts A/B three opener "
+        "angles (echo their line / via the group / ask one thing), leaning toward the best 30-day reply rate "
+        "while keeping some exploration; silent members only get the group angle. Personas with 'Public AI "
+        "identity' ticked in Persona Studio (e.g. Xiaojie) get a fourth angle, 'says it's an AI': the opener may "
+        "openly say it is an AI but never poses as a human; other personas still may not call themselves AI. "
+        "Who goes first: in Persona Studio, edit the persona -> 'Target customers (group outreach)' and fill intent "
+        "keywords and exclusions (one-click industry presets: cross-border e-commerce, B2B export, customer "
+        "service, education, local services). People whose group message hits a keyword are queued first and "
+        "their card shows 'intent score: hits'; hits on an exclusion (e.g. gambling) are never messaged. Without "
+        "keywords there is no intent ranking and 'Reply in the group first' lists nobody. Step 4 'Results and "
+        "deals' slices reply rate by angle / opener source / persona / hour and shows first-reply latency - rows "
+        "under 10 sends are noise. It also has a group-reply layer: how many were replied to in groups, how many "
+        "responded (and how many DMed us), plus the reply rate of DMs after a group reply vs cold DMs. With Goals "
+        "enabled it also counts deals: when the account or persona has a default acquisition goal, repliers get "
+        "it automatically, order links carry the chat tag, and once the site order is paid or the deal is marked "
+        "won by hand, the funnel gains a Won step, the angle table a won column, plus won-by-group and recent wins "
+        "(only deals after the opener or group reply count; those who came to us after a group reply are marked). "
+        "Stop this account is the kill switch; window and daily cap are editable on the page. "
+        "Any account, old or new, works once switched to a sales persona (e.g. Xiaojie). The system's account age "
+        "counts days since it joined this system, so for an older account fill in 'Real account age' in step 3; the "
+        "larger value sets the daily ramp. Overstating it removes the new-account ramp protection and the ban risk "
+        "is on that account; a declared age only unlocks full auto after 10 DM openers from here in the last 7 "
+        "days, and one Telegram flood limit voids the declaration and puts the account back on the ramp. "
+        "Step 2 'Reply in the group first': with the same account, reply publicly to a message from the last 48h "
+        "by someone with intent (threaded under their message). The AI draft helps without pitching, links, "
+        "'DM me' or @-mentions, with one click to draft today's batch; an agent posts each one by hand after an "
+        "in-page confirm that shows which message is being answered; 5 per account and 2 per group per day, 10 "
+        "min apart. Each person is replied to in a group only once, even across several groups. Nobody is DMed "
+        "within 6 hours of a group reply; after that they go to the front of the DM queue and the DM picks up from "
+        "the group reply. If they were already queued, the opener is sent back for a redraft (hand-edited ones are "
+        "kept) and needs approval again in approve-then-send mode. When someone replies to your group message "
+        "(threaded under it), step 2 lists it under 'Replied to you in the group' (who, what they said, and a link "
+        "to continue in that group in the workspace) and the stats count it as a response; if the person you "
+        "answered replied, the later DM opener picks up from their reply. It is also the only way to reach people whose "
+        "privacy settings block DMs: if they later DM this account it is recorded as 'came to us after a group "
+        "reply', the reply chain knows you met in the group, and deals are credited to it. Only the last 48h of "
+        "messages are eligible, so re-extract every day or two (an empty list offers 're-extract with this "
+        "account'). Slow-mode groups are retried later; a group where the account is muted stops being listed.",
+        "同群开口 开口 自动私聊 主动私聊 第一条私信 AI 开场 打招呼 批准后自动发 全自动 跟进 回复率 回音 切入方式 "
+        "坦白是AI 公开AI 意向 成交 转化 归因 号龄 老号 申报号龄 群里接话 公开回复 先接话 接话后来找 重拟 "
+        "outreach opener auto dm cold message approve auto-send follow-up reply rate a/b "
+        "won deals attribution public ai account age reply in the group first before dm warm cold",
+        "/tools/tg-members",
+    ),
+    (
+        "persona-target-customers",
+        "群成员获客按什么找人：人设里的「目标客户」意向词",
+        "Target customers for group outreach: intent keywords in the persona",
+        "人设工作室 → 编辑开口号用的那个人设 →「目标客户（群成员获客）」：填意向关键词（逗号分隔，"
+        "对方群发言命中就优先开口、群里先接话也只列这些人）和排除词（命中就永远不碰，如 博彩）。"
+        "不知道填什么可以在「按行业套用」里选跨境电商、外贸 B2B、客服/私域、教育培训、本地生活，"
+        "词会追加进去，再按自己的生意删改，最后点保存。不填意向词＝不按意向排序，群里接话列表为空。",
+        "Persona Studio -> edit the persona your outreach account uses -> 'Target customers (group outreach)': "
+        "fill intent keywords (comma separated; members whose group messages hit them are messaged first, and "
+        "only they are listed for replying in the group) and exclusions (never contacted, e.g. gambling). Not "
+        "sure what to use? Pick an industry preset (cross-border e-commerce, B2B export, customer service, "
+        "education, local services) to append its words, edit them for your business, then save. No intent "
+        "keywords means no intent ranking and an empty group-reply list.",
+        "目标客户 意向词 意向关键词 排除词 行业预设 按行业套用 获客关键词 找什么人 "
+        "target customers intent keywords exclusions industry preset outreach keywords",
+        "/personas",
+    ),
+    (
+        "gtouch-group-replies",
+        "在群里接话后，对方在群里回我了去哪看",
+        "Someone answered my group reply - where do I see it",
+        "群成员管理台（/tools/tg-members）第②步「群里先接话」下方的「群里回你了（近 3 天）」：列出谁回的"
+        "（被接话的本人或群里别人）、你说的那句和对方回的那句，点「去群里接着聊」直达工作台里那个群接着回。"
+        "只认挂在你那条下面的回复（对着你的消息点了回复）。本人回过的算作回应计入第④步统计，"
+        "之后给 TA 的私聊开场会顺着 TA 在群里回的那句聊。",
+        "Group-members console (/tools/tg-members), step 2 'Reply in the group first', section 'Replied to you "
+        "in the group (last 3 days)': who answered (the member you replied to or someone else), your line and "
+        "their reply, and 'Continue in the group' opens that group in the workspace. Only replies threaded "
+        "under your message count. A reply from the member counts as a response in the step 4 stats, and the "
+        "later DM opener picks up from what they said in the group.",
+        "群里回你了 回了我的消息 接话被回 对方回我了在哪看 去群里接着聊 "
+        "answered someone answered replied to me continue in the group",
+        "/tools/tg-members",
+    ),
+    (
+        "group-show-goal",
+        "群里怎么按目标聊天，而不是念剧本",
+        "How a group show chats toward a goal instead of reading a script",
+        "管理台打开群脉导播台（/group-show），选一场已经写了目标的戏再开演。"
+        "开演后账号先像普通人一样聊天。群里有人自己说到那件事，向导才说自己是 AI，"
+        "并只讲目标里的那一件，邀请对方私聊试。没人提到，就只聊天。"
+        "右边没有逐拍列表是正常的。桌面安装包的侧栏默认没有这个入口。",
+        "Open the CrowdX console in the admin app (/group-show) and start a show "
+        "that already has a goal. The accounts chat like ordinary people first. "
+        "Only after someone in the room brings up that topic does the guide say "
+        "it is the AI, mention that one thing, and invite a private try. "
+        "If nobody mentions it, they only chat. An empty beat list is expected. "
+        "The desktop installer's sidebar leaves this entry off.",
+        "群脉导播台 按目标聊天 不念剧本 炒群 向导 群里怎么聊 "
+        "goal show no script crowd console",
+        "/group-show",
+    ),
 ]
 
 # 渠道接入教程（实施96 / TK-1，2026-09-08 老板拍板「也加入小智的提问问答中」）：抖音企业版申请
@@ -1904,7 +2225,7 @@ try:
     from src.assistant.onboarding_guides import howto_tuples as _onboarding_howto_tuples
     _HOWTO.extend(_onboarding_howto_tuples())
 except Exception:  # 教程数据不可用不影响其余帮助条目
-    pass
+    logging.getLogger(__name__).debug("swallowed in module", exc_info=True)
 
 
 # 「带我去」聚光灯锚点（P3 2026-08-21）：跳页后高亮的目标选择器。

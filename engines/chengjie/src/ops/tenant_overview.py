@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import logging
 import json
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ def _read_json(path: Path) -> Optional[dict]:
     try:
         return json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:  # noqa: BLE001 - 缺文件/坏 JSON 一律按无数据
+        logging.getLogger(__name__).debug("swallowed in _read_json", exc_info=True)
         return None
 
 
@@ -43,7 +45,7 @@ def _port_listening_default(port: int) -> bool:
                     and c.laddr.port == port):
                 return True
     except Exception:  # noqa: BLE001 - psutil 不可用按未知（False）
-        pass
+        logging.getLogger(__name__).debug("swallowed in _port_listening_default", exc_info=True)
     return False
 
 
@@ -56,6 +58,7 @@ def _latest_backup_age_h(backups_dir: Path, iid: str, now: float) -> Optional[fl
             return None
         return round((now - zips[0].stat().st_mtime) / 3600, 1)
     except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).debug("swallowed in _latest_backup_age_h", exc_info=True)
         return None
 
 
@@ -67,6 +70,7 @@ def _guard_log_age_min(log_dir: Path, mode: str, now: float) -> Optional[float]:
             return None
         return round((now - logs[0].stat().st_mtime) / 60, 1)
     except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).debug("swallowed in _guard_log_age_min", exc_info=True)
         return None
 
 

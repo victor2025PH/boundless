@@ -148,6 +148,7 @@ def latest_inbound_ts(
             if ts > best:
                 best = ts
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in latest_inbound_ts", exc_info=True)
             continue
     return best
 
@@ -173,6 +174,7 @@ def peer_awaiting_reply(rows: Optional[List[Dict[str, Any]]]) -> bool:
             if ts >= latest_ts:
                 latest_dir, latest_ts = d, ts
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in peer_awaiting_reply", exc_info=True)
             continue
     return latest_dir == "in"
 
@@ -264,6 +266,7 @@ def near_duplicate_report(
                         and hit["similarity"] > best["similarity"])):
                 best = hit
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in near_duplicate_report", exc_info=True)
             continue
     out["hit"] = best
     out["cross_round_similar"] = cross
@@ -539,7 +542,7 @@ def _record_rewrite(outcome: str, source: str = "", *, conv_id: str = "",
             key, source or "-", conv_id or "-",
             (" " + str(detail)) if detail else "")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _record_rewrite", exc_info=True)
 
 
 def record_dup_check(level: str = "", *, forced: bool = False,

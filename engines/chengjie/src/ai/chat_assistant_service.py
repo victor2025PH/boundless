@@ -315,7 +315,8 @@ _STOP_CONTACT_NEGATED = re.compile(
     re.IGNORECASE,
 )
 _STOP_CONTACT_ZH = re.compile(
-    r"别联系|别再联系|不要联系|勿扰|别发了|别再发|不要发了|不要再发"
+    # 智语 2026-10-08：「不要再发呆 / 别再发烧」不是停联
+    r"别联系|别再联系|不要联系|勿扰|别发了|别再发(?![呆烧胖福财愁火疯抖])|不要发了|不要再发(?![呆烧胖福财愁火疯抖])"
     r"|(?:别|不要|不想|勿|停止)\S{0,4}(?:联系|打扰|骚扰|发消息|发信息)"
     # O-1 A：拉黑宣告（针对我们）+ 别烦我；不收裸「拉黑」（「我把他拉黑了」是转述）
     r"|(?:再发|再联系|再打扰|再骚扰|再找我)\S{0,3}拉黑|拉黑你|要拉黑|把你拉黑|拉黑了你"
@@ -374,7 +375,17 @@ def _stop_contact_hit(text: str) -> str:
         return m.group(0)
     scrubbed = _STOP_CONTACT_NEGATED.sub(" ", t)
     m = _STOP_CONTACT_EN.search(scrubbed)
-    return _norm_hit(m.group(0)) if m else ""
+    if m:
+        return _norm_hit(m.group(0))
+    # 智安 P0-2（2026-10-08）：多语补充词表（单独 STOP / Stop po / tigil na / ayoko na /
+    # huwag mo na akong i-chat / Bisaya / 印地语 / 退订……）。同一入口，不造第二套：
+    # quick_analyze / stop_contact_hits / hard_stop_reason 看到的都是这里的结果。
+    # 否定式片段已挖掉（「can't stop messaging you」不算）。
+    try:
+        from src.compliance.stop_gate import match_lexicon
+        return _norm_hit(match_lexicon(scrubbed))
+    except Exception:
+        return ""
 
 
 def _detect_risk_detailed(

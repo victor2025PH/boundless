@@ -389,6 +389,13 @@ def _collect_chats_from_store(
         st = acct_status.get(key, "")
         if st == "offline" and not include_hidden:
             continue  # 历史在 store，重登后同路径自动回显
+        # 合成演练号不进默认清单，和未读徽标同一口径。点名的演练对仍留在清单里。
+        try:
+            from src.inbox.customer_metrics import is_synthetic_drill
+            if is_synthetic_drill(c.get("chat_key")):
+                continue
+        except Exception:
+            logger.debug("[inbox] synthetic drill filter skipped", exc_info=True)
         out.append(store_row_to_chat(
             c, automation_mode=mode, message_count=mc,
             account_label=lmap.get(key),
@@ -697,7 +704,7 @@ def _mark_agent_sent(
     sends = [s for s in all_sends if not str(s.get("claimed_mid") or "")]
     # 回落池＝除「列上精确认领」以外的全部出站行（同一列表重复调用结果一致＝幂等）
     outs = [m for m in all_outs if str(m.get("message_id") or "") not in by_mid
-            and str(m.get("sent_by") or "") != "ai"]          # 四期：AI 自动链行永不回落成「人工」
+            and str(m.get("sent_by") or "") not in ("ai", "script", "system")]  # AI/脚本/系统行永不回落成「人工」
     if not sends or not outs:
         return 0
     outs.sort(key=lambda m: float(m.get("ts") or 0))

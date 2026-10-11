@@ -15,9 +15,9 @@
 - ``simulate_inbound()``：演示或测试注入一条进线（如「多少钱」），不经任何平台。
 
 **它不是抖音接入**：能力矩阵（``platform_capabilities.WORKERS``）刻意不登记它，
-``platform_readiness._IMPLEMENTED_MODES`` 也不加 ``douyin``——注册表里抖音仍是
-``implemented=False``，事实卡仍答「暂不支持」。真实 worker 落地时替换工厂名即可，
-本模块整体删除不影响任何其它代码。
+``platform_readiness._IMPLEMENTED_MODES`` 也不加 ``(douyin, web)``。公开版认的是
+``douyin_official`` 的 official 通道；本模块仍只在 ``mock_enabled`` 时出现，生产默认关。
+删掉本模块不影响官方通道。
 """
 from __future__ import annotations
 

@@ -18,7 +18,8 @@
     PLAT_ICON[p.id] = p.icon;
   });
   const MODE_KEY = { protocol: "cp.acct.mode.protocol", web: "cp.acct.mode.web", device: "cp.acct.mode.device", desktop: "cp.acct.mode.desktop" };
-  const STATUS_KEY = { online: "cp.acct.status.online", offline: "cp.acct.status.offline", pending: "cp.acct.status.pending", unknown: "cp.acct.status.unknown" };
+  // stale：/api/accounts 按心跳判定「心跳过期」（2026-10-08 P0-5），running=false，与离线同色、文案单列。
+  const STATUS_KEY = { online: "cp.acct.status.online", offline: "cp.acct.status.offline", pending: "cp.acct.status.pending", unknown: "cp.acct.status.unknown", stale: "cp.acct.status.stale" };
   // 后端 reason_code → 本地化文案。未知 code 回落通用失败文案，不显示裸 code。
   const REASON_KEYS = {
     qr_expired: "cp.acct.qr_expired",

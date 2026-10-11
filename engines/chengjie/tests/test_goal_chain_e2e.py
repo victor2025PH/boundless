@@ -58,7 +58,11 @@ def _build(tmp_path):
     app.add_middleware(SessionMiddleware, secret_key="t")
 
     def auth_dep(request: Request) -> None:
-        request.scope["session"] = {"role": "", "user": "tester"}
+        # SessionMiddleware 装的是带 accessed/modified 的 Session。换成普通 dict
+        # 会在发响应时 AttributeError: 'dict' object has no attribute 'accessed'。
+        sess = request.scope["session"]
+        sess.clear()
+        sess.update({"role": "", "user": "tester"})
 
     register_goal_routes(app, auth_dep, cm)
     register_workflow_routes(app, api_auth=_api_auth)

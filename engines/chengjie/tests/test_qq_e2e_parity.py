@@ -940,9 +940,13 @@ def test_parity_frontend_tables_and_i18n():
     fixed = set(_js_array(inbox, r"const FIXED_PLATS"))
     assert both <= fixed and "zalo" in fixed
     assert both <= _js_set(inbox, r"const _CONNECT_PLATS")
-    for decl in (r"const PC", r"const PI", r"const PN", r"const PLAT_DESC", r"const PLAT_NOTE"):
+    for decl in (r"const PC", r"const PN", r"const PLAT_DESC", r"const PLAT_NOTE"):
         keys = _js_obj_keys(inbox, decl)
         assert both <= keys and "zalo" in keys, decl
+    # PI 刻意不含 qq/qqbot：它们走 platformIconSVG，不占 emoji 额度（实施97 天花板）。
+    pi = _js_obj_keys(inbox, r"const PI")
+    assert "zalo" in pi and not (both & pi)
+    assert "platformIconSVG" in inbox
     assert "qqbot" in _js_obj_keys(inbox, r"const _OFFICIAL_CONSOLE")
     wiz = _read("src/web/templates/setup_wizard.html")
     assert re.search(r"OFFICIAL_CHS\s*=\s*\{[^}]*qqbot", wiz) and re.search(r"REACH_PLATS\s*=\s*\{[^}]*qqbot", wiz)

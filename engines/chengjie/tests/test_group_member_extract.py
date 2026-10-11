@@ -76,6 +76,21 @@ def test_user_row_normalization():
     assert r["user_id"] == "42" and r["username"] == "neo"
     assert r["is_admin"] is True and r["spoke"] is True
     assert r["last_spoke_ts"] == 123.0 and r["extracted_at"] == 123.0
+    assert r["access_hash"] == "" and r["hash_account_id"] == ""
+    u = _U(7, "n", "N")
+    u.access_hash = 2 ** 62
+    r2 = user_row(u, group_id="-1", group_title="G", spoke=True, is_admin=False,
+                  source_account_id="accA", job_id="j", batch_id="b", now=1.0)
+    assert r2["access_hash"] == str(2 ** 62)
+    assert r2["hash_account_id"] == "accA"
+    assert r2["last_msg_text"] == "" and r2["last_spoke_ts"] == 1.0
+    u.language_code = "ru"
+    r3 = user_row(u, group_id="-1", group_title="G", spoke=True, is_admin=False,
+                  source_account_id="accA", job_id="j", batch_id="b", now=1.0,
+                  last_msg={"text": "  有人用过  这个吗 ", "ts": 500.0})
+    assert r3["last_msg_text"] == "有人用过 这个吗"
+    assert r3["last_spoke_ts"] == 500.0 and r3["last_msg_ts"] == 500.0
+    assert r3["lang_code"] == "ru"
 
 
 def test_score_member_ranking():
@@ -105,8 +120,10 @@ class _Member:
 
 
 class _Msg:
-    def __init__(self, from_user):
+    def __init__(self, from_user, text="", date=None):
         self.from_user = from_user
+        self.text = text
+        self.date = date
 
 
 class _Chat:
@@ -153,10 +170,15 @@ async def test_run_extraction_spoke_no_admin_excludes_admin_bot_self():
     u3 = _U(103, "botx", is_bot=True)    # bot
     u4 = _U(104, "self")                 # 自己
     u5 = _U(105, "a5", "A5")
+    import datetime as _dt
+    base = 1_700_000_000
     client = FakeClient(
         chat=_Chat(-100999, "MyGroup"),
         admins=[u2],
-        history=[_Msg(u1), _Msg(u2), _Msg(u3), _Msg(u5), _Msg(u4)],
+        # 历史从新到旧：u1 最近一条是纯媒体（无字），再往前才有字
+        history=[_Msg(u1, "", _dt.datetime.fromtimestamp(base + 9000)), _Msg(u2), _Msg(u3),
+                 _Msg(u5, "有人试过这个吗", _dt.datetime.fromtimestamp(base + 8000)),
+                 _Msg(u1, "刚入群", _dt.datetime.fromtimestamp(base + 7000)), _Msg(u4)],
     )
     job = st.create_job(group_id="-100999", account_ids=["accA"],
                         filter=FILTER_SPOKE_NO_ADMIN, daily_cap_per_account=100,
@@ -175,6 +197,10 @@ async def test_run_extraction_spoke_no_admin_excludes_admin_bot_self():
     # 入库即带可聊度分：u1(101) 发言+用户名 a1+名 A1 → 40+25+15+10 = 90
     m101 = [m for m in st.list_members("-100999") if m["user_id"] == "101"][0]
     assert m101["score"] == 90
+    # 他最近说过的话 + 真实发言时间进库（AI 开场的料）
+    assert m101["last_msg_text"] == "刚入群" and m101["last_spoke_ts"] == base + 9000.0
+    m105 = [m for m in st.list_members("-100999") if m["user_id"] == "105"][0]
+    assert m105["last_msg_text"] == "有人试过这个吗" and m105["last_msg_ts"] == base + 8000.0
 
 
 async def test_run_extraction_respects_daily_cap():
@@ -207,6 +233,54 @@ async def test_run_extraction_floodwait_exhausted_marks_error():
     j = st.get_job(job["job_id"])
     assert j["status"] == JOB_ERROR
     assert j["floodwaits"] >= 1
+
+
+class _Peer:
+    def __init__(self, user_id, access_hash):
+        self.user_id = user_id
+        self.access_hash = access_hash
+
+
+class _Storage:
+    """pyrogram session 的 peers 缓存：拉成员时 pyrogram 自己写进去，高层 User 上却没有 access_hash。"""
+    def __init__(self, hashes):
+        self._h = dict(hashes)
+
+    async def get_peer_by_id(self, peer_id):
+        if peer_id not in self._h:
+            raise KeyError(peer_id)
+        return _Peer(peer_id, self._h[peer_id])
+
+
+async def test_run_extraction_fills_access_hash_from_session_cache():
+    st = GroupMembersStore(":memory:")
+    users = [_U(301, "a"), _U(302, "b"), _U(303, "c")]       # 均无 access_hash 属性（pyrogram 2.x 实况）
+    client = FakeClient(chat=_Chat(-7, "G"), members=users)
+    client.storage = _Storage({301: 2 ** 40, 302: 0})        # 303 不在缓存；302 缓存为 0 = 无效
+    job = st.create_job(group_id="-7", account_ids=["accA"], filter=FILTER_ALL,
+                        daily_cap_per_account=100, scan_limit=500)
+    res = await run_extraction(client, st, job["job_id"], account="accA", sleep=_noop_sleep)
+    assert res["ok"] is True and res["inserted"] == 3
+    rows = {m["user_id"]: m for m in st.list_members("-7")}
+    assert rows["301"]["access_hash"] == str(2 ** 40) and rows["301"]["hash_account_id"] == "accA"
+    assert rows["302"]["access_hash"] == "" and rows["303"]["access_hash"] == ""
+    assert [m["user_id"] for m in st.list_by_hash_account("accA")] == ["301"]
+    # 早先入库没凭证的人：再提一次即补上（不新增行）
+    client.storage = _Storage({301: 2 ** 40, 303: 77})
+    job2 = st.create_job(group_id="-7", account_ids=["accA"], filter=FILTER_ALL,
+                         daily_cap_per_account=100, scan_limit=500)
+    res2 = await run_extraction(client, st, job2["job_id"], account="accA", sleep=_noop_sleep)
+    assert res2["inserted"] == 0
+    assert {m["user_id"]: m for m in st.list_members("-7")}["303"]["access_hash"] == "77"
+    # 当时没发过言的人后来说话了：按「发过言」再提一次 → 补上发言标记（才进得了开口候选）
+    assert rows["301"]["spoke"] in (0, False)
+    client._history = [_Msg(users[0], "后来说了句话")]
+    job3 = st.create_job(group_id="-7", account_ids=["accA"], filter=FILTER_SPOKE,
+                         daily_cap_per_account=100, scan_limit=500)
+    await run_extraction(client, st, job3["job_id"], account="accA", sleep=_noop_sleep)
+    m301 = {m["user_id"]: m for m in st.list_members("-7")}["301"]
+    assert m301["spoke"] in (1, True) and m301["last_msg_text"] == "后来说了句话"
+    assert m301["score"] > rows["301"]["score"]
 
 
 async def test_run_extraction_multi_account_shards_are_disjoint():

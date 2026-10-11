@@ -106,6 +106,14 @@ def test_build_followup_text_deterministic():
 
 
 def test_schedule_reaction_followup_enqueues(tmp_path):
+    """入队后能在 defer 到期时被 drain。
+
+    不用 now=1000：那是 1970-01-01 00:16，落在默认安静窗 23:00–08:00 里，
+    shift_out_of_quiet_hours 会把到期推到当天 08:00，drain_due(now=2000) 看不见。
+    安静窗本身不改；时钟取本地正午，落在窗外。
+    """
+    from datetime import datetime
+    now = datetime(2026, 6, 15, 12, 0, 0).timestamp()
     store = InboxStore(tmp_path / "inbox.db")
     cid = ingest_incoming(
         store, platform="whatsapp", account_id="wa1", chat_key="639111",
@@ -129,10 +137,10 @@ def test_schedule_reaction_followup_enqueues(tmp_path):
         target_id="MID1",
         emoji="❤️",
         sender="639111",
-        now=1000.0,
+        now=now,
     )
     assert row_id > 0
-    due = outbox.drain_due(now=2000.0, limit=5)
+    due = outbox.drain_due(now=now + 120.0, limit=5)
     assert len(due) == 1
     assert "reaction_followup" in due[0]["reason"]
     assert cid == "whatsapp:wa1:639111"

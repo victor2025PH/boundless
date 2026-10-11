@@ -597,7 +597,9 @@ def get_inbox_store() -> Any:
 
 
 _SINK_FAIL_WARN_GAP_SEC = 600.0
-_sink_fail_last_warn = 0.0
+# None = 从未告警。不能用 0：monotonic 从开机算起，开机 10 分钟内 0 仍在节流窗里，
+# 第一条落库失败会被吞成 debug（CI 新 runner / 刚重启的机器上看不到 WARNING）。
+_sink_fail_last_warn: Optional[float] = None
 _sink_fail_total = 0
 
 
@@ -614,10 +616,20 @@ def emit_incoming(msg: Dict[str, Any]) -> None:
         return
     try:
         fn(msg)
+        # 同群开口回音：TG 私聊里对方回了 → 成员行 sent→replied；我方回话 → 记接上
+        # （旁支，自己吞异常）
+        try:
+            from src.companion.group_member_outreach import (
+                note_inbound_reply, note_outbound_answer)
+            note_inbound_reply(msg)
+            note_outbound_answer(msg)
+        except Exception:
+            pass
     except Exception:
         _sink_fail_total += 1
         now = time.monotonic()
-        if now - _sink_fail_last_warn >= _SINK_FAIL_WARN_GAP_SEC:
+        last_warn = _sink_fail_last_warn
+        if last_warn is None or now - last_warn >= _SINK_FAIL_WARN_GAP_SEC:
             _sink_fail_last_warn = now
             try:
                 m = msg if isinstance(msg, dict) else {}
@@ -893,6 +905,7 @@ def ingest_incoming(
     backfill: bool = False,
     backfill_source: str = "",
     decrypt_fail: bool = False,
+    feature_used: str = "",
 ) -> Optional[str]:
     """把一条 protocol 消息落库到统一收件箱。返回 conversation_id（失败返回 None）。
 
@@ -913,6 +926,9 @@ def ingest_incoming(
     客户信息面板显示真实昵称与头像）。号码补名收口于此——``name`` 空或就是裸 chat_key 时，
     用已同步的通讯录名（``protocol_contacts``）兜底，使**所有入站路径**（HTTP 桥 + 进程内
     sink）一致地把裸号码补成真人名，而非仅 HTTP 桥。
+
+    ``feature_used``：客户做了这一项功能时另带的功能 id。只写事件账，不进正文，
+    也不进自动回复。回填历史忽略。空串＝这条消息没有功能事件。
     """
     from src.inbox.inbound_ledger import record as _ledger
     if store is None or not chat_key:
@@ -1129,6 +1145,22 @@ def ingest_incoming(
             store.set_conversation_mentioned(str(chat["conversation_id"]), True)
         except Exception:
             logger.debug("[protocol_bridge] set_conversation_mentioned 失败", exc_info=True)
+    # 功能使用是旁路事件：不拼进正文，自动回复仍只看见客户原话。
+    # 回填历史不记，避免把旧会话刷成「刚测完」。
+    _feat = str(feature_used or "").strip()
+    if _feat and direction == "in" and not _quiet:
+        try:
+            from src.companion.group_show.guide_trial import note_feature_used
+            note_feature_used(
+                store,
+                account_id=str(account_id or ""),
+                user_id=str(chat_key or ""),
+                feature=_feat,
+                ts=float(ts) if ts else None,
+                platform=platform,
+            )
+        except Exception:
+            logger.debug("[protocol_bridge] 向导试用事件写入失败", exc_info=True)
     return str(chat["conversation_id"])
 
 

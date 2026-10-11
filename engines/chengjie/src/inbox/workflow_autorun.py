@@ -55,7 +55,7 @@ def resolve_auto_start_cfg(cfg_root: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             pass
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in resolve_auto_start_cfg", exc_info=True)
     return out
 
 

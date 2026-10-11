@@ -373,7 +373,10 @@ def test_service_no_risk_zero_ledger(shadow_env, store):
 
 
 def test_service_review_mode_held_not_in_ledger(shadow_env, store):
-    svc = DraftService(inbox_store=store, risk_fn=quick_risk)
+    # 智安 P0-2（2026-10-08）：停联缺省由 STOP 硬闸隐含锁定（冻结、零草稿，见 tests/compliance）；
+    # 本用例验「review 档挂起不进台账」，用应急开关回到未锁定语义。
+    svc = DraftService(inbox_store=store, risk_fn=quick_risk,
+                       cfg={"compliance": {"stop_gate": {"enabled": False}}})
     did = svc.auto_generate_draft(_conv(), "please stop messaging me", automation_mode="review")
     assert store.get_draft(did)["autopilot_level"] == "L1"
     assert _lines(shadow_env) == []

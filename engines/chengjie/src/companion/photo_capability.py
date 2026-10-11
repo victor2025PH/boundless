@@ -32,6 +32,7 @@ docstring 原话「没有发图能力时这段说明只是噪声」），而最�
 """
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Dict, Optional
 
@@ -180,7 +181,7 @@ def sanitize_no_photo_reply(
             try:
                 record_sanitize(stripped=(out != raw), source=source)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in sanitize_no_photo_reply", exc_info=True)
             return out
         stripped = strip_media_promises(out)
         stripped = strip_media_claims(stripped, media_context=media_context)
@@ -194,7 +195,7 @@ def sanitize_no_photo_reply(
         try:
             record_sanitize(stripped=(stripped != raw), source=source)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in sanitize_no_photo_reply", exc_info=True)
         return stripped
     except Exception:
         return raw
@@ -220,6 +221,7 @@ def resolve_prompt_persona(context: Optional[Dict[str, Any]]
         )
         return persona if isinstance(persona, dict) else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in resolve_prompt_persona", exc_info=True)
         return None
 
 

@@ -1,0 +1,18 @@
+# 自有业务 · STOP 确认文案
+
+schema: zhiliao.stop_confirm.v1
+default_lang: en
+rules: 只确认、不挽留、不追问、不带链接/emoji；每个会话只发一次；发完该联系人进 STOP 名单，任何渠道不再主动触达。
+templates:
+  en:
+    persona: Okay, got it — I won't message you again.
+    brand: Understood. {business_name} won't send you any more messages.
+  tl:
+    persona: Sige po, naintindihan ko — hindi na po ako magme-message ulit.
+    brand: Noted po. Hindi na kayo makakatanggap ng message mula sa {business_name}.
+  taglish:
+    persona: Okay po, noted — hindi na po ako magme-message ulit.
+    brand: Noted po. Wala na po kayong matatanggap na message from {business_name}.
+  zh:
+    persona: 好的，收到，之后不会再给你发消息了。
+    brand: 已收到，{business_name}不会再给您发送消息。

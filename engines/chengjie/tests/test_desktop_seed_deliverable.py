@@ -15,7 +15,8 @@ Messenger」，每一种扫码方式都灰着显示「未启用 / 需运维配�
   以为是自己没配对。
 
 故本门禁钉住一条不变量：**种子里出现的每一个非 device 方式，都必须 ①本系统真的
-实现了 ②它的运行时依赖真的在安装包里**。纯文件读取，不需要先打包，CI 常驻。
+实现了 ②它的运行时依赖真的在安装包里**。依赖是否随包这一条要先装边车，
+只在打包检查作业里跑；其余检查仍是纯文件读取。
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -166,8 +168,14 @@ def test_seed_modes_are_implemented():
         "而不是留给用户猜是不是自己没配对")
 
 
+@pytest.mark.packaging
 def test_seed_modes_dependencies_are_bundled():
-    """种子列出的每个非 device 方式，其运行时依赖必须真在安装包里。"""
+    """种子列出的每个非 device 方式，其运行时依赖必须真在安装包里。
+
+    标记 ``packaging``：要 WhatsApp / Messenger 的 ``node_modules`` 和随包 Chromium。
+    单元回归作业用 ``-m "not packaging"`` 不跑它（也不下载浏览器）。
+    打包检查作业先跑 ``desktop/build/install_seed_sidecars.py``，再跑本文件。
+    """
     problems = []
     for platform, pcfg in _seed_platform_login().items():
         if not isinstance(pcfg, dict):

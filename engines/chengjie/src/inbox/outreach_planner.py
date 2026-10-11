@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import time
 from dataclasses import dataclass, field
@@ -236,7 +237,7 @@ class OutreachPlanner:
             try:
                 return int(self._limiter.remaining_for(account_id, now=int(now)))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in OutreachPlanner._account_cap", exc_info=True)
         return self._default_cap if self._default_cap > 0 else 10 ** 9
 
     def _meta(self, conversation_id: str) -> Dict[str, Any]:

@@ -280,8 +280,25 @@ async def test_guard_off_returns_raw_output():
     assert out == _AI_LEAK and ai.calls == 1
 
 
+@pytest.mark.asyncio
+async def test_the_guide_may_say_it_is_the_ai():
+    """向导这句承认自己是 AI 可以发出去。帮手说同一句仍然被拦住。"""
+    line = "我是 AI。多个号的消息放在一处看，私聊我试这一件。"
+    ai = FakeAI(line)
+    guide = CastMember(slot="guide", account_id="g", persona_id="lin_jiaxin",
+                       display_name="向导")
+    out = await persona_generator(ai, persona_manager=_pm())(
+        guide, ECP_MESSAGES, DIRECTIVE)
+    assert out == line and ai.calls == 1
+    blocked = FakeAI(line, line)
+    assert await _run(persona_generator(blocked, persona_manager=_pm())) == ""
+
+
 def test_check_line_violations_pure_function():
     assert check_line_violations(_AI_LEAK) != []
+    assert check_line_violations(
+        "我是 AI。多个号的消息放在一处看，私聊我试这一件。",
+        allow_ai_disclosure=True) == []
     assert check_line_violations(_SERVICE_TONE, _PROFILE) != []
     assert check_line_violations("哈哈 我也这么觉得", _PROFILE) == []
     assert check_line_violations("", _PROFILE) == []
@@ -302,6 +319,29 @@ async def test_empty_model_output_is_not_retried():
     ai = FakeAI("   ")
     assert await _run(persona_generator(ai, persona_manager=_pm())) == ""
     assert ai.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_real_client_is_asked_for_the_local_medium_tier():
+    """真客户端走本地路由、中档温度。没有 tool_chat 的替身仍只调 chat。"""
+    class LocalAI:
+        def __init__(self) -> None:
+            self.tools: list = []
+
+        async def tool_chat(self, prompt, *, purpose="tool", strategy_overrides=None,
+                            strict_route=False, system=None):
+            self.tools.append((purpose, dict(strategy_overrides or {}), strict_route))
+            return "在的，刚看到。"
+
+        async def chat(self, prompt, strategy_overrides=None):
+            raise AssertionError("should use the local route")
+
+    ai = LocalAI()
+    out = await _run(persona_generator(ai, persona_manager=_pm()))
+    assert out == "在的，刚看到。"
+    purpose, overrides, strict = ai.tools[0]
+    assert purpose == "group_show" and strict is True
+    assert overrides["temperature"] == 0.7 and overrides["max_tokens"] == 1024
 
 
 @pytest.mark.asyncio

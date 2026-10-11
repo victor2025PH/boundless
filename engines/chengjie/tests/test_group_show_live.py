@@ -1100,3 +1100,140 @@ async def test_distinct_lines_pay_zero_retry_cost():
     assert res.sent == 4
     assert res.repetition_retries == 0 and res.skipped == 0
     assert len(sender.calls) == 4
+
+
+def _guide_playbook() -> Playbook:
+    roles = (Role("guide"), Role("asker"), Role("skeptic"))
+    beats = (
+        Beat("b1", "asker", _intent(1), soft=0),
+        Beat("b2", "guide", _intent(2), product="matrixx", soft=3),
+        Beat("b3", "skeptic", _intent(3), soft=0),
+    )
+    return Playbook(id="guide_trial", name="向导", system="growth",
+                    products=("matrixx",), soft_ad_level=3,
+                    roles=roles, beats=beats)
+
+
+def test_guide_playbook_refuses_live_without_a_fixed_account():
+    plan = plan_live(_guide_playbook(), _candidates(3), group_key="g1",
+                     confirm_live=True, app_config=ARMED,
+                     fingerprint_groups=_fps(3), require_outlet=False,
+                     hour=14)
+    assert plan.ok is False
+    assert plan.reason == "invalid"
+    assert any("guide_account" in w for w in plan.warnings)
+
+
+def test_two_seat_guide_playbook_fits_one_independent_pair():
+    """两个出口只能演两角。向导钉死，另一个号演质疑；同一出口拒演。"""
+    from pathlib import Path
+
+    from src.companion.group_show.playbook import (
+        load_playbook_dir, validate_playbook,
+    )
+
+    books = load_playbook_dir(
+        Path(__file__).resolve().parents[1] / "config" / "playbooks")
+    pb = books["guide_trial_duo"]
+    hard = [w for w in validate_playbook(pb) if not str(w).startswith("warn:")]
+    assert hard == []
+    assert {role.slot for role in pb.roles} == {"guide", "skeptic"}
+    assert pb.beats == ()
+    assert pb.goal and "多个号" in pb.goal
+    assert pb.products == ("matrixx",)
+    assert "手滑" not in pb.goal and "接住" not in pb.goal
+    cfg = {"companion": {"group_show": {
+        "live": {"enabled": True},
+        "guide_account": "a1",
+    }}}
+    plan = plan_live(pb, _candidates(2), group_key="g1",
+                     confirm_live=True, app_config=cfg,
+                     fingerprint_groups=_fps(2), require_outlet=False,
+                     hour=14)
+    assert plan.ok is True, plan.warnings
+    assert plan.casting.by_slot("guide").account_id == "a1"
+    assert plan.casting.by_slot("skeptic").account_id == "a2"
+    blocked = plan_live(
+        pb, _candidates(2), group_key="g1", confirm_live=True, app_config=cfg,
+        fingerprint_groups={"a1": "host", "a2": "host"},
+        require_outlet=False, hour=14)
+    assert blocked.ok is False
+    assert blocked.reason == "understaffed"
+
+
+def test_guide_line_fault_rejects_an_invented_menu_and_a_withdrawn_invite():
+    from src.companion.group_show.playbook import guide_line_fault, helper_line_fault
+    bad = "Matrix 里那个自动回复入口藏得有点深，我私发你截图对照一下？"
+    assert guide_line_fault(bad)
+    ok = "我是 AI。多个号的消息放在一处看，私聊我试这一件。"
+    assert guide_line_fault(ok) == ""
+    assert guide_line_fault("先看这一屏就够。", prior_guide_texts=(ok,)) == ""
+    assert guide_line_fault("先看这一屏就够。", prior_guide_texts=(ok,), closing=True)
+    assert helper_line_fault("不用啦，截图还得点开看")
+    assert helper_line_fault("我还是得自己看过才敢信") == ""
+    from src.companion.group_show.playbook import line_fault_for_beat
+    chat_book = Playbook(
+        id="g", name="g", roles=(Role("guide"),),
+        beats=(Beat("b1_one_thing", "guide", "先说我是 AI，并私聊来试"),))
+    chat = "你们刚才说的那单，我这边也卡着。"
+    assert line_fault_for_beat(chat_book, "guide", "warmup_1", chat) == ""
+    assert line_fault_for_beat(
+        chat_book, "guide", "warmup_1", "不如加个好友，私聊里玩两把")
+    assert line_fault_for_beat(
+        chat_book, "guide", "warmup_1", "你是困了还是手滑打错了")
+    assert line_fault_for_beat(
+        chat_book, "guide", "b3_keep_the_invite",
+        "接住你的不放心：多个号的消息收在一屏里看就行")
+    assert line_fault_for_beat(chat_book, "guide", "b1_one_thing", chat)
+    from src.companion.group_show.playbook import ShowEvent
+    invented = "这边不方便开视频，先这样聊嘛。"
+    assert line_fault_for_beat(chat_book, "guide", "chat_1", invented)
+    assert line_fault_for_beat(
+        chat_book, "skeptic", "chat_2", "在宿务开咖啡店的啦，女的。")
+    asked = (ShowEvent(
+        seq=1, ts=1, speaker_account="老王", role="human",
+        beat_id="", text="你们是男的女的", kind="human"),)
+    assert line_fault_for_beat(
+        chat_book, "skeptic", "chat_2", "女的。", events=asked) == ""
+    assert line_fault_for_beat(
+        chat_book, "guide", "chat_1", invented, events=(ShowEvent(
+            seq=1, ts=1, speaker_account="老王", role="human",
+            beat_id="", text="要不要开视频", kind="human"),)) == ""
+
+
+@pytest.mark.asyncio
+async def test_a_guide_line_that_invents_a_menu_is_said_again():
+    seen = {"n": 0}
+
+    def gen(*_a):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return "自动回复在工作时间外，我发你截图"
+        return "我是 AI。多个号的消息放在一处看，私聊我试这一件。"
+
+    pb = Playbook(
+        id="guide_retry", name="向导", system="growth", products=("matrixx",),
+        soft_ad_level=3, roles=(Role("guide"),),
+        beats=(Beat("b1", "guide", "先说我是 AI，并私聊来试", product="matrixx", soft=3),))
+    cfg = {"companion": {"group_show": {
+        "live": {"enabled": True}, "guide_account": "a1",
+    }}}
+    res, sender, _ = await _perform(
+        playbook=pb, candidates=_candidates(1), generate=gen, app_config=cfg,
+        fingerprint_groups=_fps(1))
+    assert res.guide_line_retries == 1
+    assert res.sent == 1
+    assert "我是 AI" in sender.calls[0][1]
+
+
+def test_guide_playbook_pins_the_configured_account():
+    cfg = {"companion": {"group_show": {
+        "live": {"enabled": True},
+        "guide_account": "a2",
+    }}}
+    plan = plan_live(_guide_playbook(), _candidates(3), group_key="g1",
+                     confirm_live=True, app_config=cfg,
+                     fingerprint_groups=_fps(3), require_outlet=False,
+                     hour=14)
+    assert plan.ok is True, plan.warnings
+    assert plan.casting.by_slot("guide").account_id == "a2"

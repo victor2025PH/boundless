@@ -68,6 +68,8 @@ class EngineResult:
     engine: str
     ok: bool = True
     error: str = ""
+    # 免费档守卫拦住了付费引擎（本次没有发起付费调用）。
+    free_tier_blocked: bool = False
 
 
 # ── P1-XT（2026-08-16）语气控制 ─────────────────────────────────────────────
@@ -280,7 +282,11 @@ class AIEngine:
         "never role-play, never add explanations or comments. "
         "Proper nouns (place/person/brand names) and numbers must be "
         "preserved exactly - never substitute a different one; if unsure, "
-        "keep the original word untranslated."
+        "keep the original word untranslated. "
+        "When the target language uses a different writing system, "
+        "render names in the target script (established translation or "
+        "transliteration) - never leave source-script words such as "
+        "Chinese characters in the output."
     )
 
     async def bare_chat(self, prompt: str) -> str:
@@ -482,6 +488,18 @@ _HYMT_ZH_NAME = {
     "id": "印尼语", "ms": "马来语", "vi": "越南语", "tl": "菲律宾语",
     "hi": "印地语", "pl": "波兰语", "nl": "荷兰语", "km": "高棉语",
     "yue": "粤语", "he": "希伯来语", "uk": "乌克兰语",
+}
+
+
+# 每个部署的免费/标准档本地翻译缺省指向语言机 173 的 vLLM。
+# deploy/machines.json：192.168.0.173 上 ollama :11434 已停，在线的是
+# vLLM chatx :8001（Qwen3-27B AWQ，OpenAI 兼容）。部署可改 base_url / model；
+# 只填了一边时不替它补另一边。要从 order 里拿掉 ollama_mt 才是「本部署不用本地模型」。
+DEFAULT_LOCAL_MT_BASE_URL = "http://192.168.0.173:8001"
+DEFAULT_LOCAL_MT_MODEL = "chatx"
+DEFAULT_LOCAL_MT_API = "openai"
+DEFAULT_LOCAL_MT_PAYLOAD: Dict[str, Any] = {
+    "chat_template_kwargs": {"enable_thinking": False},
 }
 
 
@@ -1117,7 +1135,9 @@ class OpenCCEngine:
         self._cc: Any = None
 
     def supports_target(self, target_lang: str) -> bool:
-        return str(target_lang or "").strip().lower() == "zh-tw"
+        # 简→繁。zh-hk / zh-hant 与 zh-tw 共用本引擎；用词风格由 profile（s2twp / s2hk）决定。
+        tgt = str(target_lang or "").strip().lower().replace("_", "-")
+        return tgt in {"zh-tw", "zh-hk", "zh-hant"} or tgt.startswith("zh-hant")
 
     @property
     def available(self) -> bool:
@@ -1151,6 +1171,237 @@ class OpenCCEngine:
         if not out.strip():
             return EngineResult("", self.name, False, "empty")
         return EngineResult(out, self.name, True)
+
+
+# ── 免费档零成本守卫 ────────────────────────────────────────────────────────
+# 免费档 = 有效 tier 落在 FREE_TIERS（缺省 "" / std / free，含钱包耗尽从
+# pro/certified 降下来的 std）。已知付费档 = pro / certified。
+# ``TranslationService.translate`` 和 ``EngineRouter`` 的 translate / compare /
+# translate_with 都会把其它显式档名收成 std 并记一条警告（未知不当成付费）。
+# ``tier is None`` 仍是不设防。新付费档必须先加进下面的已知集合。
+#
+# 分类以**类**为准，不看桩的 name：测试里名叫 "ai"/"deepl" 的假引擎不是生产类，
+# 不设防。生产类必须登记在下面两张表（棘轮测试钉死，新类不能静默漏网）。
+# 实例属性 paid=True / zero_cost=True 可覆盖类默认（paid 优先）。
+#
+# `ai` 即使 ai_client 指向局域网模型也算付费：generate_reply 会落到云端 key 池。
+# 免费档要本地 MT，走 ollama_mt（含 api: openai / vLLM），不要走 custom: 或 ai。
+# custom OpenAI 兼容线一律付费，哪怕 base_url 在局域网。
+#
+# 缺省策略是 enforce：免费档只走本地引擎（ollama_mt，繁体变体优先 opencc）。
+# 显式 legacy / off 才恢复旧链，并在打到付费引擎时记 would_block。
+
+FREE_TIERS = frozenset({"", "std", "free"})
+PAID_TIERS = frozenset({"pro", "certified"})
+_KNOWN_TIERS = FREE_TIERS | PAID_TIERS
+
+
+def coerce_translation_tier(tier: str) -> str:
+    """已知档原样返回。未知非空档名收成 ``std``，打警告并计数。不记原文。"""
+    raw = str(tier or "").strip().lower()
+    if raw in _KNOWN_TIERS:
+        return raw
+    logger.warning("[translate] unknown tier %r treated as std", raw[:40])
+    try:
+        from src.ai.translation_engine_stats import get_translation_engine_stats
+        get_translation_engine_stats().record_unknown_tier()
+    except Exception:
+        logger.debug("[translate] unknown tier metric failed", exc_info=True)
+    return "std"
+
+
+def _observe_tier(tier: Optional[str]) -> Optional[str]:
+    """``None`` 保持不设防。其它档名走 :func:`coerce_translation_tier`。"""
+    if tier is None:
+        return None
+    return coerce_translation_tier(tier)
+
+
+_ENFORCE_GUARD_VALUES = frozenset({
+    "enforce", "on", "true", "1", "yes", "enable", "enabled",
+})
+
+ZERO_COST_ENGINE_CLASSES = (OllamaMTEngine, OpenCCEngine)
+PAID_ENGINE_CLASSES = (
+    AIEngine,
+    DeepLEngine,
+    GoogleEngine,
+    MicrosoftEngine,
+    YoudaoEngine,
+    BaiduEngine,
+    OpenAICompatEngine,
+)
+
+
+def is_free_tier(tier: Optional[str]) -> bool:
+    """``None`` 不是免费档（路由层 None = 不设防）。空串 / std / free 是。"""
+    if tier is None:
+        return False
+    return str(tier).strip().lower() in FREE_TIERS
+
+
+def free_tier_guard_enabled(value: Any) -> bool:
+    """``translation.free_tier_zero_cost``：缺省 / enforce = 拦截；显式 legacy / off 才不拦截。
+
+    布尔 True/False 直接采用（测试与构造参数）。legacy 仍会计 would_block，
+    不改变计费档，也不取消这次调用。
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return True
+    text = str(value).strip().lower()
+    if text in {"", "legacy", "off", "false", "0", "no", "disable", "disabled"}:
+        return False
+    return text in _ENFORCE_GUARD_VALUES
+
+
+# 进程级覆盖：web 启动按 translation.free_tier_zero_cost 写一次。
+# 没写过时按 enforce（与 TranslationService 构造缺省一致）。
+_FREE_TIER_GUARD_PROCESS: Optional[bool] = None
+
+
+def set_free_tier_guard_process(enabled: Optional[bool]) -> None:
+    """启动时记下免费档守卫。``None`` 清掉覆盖，回到缺省 enforce。"""
+    global _FREE_TIER_GUARD_PROCESS
+    _FREE_TIER_GUARD_PROCESS = None if enabled is None else bool(enabled)
+
+
+def free_tier_blocks_paid_fallback(config: Any = None) -> bool:
+    """AI 回复 / 克隆语音要不要在「本地没有结果」时拦住付费回落。
+
+    显式 config（ConfigManager 或 dict）优先。否则用启动时写下的进程值。
+    都没有 → enforce（拦住）。legacy / off 返回 False，付费回落保留。
+    """
+    try:
+        cfg = config
+        if cfg is not None and not isinstance(cfg, dict):
+            cfg = getattr(cfg, "config", None)
+        if isinstance(cfg, dict) and "translation" in cfg:
+            return free_tier_guard_enabled(
+                (cfg.get("translation") or {}).get("free_tier_zero_cost", "enforce"))
+        if isinstance(cfg, dict) and "free_tier_zero_cost" in cfg:
+            return free_tier_guard_enabled(cfg.get("free_tier_zero_cost"))
+    except Exception:
+        logger.debug("[xlate] free_tier guard lookup failed", exc_info=True)
+        return True
+    if _FREE_TIER_GUARD_PROCESS is not None:
+        return bool(_FREE_TIER_GUARD_PROCESS)
+    return True
+
+
+def block_paid_when_local_miss(
+    *, wallet_empty: bool, guard: bool, customer_facing: bool,
+) -> bool:
+    """余额用尽且守卫开：本地没有结果时不许改打付费接口。
+
+    对客回复、工具调用和裸系统生成都由调用方把 ``customer_facing`` 标成 True。
+    ``customer_facing=False`` 仍放行（留给明确的非本路径）。
+    ``guard=False`` 是 legacy 逃生口，允许付费回落。余额还在时不拦。
+    """
+    return bool(wallet_empty and guard and customer_facing)
+
+
+def is_paid_engine(eng: Any) -> bool:
+    """生产付费引擎（云翻译 API、主对话 LLM、custom OpenAI 兼容线）。"""
+    if eng is None:
+        return False
+    if getattr(eng, "paid", False) is True:
+        return True
+    if getattr(eng, "zero_cost", False) is True:
+        return False
+    if isinstance(eng, ZERO_COST_ENGINE_CLASSES):
+        return False
+    if isinstance(eng, PAID_ENGINE_CLASSES):
+        return True
+    return False
+
+
+def is_zero_cost_engine(eng: Any) -> bool:
+    return eng is not None and not is_paid_engine(eng)
+
+
+def engine_blocked_for_tier(eng: Any, tier: Optional[str]) -> bool:
+    """``tier is None`` → 不设防（EngineRouter 直接调用的旧单测）。
+
+    免费档 + 付费引擎 → True。付费档放行。
+    """
+    if tier is None or not is_free_tier(tier):
+        return False
+    return is_paid_engine(eng)
+
+
+def _note_paid_engine(engine: str, *, target_lang: str, verb: str, record) -> None:
+    name = str(engine or "?")
+    tgt = str(target_lang or "").strip().lower()
+    if tgt:
+        logger.info("[xlate] free_tier %s paid engine=%s target=%s", verb, name, tgt)
+    else:
+        logger.info("[xlate] free_tier %s paid engine=%s", verb, name)
+    try:
+        record(name)
+    except Exception:
+        logger.debug("[xlate] paid_%s metric failed", verb, exc_info=True)
+
+
+def _paid_engine_recorder(method: str):
+    try:
+        from src.ai.translation_engine_stats import get_translation_engine_stats
+        return getattr(get_translation_engine_stats(), method)
+    except Exception:
+        return lambda _name: None
+
+
+def note_paid_engine_blocked(engine: str, *, target_lang: str = "") -> None:
+    """enforce：免费档拦住一次付费引擎。不记原文/译文，也不发起调用。"""
+    _note_paid_engine(
+        engine, target_lang=target_lang, verb="blocked",
+        record=_paid_engine_recorder("record_paid_blocked"),
+    )
+
+
+def note_paid_engine_would_block(engine: str, *, target_lang: str = "") -> None:
+    """legacy：免费档这次真的打到付费引擎。调用照旧发生，只记日志和计数。"""
+    _note_paid_engine(
+        engine, target_lang=target_lang, verb="would_block",
+        record=_paid_engine_recorder("record_paid_would_block"),
+    )
+
+
+def order_free_tier_local_first(seq: List[Any], target_lang: str) -> List[Any]:
+    """免费档尝试序：一般目标语 ollama_mt 在前；繁体变体 opencc 在前。付费引擎留在最后。"""
+    tgt = str(target_lang or "").strip().lower().replace("_", "-")
+    opencc_first = tgt in {"zh-tw", "zh-hk", "zh-hant"} or tgt.startswith("zh-hant")
+
+    def rank(eng: Any) -> int:
+        name = getattr(eng, "name", "")
+        if name == "opencc":
+            return 0 if opencc_first else 1
+        if name == "ollama_mt":
+            return 1 if opencc_first else 0
+        if is_zero_cost_engine(eng):
+            return 2
+        return 3
+
+    return sorted(list(seq), key=rank)
+
+
+def skip_paid_for_free_tier(
+    eng: Any, tier: Optional[str], *, enforce: bool, target_lang: str = "",
+) -> bool:
+    """免费档碰到付费引擎时记账。返回 True 表示调用方必须跳过这次调用。
+
+    ``tier is None``：路由被直接调用（旧单测），不观察也不拦截。
+    enforce=True：拦住并计 paid_blocked。enforce=False（legacy）：放行并计 would_block。
+    """
+    if not engine_blocked_for_tier(eng, tier):
+        return False
+    name = getattr(eng, "name", "?")
+    if enforce:
+        note_paid_engine_blocked(name, target_lang=target_lang)
+        return True
+    note_paid_engine_would_block(name, target_lang=target_lang)
+    return False
 
 
 class EngineRouter:
@@ -1239,16 +1490,19 @@ class EngineRouter:
         sim = num / (da * db)
         return round(sim, 3) if sim < self._sem_min else None
 
-    def describe(self, target_lang: str) -> Dict[str, Any]:
+    def describe(self, target_lang: str, *, free_tier: bool = False) -> Dict[str, Any]:
         """对指定目标语产出引擎能力矩阵，供前端提前提示「主引擎是否兜底」。
 
         返回 {target_lang, primary, effective, engines:[{engine,available,supports}]}。
         primary/rows 按该目标语的**实际尝试序**（含 per_lang_order 覆写）；
         effective = 首个「可用且支持该目标语」的引擎（即实际会命中的）。
+        ``free_tier=True`` 时本地引擎排到前面，付费引擎不计入 effective。
         """
         rows: List[Dict[str, Any]] = []
         effective = "none"
         seq = self._engines_for(target_lang)
+        if free_tier:
+            seq = order_free_tier_local_first(seq, target_lang)
         for eng in seq:
             name = getattr(eng, "name", "?")
             avail = bool(getattr(eng, "available", False))
@@ -1256,10 +1510,12 @@ class EngineRouter:
                 supports = bool(eng.supports_target(target_lang)) if hasattr(eng, "supports_target") else True
             except Exception:
                 supports = True
+            blocked = bool(free_tier and is_paid_engine(eng))
             rows.append({"engine": name, "available": avail, "supports": supports,
                          "label": str(getattr(eng, "label", "") or name),
-                         "tone": bool(getattr(eng, "supports_tone", False))})
-            if effective == "none" and avail and supports:
+                         "tone": bool(getattr(eng, "supports_tone", False)),
+                         "free_tier_blocked": blocked})
+            if effective == "none" and avail and supports and not blocked:
                 effective = name
         return {
             "target_lang": target_lang,
@@ -1278,16 +1534,28 @@ class EngineRouter:
     async def translate_with(
         self, name: str, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
+        tier: Optional[str] = None,
+        free_tier_enforce: bool = False,
     ) -> EngineResult:
         """强制走指定引擎（坐席多线路对照/手动选路），**不做故障转移**。
 
         引擎不存在/不可用 → ok=False，便于前端把该路显示为「不可用」。
+        ``tier`` 为免费档且 ``free_tier_enforce`` 时付费引擎直接拦住（不调用）。
+        同档但未 enforce（legacy）仍调用，并记 would_block。``tier is None`` = 不观察。
         """
+        tier = _observe_tier(tier)
         eng = self.engine_by_name(name)
         if eng is None:
             return EngineResult("", str(name or "?"), False, "unknown_engine")
         if not getattr(eng, "available", False):
             return EngineResult("", eng.name, False, "unavailable")
+        if skip_paid_for_free_tier(
+            eng, tier, enforce=free_tier_enforce, target_lang=target_lang,
+        ):
+            return EngineResult(
+                "", eng.name, False, "free_tier_paid_engine_blocked",
+                free_tier_blocked=True,
+            )
         try:
             return await eng.translate(
                 text, source_lang=source_lang, target_lang=target_lang,
@@ -1299,12 +1567,19 @@ class EngineRouter:
     async def compare(
         self, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
+        tier: Optional[str] = None,
+        free_tier_enforce: bool = False,
     ) -> List[EngineResult]:
         """并发对所有「可用且支持该目标语」的引擎各译一遍，供坐席多线路对照择优。
 
         不可用/不支持的引擎也返回一行（ok=False + 原因），前端可灰显。
+        免费档且 ``free_tier_enforce`` 时不调用付费引擎，该行记
+        ``free_tier_paid_engine_blocked``。未 enforce 则照常调用并记 would_block。
+        ``tier is None`` = 不观察。
         """
         import asyncio as _aio
+
+        tier = _observe_tier(tier)
 
         async def _one(eng: Any) -> EngineResult:
             name = getattr(eng, "name", "?")
@@ -1315,6 +1590,13 @@ class EngineRouter:
                     return EngineResult("", name, False, f"unsupported_target:{target_lang}")
             except Exception:
                 pass
+            if skip_paid_for_free_tier(
+                eng, tier, enforce=free_tier_enforce, target_lang=target_lang,
+            ):
+                return EngineResult(
+                    "", name, False, "free_tier_paid_engine_blocked",
+                    free_tier_blocked=True,
+                )
             try:
                 return await eng.translate(
                     text, source_lang=source_lang, target_lang=target_lang,
@@ -1330,6 +1612,8 @@ class EngineRouter:
     async def translate(
         self, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
+        tier: Optional[str] = None,
+        free_tier_enforce: bool = False,
     ) -> EngineResult:
         """选路翻译 + B56 译后对账（`_297` 宿务→马尼拉偷换实录）。
 
@@ -1339,7 +1623,8 @@ class EngineRouter:
         """
         res = await self._translate_pick(
             text, source_lang=source_lang, target_lang=target_lang,
-            style=style, glossary_hint=glossary_hint)
+            style=style, glossary_hint=glossary_hint, tier=tier,
+            free_tier_enforce=free_tier_enforce)
         try:
             if res.ok and res.text:
                 from src.ai.translation_fidelity import annotate_missing_anchors
@@ -1357,8 +1642,12 @@ class EngineRouter:
     async def _translate_pick(
         self, text: str, *, source_lang: str, target_lang: str,
         style: str = "chat", glossary_hint: str = "",
+        tier: Optional[str] = None,
+        free_tier_enforce: bool = False,
     ) -> EngineResult:
         import time as _t
+
+        tier = _observe_tier(tier)
 
         try:
             from src.ai.translation_engine_stats import get_translation_engine_stats
@@ -1384,6 +1673,8 @@ class EngineRouter:
 
         last_err = "no_engine"
         attempted_fail = False  # 是否有「已尝试的可用引擎」失败（区别于「不可用被跳过」）
+        paid_blocked = False    # 免费档拦住过付费引擎（没有发起调用）
+        zero_cost_failed = False  # 允许的引擎实际试过且没赢
         best: Optional[EngineResult] = None       # 置信度切换：最高分候选（兜底）
         # 候选排序分两桶：过确定性闸门(1)恒优于没过(0)——语义低但「语言对/非空/长度正常」
         # 仍比硬错候选可用；桶内分别按 语义相似度 / 确定性分 排（确定性分差常是长度比噪声，
@@ -1391,6 +1682,8 @@ class EngineRouter:
         best_key: Tuple[int, float] = (-1, -1.0)
         saw_low_conf = False                       # 本次调用是否发生过低置信（→ 切换观测）
         seq = self._engines_for(target_lang)
+        if free_tier_enforce and is_free_tier(tier):
+            seq = order_free_tier_local_first(seq, target_lang)
         call_primary = getattr(seq[0], "name", "none") if seq else "none"
         for eng in seq:
             if not getattr(eng, "available", False):
@@ -1408,6 +1701,11 @@ class EngineRouter:
                     continue
             except Exception:
                 pass
+            if skip_paid_for_free_tier(
+                eng, tier, enforce=free_tier_enforce, target_lang=target_lang,
+            ):
+                paid_blocked = True
+                continue
             t0 = _t.monotonic()
             try:
                 res = await eng.translate(
@@ -1419,6 +1717,7 @@ class EngineRouter:
                     stats.record(getattr(eng, "name", "?"), ok=False,
                                  latency_ms=int((_t.monotonic() - t0) * 1000))
                 attempted_fail = True
+                zero_cost_failed = True
                 last_err = f"{getattr(eng, 'name', '?')}:{type(exc).__name__}"
                 continue
             lat = int((_t.monotonic() - t0) * 1000)
@@ -1467,6 +1766,7 @@ class EngineRouter:
                     stats.record_fallback()
                 return res
             attempted_fail = True
+            zero_cost_failed = True
             last_err = f"{eng.name}:{res.error or 'empty'}"
         # 置信度模式：无人达标 → 回退到最高分候选（绝不因「都不够好」而吐空）
         if best is not None:
@@ -1479,7 +1779,37 @@ class EngineRouter:
             return best
         if stats and attempted_fail:
             stats.record_fallback()  # 有引擎尝试且全失败 → 记降级
-        return EngineResult("", "none", False, last_err)
+        # 免费档一个零成本引擎都没试成、付费引擎全被拦住 → 明确失败，不改打付费 API。
+        # 零成本试过且失败：保留那个错误（不要盖成守卫文案），标志位仍记下「付费被拦」。
+        if paid_blocked and not zero_cost_failed:
+            last_err = "free_tier_no_zero_cost_engine"
+        return EngineResult(
+            "", "none", False, last_err, free_tier_blocked=paid_blocked,
+        )
+
+
+def _local_mt_endpoint_blank(mc: Dict[str, Any]) -> bool:
+    """地址和模型都没给（缺键或空）才用 173 缺省。只给了地址、没给模型则保持不可用。"""
+    if mc.get("base_urls"):
+        return False
+    url = mc.get("base_url", None)
+    model = mc.get("model", None)
+    url_blank = url is None or not str(url).strip()
+    model_blank = model is None or not str(model).strip()
+    return url_blank and model_blank
+
+
+def _resolve_local_mt_cfg(mc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """空配置补上 173 的 vLLM chatx。部署写了自己的地址或模型则原样用。"""
+    out = dict(mc or {})
+    if not _local_mt_endpoint_blank(out):
+        return out
+    out["base_url"] = DEFAULT_LOCAL_MT_BASE_URL
+    out["model"] = DEFAULT_LOCAL_MT_MODEL
+    out.setdefault("api", DEFAULT_LOCAL_MT_API)
+    if not out.get("payload_extra"):
+        out["payload_extra"] = dict(DEFAULT_LOCAL_MT_PAYLOAD)
+    return out
 
 
 def build_engines(translation_cfg: Optional[Dict[str, Any]], ai_client: Optional[Any]) -> List[Any]:
@@ -1507,7 +1837,7 @@ def build_engines(translation_cfg: Optional[Dict[str, Any]], ai_client: Optional
             gc = cfg.get("google") or {}
             out.append(GoogleEngine(gc.get("api_key", ""), timeout=timeout))
         elif name in ("ollama_mt", "hunyuan_mt", "hymt"):
-            mc = cfg.get("ollama_mt") or cfg.get(name) or {}
+            mc = _resolve_local_mt_cfg(cfg.get("ollama_mt") or cfg.get(name) or {})
             _temp = mc.get("temperature")
             # base_urls（列表，双活）优先；否则 base_url（单端点/逗号分隔）
             _urls = mc.get("base_urls") or mc.get("base_url", "")

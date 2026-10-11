@@ -1,4 +1,4 @@
-# _interactive_session.ps1 — 会话定位 + 把启动动作弹进交互桌面会话（dot-source 引用）
+﻿# _interactive_session.ps1 — 会话定位 + 把启动动作弹进交互桌面会话（dot-source 引用）
 #
 # 背景（2026-09-20 事故）：智聊由 \Boundless\Boundless-chengjie-watchdog（S4U 账户）拉起，
 # 落在 session 0；用户的微信在 session 1。Windows 的窗口站按会话隔离，session 0 的

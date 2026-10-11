@@ -373,6 +373,11 @@ def end_takeover(store: Any, conversation_id: str, *, by: str = "",
         logger.error("[takeover] 注册表清除失败 %s", cid, exc_info=True)
     logger.info("[takeover] end %s by=%s duration=%.0fs restored=%s quotes=%d",
                 cid, by, duration, restored, len(quotes))
+    try:
+        from src.inbox.cockpit_hold import note_cleared
+        note_cleared(cid, "handback", now=ts)
+    except Exception:
+        logger.debug("[takeover] 今日清掉记账失败（忽略）", exc_info=True)
     return {"ok": True, "duration_sec": round(duration, 1),
             "restored_mode": restored}
 

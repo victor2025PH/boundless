@@ -119,7 +119,7 @@ class OutreachExecutor:
                 try:
                     await self._sleep_fn(self._per_send)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in OutreachExecutor.execute", exc_info=True)
 
         return {
             "ok": True,

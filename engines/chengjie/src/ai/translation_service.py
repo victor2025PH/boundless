@@ -132,6 +132,9 @@ class TranslationResult:
     # P0-2：确定性译文置信度 [0,1]（translation_confidence 评分）。-1 = 未评分
     # （identity/失败/空文本等无意义评分的路径），前端据此跳过低置信提示。
     confidence: float = -1.0
+    # 免费档守卫拦住了付费引擎（本次没有付费调用）。失败时 needs_human 供出站转人工。
+    free_tier_blocked: bool = False
+    needs_human: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -144,6 +147,8 @@ class TranslationResult:
             "cached": self.cached,
             "error": self.error,
             "confidence": self.confidence,
+            "free_tier_blocked": self.free_tier_blocked,
+            "needs_human": self.needs_human,
         }
 
 
@@ -169,6 +174,7 @@ class TranslationService:
         per_lang_order: Optional[Dict[str, Any]] = None,
         semantic_embed_fn: Optional[Any] = None,
         semantic_min_similarity: float = 0.65,
+        free_tier_zero_cost: bool = True,
     ) -> None:
         self.ai_client = ai_client
         self.default_target_lang = normalize_lang(default_target_lang) or "zh"
@@ -184,6 +190,10 @@ class TranslationService:
         self._glossary_version = str(glossary_version or "")
         self._glossary_protect = [str(t) for t in (glossary_protect or []) if t]
         self._cost_tracking = bool(cost_tracking)
+        # 免费档零成本守卫。默认开（enforce）：只走 ollama_mt / opencc。
+        # 显式 False（配置 legacy）才恢复旧链，打到付费引擎时只记 would_block。
+        # 计费档与这个开关无关。
+        self.free_tier_zero_cost = bool(free_tier_zero_cost)
         # P56：多引擎路由（默认 [AIEngine(ai_client)]，行为与改造前一致）
         from src.ai.translation_engines import AIEngine, EngineRouter
 
@@ -219,19 +229,55 @@ class TranslationService:
     def detect_language(self, text: str) -> str:
         return detect_language(text)
 
-    def engine_matrix(self, target_lang: str = "") -> Dict[str, Any]:
-        """指定目标语的引擎能力矩阵（供前端提前提示主引擎是否兜底）。
+    def _router_tier(self, tier: str) -> str:
+        """传给 EngineRouter 的有效档。legacy 也传真档，方便计 would_block。
+
+        拦不拦截看 ``free_tier_zero_cost``，不要把 legacy 伪装成 pro。
+        """
+        return str(tier or "").strip().lower()
+
+    def _router_guard_kwargs(self, tier: str) -> Dict[str, Any]:
+        return {
+            "tier": self._router_tier(tier),
+            "free_tier_enforce": bool(self.free_tier_zero_cost),
+        }
+
+    @staticmethod
+    def _free_tier_failure_flags(res: Any) -> Tuple[bool, bool]:
+        """(free_tier_blocked, needs_human)。只有失败且守卫参与时 needs_human。"""
+        blocked = bool(getattr(res, "free_tier_blocked", False))
+        err = str(getattr(res, "error", "") or "")
+        if err.startswith("free_tier_"):
+            blocked = True
+        return blocked, blocked
+
+    def engine_matrix(self, target_lang: str = "", tier: str = "") -> Dict[str, Any]:
+        """指定目标语、指定翻译档的引擎能力矩阵。
+
+        ``tier`` 空 / std / free 且免费档守卫开着时，本地模型没配好才标
+        ``local_mt_gap``。pro / certified 不标这个缺口：它们本来就走付费引擎。
+        缺省 ``tier=""`` 仍是标准档，健康巡检不用改。
 
         P1-XM（2026-08-16）：行内附带进程期实测 ``avg_ms``/``ok_rate``
         （translation_engine_stats 同源，引擎 chips 的健康 tooltip 消费）；
         无流量的引擎不带这两键（前端不渲染），统计层异常绝不影响矩阵本身。
         """
+        from src.ai.translation_engines import is_free_tier
+
         target = normalize_lang(target_lang) or self.default_target_lang
+        tier_norm = str(tier or "").strip().lower()
+        apply_free = bool(self.free_tier_zero_cost) and is_free_tier(tier_norm)
         try:
-            matrix = self._router.describe(target)
+            matrix = self._router.describe(target, free_tier=apply_free)
         except Exception:
-            return {"target_lang": target, "primary": "none",
-                    "effective": "none", "engines": []}
+            return {
+                "target_lang": target, "primary": "none",
+                "effective": "none", "engines": [],
+                "tier": tier_norm or "std",
+                "free_tier_enforce": bool(self.free_tier_zero_cost),
+                "local_mt_ready": not apply_free,
+                "local_mt_gap": "",
+            }
         try:
             from src.ai.translation_engine_stats import get_translation_engine_stats
             stats = {r["engine"]: r
@@ -243,11 +289,25 @@ class TranslationService:
                     row["ok_rate"] = st.get("success_rate")
         except Exception:
             pass
+        matrix["tier"] = tier_norm or "std"
+        matrix["free_tier_enforce"] = bool(self.free_tier_zero_cost)
+        local_ready = any(
+            r.get("available") and r.get("supports") and not r.get("free_tier_blocked")
+            and r.get("engine") in ("ollama_mt", "opencc")
+            for r in matrix.get("engines") or []
+        )
+        if apply_free:
+            matrix["local_mt_ready"] = bool(local_ready)
+            matrix["local_mt_gap"] = (
+                "" if local_ready else "local_mt_unconfigured")
+        else:
+            matrix["local_mt_ready"] = True
+            matrix["local_mt_gap"] = ""
         return matrix
 
     async def compare_translations(
         self, text: str, *, target_lang: str = "", source_lang: str = "",
-        style: str = "chat",
+        style: str = "chat", tier: str = "",
     ) -> Dict[str, Any]:
         """多线路对照选译：所有引擎各译一遍，返回候选列表供坐席择优。
 
@@ -283,6 +343,7 @@ class TranslationService:
             results = await self._router.compare(
                 masked, source_lang=source, target_lang=target,
                 style=style, glossary_hint=glossary_hint,
+                **self._router_guard_kwargs(tier),
             )
         except Exception as exc:  # noqa: BLE001
             out["error"] = f"{type(exc).__name__}: {exc}"
@@ -339,19 +400,27 @@ class TranslationService:
         失败再回落现有 failover 路由；空 / 不可用 → 维持原 failover 行为（零回归）。
 
         ``tier``（2026-08-19 Token 定价 P5b）：翻译服务层级——计费跟**显式请求的层级**
-        走，绝不跟引擎回落走（本地引擎宕机静默回落云端时，标准请求不能被按专业价扣）：
-        - ``""``/``"std"``：标准翻译＝免费（只记公平使用水表，warn-only）；
-        - ``"pro"``：专业翻译（术语锁定/翻译记忆语义）＝10 Token/千字符；
+        走，绝不跟引擎回落走（本地引擎失败时，标准请求不能被按专业价扣）：
+        - ``""``/``"std"``/``"free"``：标准翻译＝免费（只记公平使用水表）。
+          ``free_tier_zero_cost`` **默认开**（配置 ``enforce``）：标准档先走本地
+          ollama_mt，繁体变体（zh-tw / zh-hk / zh-hant）先走 opencc。付费 API 与主对话
+          LLM 被跳过。没有可用本地引擎或全部失败 → ok=False、原文回填、``needs_human``，
+          不改打付费引擎。显式 ``legacy``（构造参数 False）才恢复旧链，并只记 would_block。
+        - ``"pro"``：专业翻译（术语锁定/翻译记忆语义）＝10 Token/千字符，引擎链不设防；
         - ``"certified"``：认证翻译＝优先 DeepL 引擎（独立缓存桶），真由 DeepL 交付
           才计 40 Token/千字符；回落其它引擎按 pro 价 10 计——绝不按未交付的价值收费。
+          其它显式档名按标准档处理（警告 + ``unknown_tier`` 计数），不当成付费档。
         计费只在**新鲜引擎成功**时发生（缓存/翻译记忆命中不计，与字符额度同口径）；
         总闸 licensing.token_ledger.enabled 关（默认）＝全零行为。
+        缓存键不含 tier：命中旧译文是零新增调用，不是付费 API。认证档因偏好 deepl
+        在算键之前生效，仍走独立桶。
         """
         src_text = str(text or "")
         target = normalize_lang(target_lang) or self.default_target_lang
         source = normalize_lang(source_lang) or detect_language(src_text)
         pref_engine = str(engine or "").strip().lower()
-        tier = str(tier or "").strip().lower()
+        from src.ai.translation_engines import coerce_translation_tier
+        tier = coerce_translation_tier(tier)
         # Token enforce（P6）：钱包耗尽 + enforce 开 → 专业/认证层级降级为标准档
         # （翻译照做，免费引擎链 + 公平使用水表；「永不断线」——降的是层级不是服务）。
         if tier in ("pro", "certified"):
@@ -456,14 +525,16 @@ class TranslationService:
                 pass
         masked, mapping = apply_glossary_mask(src_text, hit_terms, self._glossary_protect)
         res = None
-        # F+：会话首选引擎优先（强制单引擎，不故障转移）；失败再回落 failover
+        guard = self._router_guard_kwargs(tier)
+        # F+：会话首选引擎优先（强制单引擎，不故障转移）；失败再回落 failover。
+        # enforce 时免费档的付费首选在 translate_with 里被拦住，再走 failover。
         if pref_engine:
             try:
                 eng = self._router.engine_by_name(pref_engine)
                 if eng is not None and getattr(eng, "available", False):
                     res = await self._router.translate_with(
                         pref_engine, masked, source_lang=source, target_lang=target,
-                        style=style, glossary_hint=glossary_hint,
+                        style=style, glossary_hint=glossary_hint, **guard,
                     )
                     if not (res and res.ok and res.text):
                         res = None  # 首选引擎失败 → 下方 failover 兜底
@@ -472,19 +543,42 @@ class TranslationService:
         if res is None:
             res = await self._router.translate(
                 masked, source_lang=source, target_lang=target,
-                style=style, glossary_hint=glossary_hint,
+                style=style, glossary_hint=glossary_hint, **guard,
             )
         if not res.ok or not res.text:
+            blocked, needs_human = self._free_tier_failure_flags(res)
             result = TranslationResult(
                 src_text, src_text, source, target, False,
                 provider=res.engine or "none",
                 error=res.error or "translate_failed",
+                free_tier_blocked=blocked,
+                needs_human=needs_human,
             )
             self._cache_put(key, result)
             self._log_xlate("engine", result)
             return result
 
         out = restore_protected(res.text, mapping)
+        if self._cjk_residue(out, source, target):
+            _terms = self._cjk_residue_terms(out)
+            _hint = (glossary_hint + " These words were left untranslated and must be "
+                     "rendered in " + LANG_NAMES.get(target, target)
+                     + " (transliterate names): " + ", ".join(_terms[:12]) + ".")
+            res2 = None
+            if res.engine:
+                try:
+                    res2 = await self._router.translate_with(
+                        res.engine, masked, source_lang=source, target_lang=target,
+                        style=style, glossary_hint=_hint, **guard,
+                    )
+                except Exception:
+                    res2 = None
+            out2 = restore_protected(res2.text, mapping) if (res2 and res2.ok and res2.text) else ""
+            fixed = bool(out2) and not self._cjk_residue(out2, source, target)
+            logger.info("[xlate] cjk_residue provider=%s tgt=%s terms=%s fixed=%s",
+                        res.engine or "-", target, "|".join(_terms[:6]), int(fixed))
+            if out2 and (fixed or len(_CJK_RE.findall(out2)) < len(_CJK_RE.findall(out))):
+                out = out2
         # 引擎拒绝话术拦截（P1-198）：LLM 引擎对无意义短文本（"1"/表情）可能
         # 输出「没有可翻译的内容，请提供文本」类客套话——它曾被当译文直接发给
         # 客户（198 实锤）。按失败处理：出站链自动回落原文/HOLD、收件箱译文行
@@ -548,10 +642,17 @@ class TranslationService:
                 return True
         return False
 
-    def next_engine_after(self, failed_engine: str, target_lang: str) -> str:
+    def next_engine_after(self, failed_engine: str, target_lang: str, tier: str = "") -> str:
         """路由表（含 per_lang_order）里 ``failed_engine`` **之后**第一个可用且支持目标语的引擎名；
-        没有 → ""。``failed_engine`` 为空 / 不在表里 → 从头找第一个不同的可用引擎。"""
+        没有 → ""。``failed_engine`` 为空 / 不在表里 → 从头找第一个不同的可用引擎。
+
+        enforce 开时免费档跳过付费引擎（不把它们报成「下一个可重试引擎」）。
+        legacy 仍返回付费引擎，真正调用时记 would_block。
+        """
+        from src.ai.translation_engines import engine_blocked_for_tier
+
         target = normalize_lang(target_lang) or self.default_target_lang
+        rtier = self._router_tier(tier)
         try:
             seq = list(self._router._engines_for(target))
         except Exception:
@@ -562,6 +663,8 @@ class TranslationService:
         for eng in seq[start:]:
             name = str(getattr(eng, "name", "") or "")
             if not name or name == fe or not getattr(eng, "available", False):
+                continue
+            if self.free_tier_zero_cost and engine_blocked_for_tier(eng, rtier):
                 continue
             try:
                 if hasattr(eng, "supports_target") and not eng.supports_target(target):
@@ -579,6 +682,7 @@ class TranslationService:
         source_lang: str = "",
         style: str = "chat",
         engine: str = "",
+        tier: str = "",
     ) -> TranslationResult:
         """**绕过 L1 负缓存 / 翻译记忆**，直打一次指定引擎（空 → 路由 failover）。
 
@@ -601,25 +705,29 @@ class TranslationService:
         hit_terms = {k: v for k, v in self._glossary_terms.items() if k and k in src_text}
         masked, mapping = apply_glossary_mask(src_text, hit_terms, self._glossary_protect)
         res = None
+        guard = self._router_guard_kwargs(tier)
         if pref_engine:
             try:
                 res = await self._router.translate_with(
                     pref_engine, masked, source_lang=source, target_lang=target,
-                    style=style, glossary_hint=glossary_hint)
+                    style=style, glossary_hint=glossary_hint, **guard)
             except Exception as exc:  # noqa: BLE001
                 from src.ai.translation_engines import EngineResult
                 res = EngineResult("", pref_engine, False, f"{type(exc).__name__}: {exc}")
         else:
             res = await self._router.translate(
                 masked, source_lang=source, target_lang=target,
-                style=style, glossary_hint=glossary_hint)
+                style=style, glossary_hint=glossary_hint, **guard)
         eng_name = str(getattr(res, "engine", "") or pref_engine or "none")
         if not res or not res.ok or not res.text:
             err = str(getattr(res, "error", "") or "translate_failed")
             if pref_engine and ":" not in err:
                 err = f"{eng_name}:{err}"
+            blocked, needs_human = self._free_tier_failure_flags(res)
             result = TranslationResult(src_text, src_text, source, target, False,
-                                       provider=eng_name, error=err)
+                                       provider=eng_name, error=err,
+                                       free_tier_blocked=blocked,
+                                       needs_human=needs_human)
             self._log_xlate("retry", result)
             return result
         out = restore_protected(res.text, mapping)
@@ -644,7 +752,7 @@ class TranslationService:
         try:
             self._memory_put(key, result, style, engine=eng_name)
             self._record_cost(src_text, out, source, target, engine=eng_name)
-            self._record_license_quota(src_text, tier="", provider=eng_name)
+            self._record_license_quota(src_text, tier=tier, provider=eng_name)
         except Exception:
             pass
         self._log_xlate("retry", result)
@@ -682,7 +790,7 @@ class TranslationService:
                 if result.ok and result.confidence >= 0 else "",
             )
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._log_xlate", exc_info=True)
 
     def _memory_get(self, key: str) -> Optional[TranslationResult]:
         if self._memory_store is None:
@@ -690,6 +798,7 @@ class TranslationService:
         try:
             row = self._memory_store.get(key)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in TranslationService._memory_get", exc_info=True)
             return None
         if not row:
             return None
@@ -707,7 +816,7 @@ class TranslationService:
             try:
                 self._memory_store.delete(key)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TranslationService._memory_get", exc_info=True)
             self._refusal_purged["memory"] = int(
                 self._refusal_purged.get("memory", 0)) + 1
             logger.info(
@@ -721,7 +830,7 @@ class TranslationService:
             result.confidence = translation_confidence(
                 result.source_text, result.translated_text, result.target_lang)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._memory_get", exc_info=True)
         return result
 
     def _memory_put(self, key: str, result: "TranslationResult", style: str,
@@ -740,7 +849,7 @@ class TranslationService:
                 glossary_ver=self._glossary_version,
             )
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._memory_put", exc_info=True)
 
     def _record_license_quota(self, src: str, *, tier: str = "",
                               provider: str = "") -> None:
@@ -755,7 +864,7 @@ class TranslationService:
 
             record_license_chars("translation", len(src))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._record_license_quota", exc_info=True)
         try:
             t = str(tier or "").strip().lower()
             if t in ("pro", "certified"):
@@ -770,7 +879,7 @@ class TranslationService:
 
                 note_translate_fair_use(len(src))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._record_license_quota", exc_info=True)
 
     def _record_cost(self, src: str, out: str, source: str, target: str,
                      engine: str = "") -> None:
@@ -802,7 +911,24 @@ class TranslationService:
                 suspected=not bool(engine and engine != "ai"),
             )
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TranslationService._record_cost", exc_info=True)
+
+    @staticmethod
+    def _cjk_residue(text: str, source_lang: str, target_lang: str) -> bool:
+        """源侧含 CJK、目标语为非 CJK 文字系统，但译文仍残留汉字（专名被整段保留）。"""
+        tgt = str(target_lang or "").strip().lower()
+        if not tgt or tgt.split("-")[0] in ("zh", "ja", "ko", "yue"):
+            return False
+        return bool(_CJK_RE.search(str(text or "")))
+
+    @staticmethod
+    def _cjk_residue_terms(text: str) -> list:
+        seen: list = []
+        for m in re.finditer(r"[\u4e00-\u9fff]+", str(text or "")):
+            w = m.group(0)
+            if w not in seen:
+                seen.append(w)
+        return seen
 
     def _glossary_hint(self, text: str) -> str:
         """命中术语注入提示（Phase C2）。仅注入文本中出现的术语，避免噪声。"""

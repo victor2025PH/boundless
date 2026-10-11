@@ -45,7 +45,7 @@ def normalize_quote(text: Any) -> str:
         from src.inbox.media_enrich import strip_media_desc
         s = strip_media_desc(s)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in normalize_quote", exc_info=True)
     s = _WS_RE.sub(" ", s).strip()
     return s[:QUOTE_MAX]
 

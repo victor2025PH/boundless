@@ -37,7 +37,16 @@
 本轮内容治理清理掉的虚构数字 / 高风险表述，门禁扫描 `lib/content.ts`、`lib/landingContent.ts`、
 `lib/matrixxContent.ts`、`lib/chatxContent.ts`、`lib/growthContent.ts`、`lib/downloads.ts`、
 `components/AIChat.tsx`、`lib/bot-knowledge.ts`、`lib/telegram-bot.ts`（顾问人设三消费面，
-2026-08-21 起），命中即 build 失败：
+2026-08-21 起），以及下载页 / 报价页（`lib/order-hero.ts`、`lib/chatx-pricing.ts`、
+`lib/pricing-faq.ts`、`components/PricingPage.tsx`、`components/OrderPanel.tsx`、
+`components/RechargeOrderZone.tsx`、`components/ChatxDownloadSection.tsx`、
+`app/pricing/page.tsx`、`app/en/pricing/page.tsx`、`app/llms.txt/route.ts`，2026-10-10 起），
+以及对比文 / 教程 / 下单与演示（`lib/compare-content.ts`、`lib/chatx-tutorials.ts`、
+`lib/order-lines.ts`、`components/TutorialPlaylist.tsx`、`components/CompareHubPage.tsx`、
+`components/TranslateDemo.tsx`、`components/EnterprisePage.tsx`、
+`app/chatx/tutorials/page.tsx`、`app/en/chatx/tutorials/page.tsx`、
+`app/order/page.tsx`、`app/en/order/page.tsx`，同日），
+命中即 build 失败：
 
 | 禁用子串 | 禁用原因 |
 | --- | --- |
@@ -52,11 +61,32 @@
 > 重大决策仅供参考、低落情绪先共情（与引擎 `companion.bazi` 的安全红线同口径）。
 | `防封` | 暗示对抗平台风控，与「封号自动换号」同族，法务红线 |
 | `顾嘉` / `Gary` | 2026-08-21 顾问改名「小界（Jie）」——与 ChatX 产品内助手、交流群 @小界 同名统一；旧名（含英文名）不许从旧文案复制回潮 |
+| `永不断线` / `用尽自动降级` | 免费档标准翻译走本部署本地模型；本地模型没配好时转人工，不会改用付费引擎。不许再承诺额度用尽后自动换免费引擎且会话翻译永不中断 |
+| `标准翻译永久免费` / `标准翻译免费不限量` | 同上。标准档不按字符扣 Token、不调用付费翻译接口，但依赖本部署本地模型；没配好时转人工。日 200 万字符是提醒，不是不限量承诺。企业私有化「本地模型 Token 不限量」是自有算力口径，不在此禁 |
 
+> 注：2026-10-10 首页把 Instagram、Zalo 从「陆续接入」挪到在线。依据是公开包默认
+> official（`DEFAULT_PLATFORM_MODES`）、注册表 `implemented=True`、官方 worker 能收发。
+> 个人号网页登录默认关。X / Discord / 个人微信等仍留在陆续接入。
+> 注：2026-10-10 起 `lib/pricing.ts` 与生成的 `lib/generated/product-facts.json` 也进扫描。
+> 企业私有化「本地模型 Token 不限量」不在黑名单里。
 > 注：2026-07-26 清理收口后，`lib/growthContent.ts`、`lib/downloads.ts` 已进
 > `BANNED_TARGET_FILES`。`lib/brand.ts` **刻意不进**：它是品牌层单一事实源，合法包含
 > 幻缘/FateX 产品定义与九产品口径（`PRODUCT_ORDER`/`PRODUCT_COUNT`），扫它会对合法
 > 内容误报；brand.ts 的高风险词（防封类）已于同日清零，靠 review 守住。
+
+## 过期活动稿（只注记，不改写）
+
+下列文件是 2026-08 / 2026-09 的活动、视频与日更选题原稿。2026-10-10 只加
+`historical-draft: not current product claims` 注记，正文未改。它们不是现行会员口径。
+现行标准档仍是：标准翻译走本部署的本地模型，不调用付费接口；没配好时转人工。
+
+- `website/lib/daily-content.ts`（`DATED_CAMPAIGN_DRAFT`）
+- `deliverables/video_songs_20260916/`
+- `deliverables/video_sample_20260827/`
+- `docs/实施52_官网顾问小界_频道日更ChatX聚焦_三视角定传方案_2026-08.md`
+- `docs/实施77_智聊获客与营销作战方案_渠道打法与90天执行清单_2026-08.md`
+- `docs/实施77A_TG广告弹药包_频道定向素材与投放SOP_2026-08.md`
+- `docs/方案_视频教程与介绍体系_竖屏横屏唱歌式场景_2026-09-16.md`
 
 ## 维护规则
 

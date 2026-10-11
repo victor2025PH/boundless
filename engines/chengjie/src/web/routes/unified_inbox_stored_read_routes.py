@@ -420,6 +420,15 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             except Exception:
                 logger.debug("[automation] Q-27 risk_hold release_on_auto 失败（忽略）", exc_info=True)
                 risk_hold_released = None
+        catchup = None
+        if mode != "manual" and str((_prev_meta or {}).get("mode") or "") == "manual":
+            try:
+                from src.inbox.resume_catchup import catchup_on_resume
+                catchup = catchup_on_resume(
+                    request.app.state, _inbox_store(request), cid, mode=mode, by="mode_select")
+            except Exception:
+                logger.debug("[automation] 接回补答失败（忽略）", exc_info=True)
+                catchup = None
         rearm_source = ""
         if mode == "manual" and _rearm in ("30m", "rearm30"):
             try:
@@ -447,6 +456,8 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             # 接力记忆 P0-3：manual → AI 时的接力摘要结果 {ok, reason, out_n, in_n, media_n, chars}
             # （切到 manual → None；前端据此 toast「AI 已接过 N 条人工消息」）
             "handoff": handoff,
+            # 接回补答：manual → AI 时客户最后一句未回 → 补拟一稿 {dispatched, reason}
+            "catchup": catchup,
         }
 
     @app.post("/api/unified-inbox/agent-yield/resume")
@@ -716,6 +727,19 @@ def register_stored_read_routes(app, *, api_auth) -> None:
             store.set_peer_bot_verdict(
                 cid, is_bot=-1, score=0.0,
                 evidence=f"operator:{operator} 确认为真人")
+            try:
+                from src.inbox.peer_bot_guard import release_chatx_handshake_hold
+                release_chatx_handshake_hold(store, cid)
+            except Exception:
+                logger.debug("[bot-flag] 清握手粘性失败（忽略）", exc_info=True)
+            try:
+                from src.inbox import peer_guard_marker as _pgm
+                _rec = _pgm.get(store, cid) or {}
+                _head, _ = _pgm.split_reason(str(_rec.get("reason") or ""))
+                if _head == "chatx_handshake":
+                    _pgm.clear(store, cid)
+            except Exception:
+                logger.debug("[bot-flag] 清握手状态带失败（忽略）", exc_info=True)
         else:
             store.set_peer_bot_verdict(cid, is_bot=0, score=0.0, evidence="")
         row = store.get_conversation(cid) or {}
@@ -880,7 +904,7 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                 from src.inbox.dormant_review import get_dormant_store
                 get_dormant_store(store).ack_login_review(_login_review_id, by=operator)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_stored_read_routes.api_unified_inbox_automation_account_bulk", exc_info=True)
         return {"ok": True, "dry_run": False, **res,
                 "summary": account_mode_summary(store, platform, account_id)}
 
@@ -968,7 +992,7 @@ def register_stored_read_routes(app, *, api_auth) -> None:
                 cancelled += int(store.cancel_pending_l2_drafts(
                     cid, decided_by="bulk_mode_downgrade") or 0)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_stored_read_routes.api_unified_inbox_automation_bulk_downgrade", exc_info=True)
         # Q-3（#264 D）：应急止血也要拦住正在拟人等待的在途稿（全部范围）
         cancelled += _cancel_inflight_q3(request, by="mode_switch")
         return {

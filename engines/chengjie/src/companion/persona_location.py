@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -337,6 +338,7 @@ def _resolve_location_value(loc: Any) -> Optional[PersonaPlace]:
             return _resolve_location_dict(loc)
         return None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _resolve_location_value", exc_info=True)
         return None
 
 
@@ -345,6 +347,7 @@ def resolve_persona_place(persona: Any) -> Optional[PersonaPlace]:
     try:
         loc = persona.get("location")
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in resolve_persona_place", exc_info=True)
         return None
     return _resolve_location_value(loc)
 
@@ -364,6 +367,7 @@ def resolve_place_with_fallback(persona: Any, *, auto_infer: bool = True) -> Opt
             return None
         return resolve_persona_place(persona)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in resolve_place_with_fallback", exc_info=True)
         return None
 
 
@@ -529,4 +533,5 @@ def time_gap_line(place: Optional[PersonaPlace], lang: str = "zh", now: Optional
             "is unknown, never assume what time of day it is for them."
         )
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in time_gap_line", exc_info=True)
         return None

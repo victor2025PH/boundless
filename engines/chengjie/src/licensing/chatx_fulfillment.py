@@ -95,13 +95,13 @@ CHATX_SKU_SPECS: Dict[str, Dict[str, Any]] = {
 # 签发时按授权月数放大（annual ×12），见 build_issue_payload。
 LINGOX_SKU_SPECS: Dict[str, Dict[str, Any]] = {
     # 2026-08-19 在售：翻译工作台（29/坐席/月，纯翻译团队）。不带 included_chars_monthly
-    # = 字符不限（标准翻译免费）；专业翻译按 Token 钱包，无订阅月含量。
+    # = 不按字符包月售卖（标准翻译走本地模型、0 Token）；专业翻译按 Token 钱包。
     "lingox-workbench": {
         "plan": "basic", "seats": 1, "channels": list(ALL_CHANNELS),
         "per_seat": {"min": 1, "max": 50},
         "features": {"analytics": True}, "product_id": "tongyi",
         "included_tokens_monthly": 0,
-        "note": "多坐席收件箱/客户 journey/漏斗/术语锁定（标准翻译免费不限量）",
+        "note": "多坐席收件箱/客户 journey/漏斗/术语锁定（标准翻译走本部署本地模型，没配好转人工）",
     },
     # ── 停售 2026-08-19（历史续费仍可签发；新客走 workbench + Token）──
     "lingox-team": {

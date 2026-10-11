@@ -55,7 +55,7 @@ SPEAKER_PREFIX_LABEL = "群友"
 UNKNOWN_SPEAKER_NAME = "某群友"
 
 #: 控制类事件（导演让路 / 收尾），群里根本没有这条消息，不进上下文
-_CONTROL_KINDS = frozenset({"yield", "terminate"})
+_CONTROL_KINDS = frozenset({"yield", "terminate", "room"})
 
 #: 默认最多回溯的群消息条数（防 prompt 撑爆；群聊上下文本来就该短）
 DEFAULT_MAX_TURNS = 20
@@ -142,11 +142,28 @@ def _build_system_prompt(
 
     # 身份锚点：明确「除我之外都是普通群友」，堵死角色认出同伙互相捧哏的可能
     who = str(speaker.display_name or "").strip() or str(speaker.account_id or "").strip()
-    parts.append(
-        f"【你是谁】你就是群里的「{who}」，一个普通群成员。下面的对话记录里，"
-        f"标着 [{SPEAKER_PREFIX_LABEL} xxx] 的都是别的群友，你和他们只是同一个群里的陌生人，"
-        "你不了解他们的底细，也不要表现出你们认识或事先商量过。"
-    )
+    beat_id = str(getattr(directive, "beat_id", "") or "")
+    warmup = beat_id.startswith("warmup_") or beat_id.startswith("chat_")
+    if str(getattr(speaker, "slot", "") or "").strip().lower() == "guide" and warmup:
+        parts.append(
+            f"【你是谁】你在这个群里，名字是「{who}」。这句只聊天。"
+            "不要介绍产品，不要邀请私聊或加好友。"
+            f"标着 [{SPEAKER_PREFIX_LABEL} xxx] 的是群友，"
+            "不要表现出你们事先商量过。"
+        )
+    elif str(getattr(speaker, "slot", "") or "").strip().lower() == "guide":
+        parts.append(
+            f"【你是谁】你是这个群里公开的 AI，名字是「{who}」。"
+            "开口就要让人听出来你是 AI。你只带一件事，并邀请对方私聊你自己试。"
+            f"标着 [{SPEAKER_PREFIX_LABEL} xxx] 的是群友，不要让他们代替你邀请，"
+            "也不要表现出你们事先商量过。"
+        )
+    else:
+        parts.append(
+            f"【你是谁】你就是群里的「{who}」，一个普通群成员。下面的对话记录里，"
+            f"标着 [{SPEAKER_PREFIX_LABEL} xxx] 的都是别的群友，你和他们只是同一个群里的陌生人，"
+            "你不了解他们的底细，也不要表现出你们认识或事先商量过。"
+        )
 
     hint = str(group_hint or "").strip()
     if hint:

@@ -359,7 +359,7 @@ class ReactivationLoop:
                 from src.monitoring.metrics_store import get_metrics_store
                 get_metrics_store().record_reactivation_skipped("no_episodic")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in ReactivationLoop._schedule_one", exc_info=True)
             return False
 
         lang = (getattr(contact, "language_hint", "") or "ja").strip() or "ja"
@@ -432,14 +432,14 @@ class ReactivationLoop:
                         try:
                             ms.record_reactivation_skipped("disliked_similarity_2x")
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in ReactivationLoop._schedule_one", exc_info=True)
                         return False
                 else:
                     # 重生成失败 → 跳过
                     try:
                         ms.record_reactivation_skipped("disliked_similarity_regen_fail")
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in ReactivationLoop._schedule_one", exc_info=True)
                     return False
         except Exception:
             logger.debug("similarity check 异常", exc_info=True)
@@ -478,7 +478,7 @@ class ReactivationLoop:
                     "would_send_in_min": int(delay / 60),
                 })
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in ReactivationLoop._schedule_one", exc_info=True)
             return True
 
         try:
@@ -504,14 +504,14 @@ class ReactivationLoop:
                 from src.monitoring.metrics_store import get_metrics_store
                 get_metrics_store().record_reactivation_failed("send_callback_returned_0")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in ReactivationLoop._schedule_one", exc_info=True)
             return False
 
         try:
             from src.monitoring.metrics_store import get_metrics_store
             get_metrics_store().record_reactivation_scheduled(cand.contact_id)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in ReactivationLoop._schedule_one", exc_info=True)
 
         # 实施84 P0-6：触达落共享账本（outreach_log，经注入的 sent_hook）
         if self._sent_hook is not None:

@@ -993,6 +993,14 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 chat_id = getattr(message.chat, 'id', 0)
                 self.logger.info("[群消息] 收到一条群消息 chat_id=%s", chat_id)
 
+                # 群里接话被回：先于白名单 / 触发闸登记（接话的群多半不在自动回复白名单里）
+                if getattr(message, 'reply_to_message_id', None):
+                    try:
+                        from src.companion.group_member_gtouch import note_group_reply
+                        note_group_reply(getattr(self, 'account_id', '') or '', message)
+                    except Exception:
+                        self.logger.debug("[gm_gtouch] 群里回复登记失败（忽略）", exc_info=True)
+
                 # 群聊灰度白名单（P3-1）：allowlist_chat_ids 非空时仅名单内群放行。
                 from src.client.reply_logic_gates import group_allowlist_blocked
                 _gr_cfg = self.config.get('telegram', {}).get('group_reply', {})
@@ -2210,6 +2218,7 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 username=ident.get("username") or "",
                 phone=ident.get("phone") or "",
                 ts=mts or None,
+                sent_by="phone",
             )
             self.logger.info(
                 "[轮询兜底] 镜像手机已发消息 chat=%s mid=%s media=%s ref=%s text=%r",
@@ -2743,8 +2752,12 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                     media_type: str = "", media_ref: str = "",
                     username: str = "", phone: str = "",
                     sender_id: str = "", sender_name: str = "",
-                    ts: Optional[float] = None, chat_type: str = "") -> None:
+                    ts: Optional[float] = None, chat_type: str = "",
+                    sent_by: str = "") -> None:
         """N4b：companion 运行时把 A 线收/发的消息镜像进统一收件箱（坐席台可见）。
+
+        ``sent_by``（P0-4）：出站行发送方（A 线自动回复 ``ai`` / 轮询兜底镜像手机已发 ``phone``），
+        经 ``source.sent_by`` 落 ``messages.sent_by``；空＝不透传（入站 / 旧调用方不变）。
 
         默认关（``self._mirror_inbox`` False）→ standalone main.py 零影响。仅 emit 到
         收件箱 sink（不触发 B 线 autoreply，避免与 A 线自身回复重复）。best-effort，
@@ -2772,6 +2785,9 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
             if chat_type:
                 _src = dict(_src or {})
                 _src["chat_type"] = str(chat_type)
+            if sent_by and direction == "out":
+                _src = dict(_src or {})
+                _src["sent_by"] = str(sent_by)
             emit_incoming(make_message(
                 platform="telegram",
                 account_id=getattr(self, "account_id", "default"),
@@ -3880,7 +3896,14 @@ class TelegramClient(TelegramTriggerMixin, TelegramSenderMixin, LoggerMixin):
                 # 记账（未发出的回复不得占冷却位/进 last_reply——幻影回复）。
                 # 注意本分支只拦「语音尝试过且失败」；语音未触发的普通文字回复
                 # 不在此列（那是正文不是替代品）。
-                if _voice_fail_state.get("synth_failed"):
+                # 例外：人设/配置显式 on_voice_fail=text（语音只是加分项的人设，如销售）
+                # → 照常走下方文字发送，不转待发。
+                if _voice_fail_state.get("synth_failed") and \
+                        _voice_fail_state.get("text_fallback"):
+                    self.logger.warning(
+                        "[voice_reply] 语音失败（%s）→ on_voice_fail=text 改发文字 chat=%s",
+                        _voice_fail_state.get("reason") or "synth_failed", chat_id)
+                elif _voice_fail_state.get("synth_failed"):
                     _vb_acct = str(getattr(self, "account_id", "") or "default")
                     _vb_cid = f"telegram:{_vb_acct}:{chat_id}"
                     try:

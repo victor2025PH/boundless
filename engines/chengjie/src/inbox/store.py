@@ -299,6 +299,18 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_msg_conv_ts ON messages(conversation_id, ts DESC);
 
+-- 向导漏斗「开始测试」事件。不进 messages：坐席线程、自动回复、会话预览都读不到。
+CREATE TABLE IF NOT EXISTS guide_trial_events (
+    platform    TEXT NOT NULL DEFAULT '',
+    account_id  TEXT NOT NULL,
+    chat_key    TEXT NOT NULL,
+    feature     TEXT NOT NULL,
+    ts          REAL NOT NULL,
+    PRIMARY KEY (platform, account_id, chat_key, feature)
+);
+CREATE INDEX IF NOT EXISTS idx_guide_trial_acct
+    ON guide_trial_events(account_id, chat_key);
+
 -- P1：出向译文旁路表。坐席「一击直发」让后端把中文原文译成客户语言后投递，
 -- 但出向消息回到 messages 的路径异构（web record_message / protocol worker push /
 -- 多数 RPA 根本不回读），无法在 messages 里稳定保存「中文原文 ↔ 实发译文」配对。
@@ -808,6 +820,9 @@ _MIGRATIONS = [
     "ALTER TABLE ops_incidents ADD COLUMN kind TEXT NOT NULL DEFAULT 'health'",
     # F+：会话级首选翻译引擎（坐席多线路对照择优后持久化，跨刷新/重启生效）
     "ALTER TABLE conversations ADD COLUMN pref_engine TEXT NOT NULL DEFAULT ''",
+    # 会话翻译档（std/free/pro/certified）。空＝标准档。引擎提示按这条读，
+    # 不把「本地模型没配好」盖到整箱。
+    "ALTER TABLE conversations ADD COLUMN pref_tier TEXT NOT NULL DEFAULT ''",
     # P3（译文默认语言运营化）：通用 KV 配置表。供「默认译文显示语言」按
     # 全局/平台/账号维度持久化（key 形如 inbox.default_lang[.platform.<p>][.account.<p>.<a>]），
     # 换机/换坐席不丢，区别于 conversations.pref_engine（会话级）。值空＝未配置。
@@ -1137,6 +1152,8 @@ _MIGRATIONS = [
     # 出站行 ingest 那一刻按同会话 + 同 hash/ref + 时间窗精确认领 → 直接写列；线程读取
     # 先信本列，老行才回落时间匹配。agent_sends 两列同为此服务。
     "ALTER TABLE messages ADD COLUMN sent_by TEXT NOT NULL DEFAULT ''",
+    # （P0-4，2026-10-08）sent_by 扩为五态 agent/ai/phone/script/system，新出站行缺省 phone、
+    # 不再落 ''；老行不回填（列默认值不变，无需迁移）。见 SENT_BY_VALUES。
     "ALTER TABLE agent_sends ADD COLUMN text_hash TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE agent_sends ADD COLUMN media_ref TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE agent_sends ADD COLUMN claimed_mid TEXT NOT NULL DEFAULT ''",
@@ -1148,6 +1165,17 @@ _MIGRATIONS = [
     # 即冻结（守卫不弱化），人工解冻（unfreeze_conversation）才清零。写口只有
     # stop_contact.confirm_stop_contact / unfreeze_conversation 两处。
     "ALTER TABLE conversation_meta ADD COLUMN stop_contact_at REAL NOT NULL DEFAULT 0",
+    # 向导漏斗：客户做了点名的那一项功能。独立成表，避免写进对方看得见的聊天正文。
+    # CREATE TABLE / INDEX 都带 IF NOT EXISTS，可安全重跑。
+    """CREATE TABLE IF NOT EXISTS guide_trial_events (
+        platform    TEXT NOT NULL DEFAULT '',
+        account_id  TEXT NOT NULL,
+        chat_key    TEXT NOT NULL,
+        feature     TEXT NOT NULL,
+        ts          REAL NOT NULL,
+        PRIMARY KEY (platform, account_id, chat_key, feature)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_guide_trial_acct ON guide_trial_events(account_id, chat_key)",
 ]
 
 
@@ -1156,15 +1184,83 @@ _MIGRATIONS = [
 AGENT_SEND_CLAIM_WINDOW_SEC = 180.0
 
 
-SENT_BY_VALUES = ("agent", "ai")
+#: 出站行发送方（P0-4 归因，2026-10-08 扩为五态）：
+#:   agent  坐席在工作台手动发出（含图/语音；发送打点认领）
+#:   ai     编排器自动链（自动回复 / 主动触达 / 自动语音 / A 线直回）
+#:   phone  不经本系统打标链路发出——手机端 / 外部设备回抄 / 未识别出站（**出站缺省值**）
+#:   script 脚本 / 演练 / 测试工具发出
+#:   system 系统通知类（模板、回执等非对话自动消息）
+#: 入站永远 ''。此前缺省 '' ＝「未知」，173 上新出站行约 60% 无归因，无法区分人 / AI / 手机。
+SENT_BY_VALUES = ("agent", "ai", "phone", "script", "system")
+SENT_BY_DEFAULT_OUT = "phone"
+_SENT_BY_ALIASES = {
+    "manual": "agent", "human": "agent", "seat": "agent", "operator": "agent",
+    "auto": "ai", "bot": "ai", "autoreply": "ai", "auto_reply": "ai", "llm": "ai",
+    "device": "phone", "mobile": "phone", "external": "phone", "app": "phone",
+    "test": "script", "scripted": "script", "drill": "script", "tool": "script",
+    "sys": "system", "notice": "system",
+}
+
+
+def normalize_sent_by(value: Any) -> str:
+    """发送方取值归一：五态原样；常见别名映射；其余（含空）→ ''（由调用方决定缺省）。"""
+    v = str(value or "").strip().lower()
+    if v in SENT_BY_VALUES:
+        return v
+    return _SENT_BY_ALIASES.get(v, "")
+
+
+def _explicit_sent_by(msg: Any) -> str:
+    """出站行**自带**的发送方（编排器镜像 / A 线 / 轮询兜底等显式打标）；没有 → ''；入站 → ''。"""
+    if str(getattr(msg, "direction", "") or "") != "out":
+        return ""
+    return normalize_sent_by(getattr(msg, "sent_by", ""))
+
+
+#: 脚本测试号（2026-10-08 Morgan 确认 6834…252）：这些**我方账号**发出的出站流量是脚本 /
+#: 值守工具驱动的测试，归因 ``script``（坐席在工作台亲手发的仍记 agent）。
+#: 名单只有一份：配置 ``compliance.send_rate_gate.script_accounts``（与智安限速闸共用，
+#: 读取口 ``send_rate_gate.script_accounts()``）；环境变量 ``CHENGJIE_SCRIPT_SENDER_ACCOUNTS``
+#: 只作覆盖（逗号分隔，空串＝清空）。zhiliao 实例的取值见 deploy/instances/zhiliao/config.local.yaml。
+
+
+def script_sender_accounts() -> frozenset:
+    """当前生效的脚本测试号名单（兼容旧名；真身在 send_rate_gate.script_accounts）。"""
+    try:
+        from src.compliance.send_rate_gate import script_accounts
+        return frozenset(script_accounts())
+    except Exception:
+        import os as _os
+        raw = _os.environ.get("CHENGJIE_SCRIPT_SENDER_ACCOUNTS") or ""
+        return frozenset(x.strip() for x in raw.split(",") if x.strip())
+
+
+def _is_script_sender_conv(conversation_id: Any) -> bool:
+    """会话主键 ``platform:account_id:chat_key`` 的账号是否脚本测试号（与限速闸同一匹配口径）。"""
+    parts = str(conversation_id or "").split(":", 2)
+    if len(parts) < 2 or not parts[1]:
+        return False
+    try:
+        from src.compliance.send_rate_gate import is_script_account
+        return is_script_account(parts[0], parts[1])
+    except Exception:
+        return parts[1] in script_sender_accounts()
+
+
+def _resolve_sent_by(msg: Any, inherited: str = "") -> str:
+    """落库用发送方：入站 ''；出站＝显式值 → 继承值（被删 hash 孪生）→ 缺省 ``phone``。
+    脚本测试号的出站一律 ``script``（显式 agent 除外）。坐席打点认领随后可把 phone 改判为 agent。"""
+    if str(getattr(msg, "direction", "") or "") != "out":
+        return ""
+    sb = _explicit_sent_by(msg) or normalize_sent_by(inherited)
+    if sb != "agent" and _is_script_sender_conv(getattr(msg, "conversation_id", "")):
+        return "script"
+    return sb or SENT_BY_DEFAULT_OUT
 
 
 def _sent_by_of(msg: Any) -> str:
-    """出站行随消息自带的发送方（编排器镜像 origin → ai/agent）；入站永远空；非法值归空。"""
-    if str(getattr(msg, "direction", "") or "") != "out":
-        return ""
-    v = str(getattr(msg, "sent_by", "") or "").strip().lower()
-    return v if v in SENT_BY_VALUES else ""
+    """落库用发送方（见 :func:`_resolve_sent_by`）。"""
+    return _resolve_sent_by(msg)
 
 
 def agent_send_text_hash(text: str) -> str:
@@ -1409,6 +1505,7 @@ class InboxStore:
                 try:
                     cols = {str(c[1]) for c in conn.execute(f"PRAGMA table_info({t})")}
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in InboxStore._merge_wa_device_suffix_convs", exc_info=True)
                     continue
                 if "conversation_id" not in cols:
                     continue
@@ -1460,7 +1557,7 @@ class InboxStore:
             try:
                 conn.commit()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore._merge_wa_device_suffix_convs", exc_info=True)
         return merged
 
     def _rebuild_fts5_if_empty(self) -> bool:
@@ -1518,7 +1615,7 @@ class InboxStore:
             try:
                 self._conn.close()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore.close", exc_info=True)
 
     def dedup_stats(self) -> Dict[str, int]:
         """去重护栏命中累计（进程生命周期内）：
@@ -1604,6 +1701,24 @@ class InboxStore:
             )
             self._conn.commit()
 
+    def _fill_unknown_language_locked(self, conversation_id: str, lang: str) -> None:
+        """P1-5（2026-10-08）：新入站消息带可信语种、而会话语言还是 unknown → 补上。
+
+        此前会话语言只看「采集时末条」：末条是出站 / 表情 / 图片的会话一直 unknown（173 占
+        46%）。这里只补 unknown，不覆写已有值（覆写仍走 upsert 的末条入站规则），所以
+        「OK 翻语言」护栏不受影响。调用方已持锁、同一事务。
+        """
+        lg = str(lang or "").strip().lower()
+        if not conversation_id or lg in ("", "unknown", "auto"):
+            return
+        try:
+            self._conn.execute(
+                "UPDATE conversations SET language=? "
+                "WHERE conversation_id=? AND language IN ('unknown', '')",
+                (lg[:16], conversation_id))
+        except sqlite3.Error:
+            logger.debug("[InboxStore] 会话语言补写失败（忽略）", exc_info=True)
+
     def ingest_message(self, msg: InboxMessage) -> bool:
         """INSERT OR IGNORE，返回是否新插入。"""
         if not msg.conversation_id:
@@ -1644,6 +1759,8 @@ class InboxStore:
                 ),
             )
             inserted = cur.rowcount > 0
+            if not inserted:
+                self._upgrade_sent_by_locked(mid, msg)
             # P0 未读可信化 v2：入站落库即精确推进 last_in_ts（effective_unread
             # 新闸门比对它而非 last_ts——自己的出站绝不再复活未读徽标）。
             if inserted and msg.direction == "in":
@@ -1651,6 +1768,7 @@ class InboxStore:
                     "UPDATE conversations SET last_in_ts=? "
                     "WHERE conversation_id=? AND last_in_ts < ?",
                     (float(msg.ts or 0), msg.conversation_id, float(msg.ts or 0)))
+                self._fill_unknown_language_locked(msg.conversation_id, msg.source_lang)
             # 回复即接受：任何**新插入的出站**落库即撤「陌生人消息请求」标记——
             # worker 发送时会自动点官方「接受」按钮（messenger-web clickAcceptRequest），
             # 这里同步撤前端徽章/引导条。WHERE is_request=1 自守卫，非请求会话零成本。
@@ -1771,6 +1889,8 @@ class InboxStore:
                 _pmid = str(msg.platform_msg_id or "").strip()
                 _tsf = float(msg.ts or 0)
                 _win = 120.0 if msg.direction == "out" else 0.0
+                _twin_sent_by = ""   # P0-4：被删 hash 孪生的发送方（权威行没自带时继承）
+                _twin_mids: List[str] = []
                 if not _pmid:
                     _twin = self._conn.execute(
                         "SELECT 1 FROM messages WHERE conversation_id=? AND text=? AND ts=? "
@@ -1781,6 +1901,18 @@ class InboxStore:
                         self._dedup_counts["skipped_hash"] += 1
                         continue
                 else:
+                    if msg.direction == "out":
+                        # P0-4：删孪生前先取它的发送方——乐观 hash 行常由 A 线 / 编排器带 ai/agent
+                        # 写入，权威回显行（pmid）却不带；不继承就会把 AI 发言洗成 phone/空。
+                        for _tw in self._conn.execute(
+                                "SELECT message_id, sent_by FROM messages WHERE conversation_id=? AND text=? "
+                                "AND direction=? AND platform_msg_id = '' AND message_id LIKE '%:h:%' "
+                                "AND ABS(ts - ?) <= ?",
+                                (msg.conversation_id, msg.text, msg.direction, _tsf, _win)).fetchall():
+                            _twin_mids.append(str(_tw[0]))
+                            _sb = normalize_sent_by(_tw[1])
+                            if _sb and _sb != SENT_BY_DEFAULT_OUT and not _twin_sent_by:
+                                _twin_sent_by = _sb
                     _cur = self._conn.execute(
                         "DELETE FROM messages WHERE conversation_id=? AND text=? "
                         "AND direction=? AND platform_msg_id = '' AND message_id LIKE '%:h:%' "
@@ -1790,6 +1922,12 @@ class InboxStore:
                     if (_cur.rowcount or 0) > 0:
                         self._dedup_counts["deleted_hash"] += int(_cur.rowcount)
                 mid = _message_pk(msg.conversation_id, msg.platform_msg_id, msg.text, msg.ts)
+                _sb_row = _resolve_sent_by(msg, _twin_sent_by)
+                if _twin_sent_by and not _explicit_sent_by(msg):
+                    try:
+                        msg.sent_by = _twin_sent_by   # 让随后的认领 / 冲突升级看到同一口径
+                    except Exception:
+                        logging.getLogger(__name__).debug("swallowed in InboxStore.ingest_batch", exc_info=True)
                 cur = self._conn.execute(
                     """
                     INSERT OR IGNORE INTO messages
@@ -1809,15 +1947,25 @@ class InboxStore:
                         str(msg.reply_to_sender or ""), str(msg.mentions_json or "[]"),
                         str(msg.sender_id or ""), str(msg.sender_name or ""),
                         int(getattr(msg, "approx_ts", 0) or 0),
-                        _sent_by_of(msg),
+                        _sb_row,
                     ),
                 )
                 if cur.rowcount > 0:
                     inserted += 1
                     if msg.direction == "in":
                         _new_inbound_ts = max(_new_inbound_ts, float(msg.ts or 0))
+                        self._fill_unknown_language_locked(
+                            msg.conversation_id, msg.source_lang)
                     else:
+                        if _twin_mids:
+                            # 孪生已被打点认领过 → 认领指针挪到权威行（免得打点悬空又被下一条误认）
+                            _ph = ",".join("?" * len(_twin_mids))
+                            self._conn.execute(
+                                f"UPDATE agent_sends SET claimed_mid=? WHERE claimed_mid IN ({_ph})",
+                                [mid, *_twin_mids])
                         self._claim_agent_send_locked(mid, msg)
+                else:
+                    self._upgrade_sent_by_locked(mid, msg)
             if _new_inbound_ts > 0:
                 # P0 未读可信化 v2：本批新入站的最晚 ts 精确收口 last_in_ts
                 # （conv upsert 的「未读增长近似推进」之上的权威值，同一事务内落定）。
@@ -1841,7 +1989,7 @@ class InboxStore:
                     "session_id": conv.conversation_id, "platform": conv.platform,
                     "chat_type": conv.chat_type or "private"})
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore.ingest_batch", exc_info=True)
         return inserted
 
     # ── P0：协议通讯录（好友名单）+ 会话列表占位 ──────────────────────────
@@ -2253,6 +2401,7 @@ class InboxStore:
                 cols = {str(c[1]) for c in
                         self._conn.execute(f"PRAGMA table_info({name})")}
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in InboxStore._conversation_tables_locked", exc_info=True)
                 continue
             if "conversation_id" in cols:
                 tables.append(name)
@@ -2415,7 +2564,7 @@ class InboxStore:
             try:
                 return self._search_messages_fts5(query, limit=limit, platform=platform)
             except Exception:
-                pass  # FTS5 查询失败（特殊字符/语法错），降级 LIKE
+                logging.getLogger(__name__).debug("swallowed in InboxStore.search_messages", exc_info=True)
 
         return self._search_messages_like(query, limit=limit, platform=platform)
 
@@ -2537,6 +2686,19 @@ class InboxStore:
                 " WHERE conversation_id=? AND is_request=1",
                 (conversation_id,))
             self._conn.commit()
+
+    def count_unknown_session_language(self) -> int:
+        """会话语言仍是 unknown / 空 / auto 的行数。只读，不回填。
+
+        与 ``scripts/backfill_conversation_language.py`` 的统计口径一致：
+        默认 dry-run，``--apply`` 也只补这些行。
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM conversations "
+                "WHERE COALESCE(language, '') IN ('', 'unknown', 'auto')"
+            ).fetchone()
+        return int(row[0] if row else 0)
 
     def count_conversations_older_than(
         self, ts: float, *, platform: str = "", account_id: str = "",
@@ -2728,6 +2890,26 @@ class InboxStore:
                 (conversation_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def find_private_conversation_id(self, *, account_id: str, username: str) -> str:
+        """这个号的私聊里，username 对得上的那条会话。没有就是空串。"""
+        acct = str(account_id or "").strip()
+        handle = str(username or "").strip().lstrip("@").lower()
+        if not acct or not handle:
+            return ""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT conversation_id FROM conversations "
+                    "WHERE account_id=? AND chat_type IN ('private', '') "
+                    "AND lower(replace(username, '@', ''))=? "
+                    "ORDER BY last_ts DESC LIMIT 1",
+                    (acct, handle),
+                ).fetchone()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] 按 username 找私聊失败", exc_info=True)
+            return ""
+        return str(row["conversation_id"] or "") if row else ""
 
     def list_group_speakers(
         self, conversation_id: str, *, limit: int = 80,
@@ -4055,6 +4237,41 @@ class InboxStore:
         return {str(r["cid"]): {"direction": str(r["direction"] or "in"),
                                 "ts": float(r["ts"] or 0)} for r in rows}
 
+    def list_unanswered_private(
+        self, *, older_than_ts: float, limit: int = 1000,
+    ) -> Dict[str, Any]:
+        """最后一条是客户说的、且不新于 ``older_than_ts`` 的未归档私聊。
+
+        给待人工的「客户在等」。不走「最近 N 个会话」窗口——等得越久的人
+        ``last_ts`` 越老，正好被那个窗口丢掉。按末条时间从新到旧，最多
+        ``limit`` 条；多出来的记 ``truncated``，调用方可以说「还有更早的没列进来」。
+        超过 3 天的也返回，由页面折进历史积压，不在这里丢。
+        """
+        lim = max(1, min(int(limit or 1000), 2000))
+        sql = (
+            "SELECT c.conversation_id AS conversation_id, c.platform AS platform, "
+            "c.account_id AS account_id, c.chat_key AS chat_key, "
+            "c.chat_type AS chat_type, c.display_name AS name, "
+            "c.last_text AS last_msg, c.last_ts AS last_ts, c.unread AS unread, "
+            "c.last_read_ts AS last_read_ts, "
+            "m.ts AS wait_ts, m.text AS inbound_text, m.media_type AS inbound_media "
+            "FROM messages m "
+            "JOIN (SELECT conversation_id, MAX(ts) AS mts FROM messages "
+            "      GROUP BY conversation_id) x "
+            "  ON m.conversation_id = x.conversation_id AND m.ts = x.mts "
+            "JOIN conversations c ON c.conversation_id = m.conversation_id "
+            "LEFT JOIN conversation_meta meta "
+            "  ON meta.conversation_id = c.conversation_id "
+            "WHERE m.direction = 'in' AND m.ts > 0 AND m.ts <= ? "
+            "  AND c.chat_type NOT IN ('group', 'channel', 'room') "
+            "  AND COALESCE(meta.archived, 0) = 0 "
+            "ORDER BY m.ts DESC LIMIT ?"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, (float(older_than_ts), lim + 1)).fetchall()
+        items = [dict(r) for r in rows[:lim]]
+        return {"items": items, "truncated": len(rows) > lim}
+
     def last_inbound_ts_map(
         self, conversation_ids: Optional[List[str]] = None,
     ) -> Dict[str, float]:
@@ -4143,14 +4360,31 @@ class InboxStore:
                 self._claim_row_for_send_locked(int(cur.lastrowid or 0), cid, t, th, ref)
             self._conn.commit()
 
+    def _upgrade_sent_by_locked(self, mid: str, msg: Any) -> None:
+        """P0-4：同主键行已在库（INSERT OR IGNORE 未插）→ 本次若**显式**带了发送方，而库里
+        还是 ''（老行）/ phone（缺省），就升级成显式值。手机回显先到、编排器镜像后到时靠它
+        把 phone 改判为 ai/agent。只升不降，agent 认领过的行不被覆盖。锁内调用、绝不抛。"""
+        try:
+            sb = _explicit_sent_by(msg)
+            if not sb or sb == SENT_BY_DEFAULT_OUT:
+                return
+            self._conn.execute(
+                "UPDATE messages SET sent_by=? WHERE message_id=? AND direction='out' "
+                "AND sent_by IN ('', ?)", (sb, mid, SENT_BY_DEFAULT_OUT))
+        except Exception:
+            logger.debug("[sent_by] 冲突升级失败（忽略）", exc_info=True)
+
     def _claim_agent_send_locked(self, mid: str, msg: Any) -> None:
         """出站行落库 → 找同会话、同 text_hash / media_ref、时间窗内、尚未认领的坐席打点；
         命中 → ``sent_by='agent'`` + 打点记 ``claimed_mid``。锁内调用、绝不抛。"""
         try:
             # 四期：镜像行自带发送方（编排器 origin → ai/agent）时列已在 INSERT 写好；
-            # ai 行不碰打点；agent 行仍把对应打点记 claimed（免得同文本的下一条被它误认）
-            if _sent_by_of(msg) == "ai":
+            # ai / script / system 行不碰打点；agent 行仍把对应打点记 claimed（免得同文本的
+            # 下一条被它误认）；缺省 phone 行可被坐席打点改判为 agent（P0-4）
+            if _explicit_sent_by(msg) in ("ai", "script", "system"):
                 return
+            if _is_script_sender_conv(getattr(msg, "conversation_id", "")):
+                return   # 脚本测试号：同文本的坐席打点不把脚本发言认成人工
             cid = str(getattr(msg, "conversation_id", "") or "")
             th = agent_send_text_hash(getattr(msg, "text", "") or "")
             ref = str(getattr(msg, "media_ref", "") or "").strip()
@@ -4175,10 +4409,10 @@ class InboxStore:
             if not send_rowid:
                 return
             # 归一化 hash 需逐行算：只取窗口内最近 20 条未标出站行（打点晚于镜像是罕见路径）
-            # sent_by IN ('', 'agent')：四期编排器镜像行已带 agent，也要与打点连上（记 claimed）；
-            # 已被别的打点认领的行排除；ai 行永不认
+            # sent_by IN ('', 'agent', 'phone')：四期编排器镜像行已带 agent，也要与打点连上（记 claimed）；
+            # phone＝P0-4 起的出站缺省值（老行是 ''）；已被别的打点认领的行排除；ai/script/system 永不认
             q = ("SELECT message_id, text, media_ref FROM messages WHERE conversation_id=? AND direction='out' "
-                 "AND sent_by IN ('', 'agent') "
+                 "AND sent_by IN ('', 'agent', 'phone') "
                  "AND message_id NOT IN (SELECT claimed_mid FROM agent_sends WHERE claimed_mid<>'') "
                  "AND ABS(ts-?)<=? ORDER BY ABS(ts-?) LIMIT 20")
             rows = self._conn.execute(q, (cid, ts, AGENT_SEND_CLAIM_WINDOW_SEC, ts)).fetchall()
@@ -5440,7 +5674,7 @@ class InboxStore:
                 try:
                     _cb()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in InboxStore.upsert_draft", exc_info=True)
         return draft_id
 
     def update_draft_status(
@@ -5560,7 +5794,7 @@ class InboxStore:
                 try:
                     _cb()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in InboxStore.finalize_draft_enrichment", exc_info=True)
         return updated
 
     def get_draft(self, draft_id: str) -> Optional[Dict[str, Any]]:
@@ -6010,6 +6244,7 @@ class InboxStore:
             try:
                 ts = float(r["last_ts"] or 0.0)
             except Exception:  # noqa: BLE001
+                logging.getLogger(__name__).debug("swallowed in InboxStore.group_last_spoke_at", exc_info=True)
                 continue
             if a and ts > 0:
                 out[a] = ts
@@ -6072,6 +6307,7 @@ class InboxStore:
             try:
                 ts = float(r["ts"] or 0.0)
             except Exception:  # noqa: BLE001
+                logging.getLogger(__name__).debug("swallowed in InboxStore.group_inbound_since", exc_info=True)
                 continue
             text = str(r["text"] or "").strip()
             if not text or ts <= 0:
@@ -6080,6 +6316,70 @@ class InboxStore:
             out.append({
                 "ts": ts, "sender_id": sid or name,
                 "sender_name": name, "text": text,
+            })
+        return out
+
+    def group_account_outbound_since(
+        self,
+        *,
+        account_id: str = "",
+        chat_key: str = "",
+        since_ts: float = 0.0,
+        until_ts: float = 0.0,
+        platform: str = "",
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """这个号在该群里发出去的话，``[{ts, account_id, text}, ...]`` 按时间升序。
+
+        用来判断向导有没有接过某句群消息。读挂 → 空列表。
+        """
+        acct = str(account_id or "").strip()
+        key = str(chat_key or "").strip()
+        if not acct or not key:
+            return []
+        clauses = [
+            "c.chat_key=?",
+            "c.account_id=?",
+            "c.chat_type NOT IN ('private', '')",
+            "m.direction='out'",
+            "m.text != ''",
+        ]
+        params: List[Any] = [key, acct]
+        if since_ts and since_ts > 0:
+            clauses.append("m.ts>?")
+            params.append(float(since_ts))
+        if until_ts and until_ts > 0:
+            clauses.append("m.ts<=?")
+            params.append(float(until_ts))
+        if platform:
+            clauses.append("c.platform=?")
+            params.append(str(platform))
+        sql = (
+            "SELECT m.ts AS ts, m.text AS text, c.account_id AS account_id "
+            "FROM messages m JOIN conversations c "
+            "  ON c.conversation_id = m.conversation_id "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY m.ts ASC LIMIT ?"
+        )
+        params.append(max(1, min(int(limit or 200), 500)))
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] 群出向消息查询失败", exc_info=True)
+            return []
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            try:
+                ts = float(r["ts"] or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "ts": ts,
+                "account_id": str(r["account_id"] or acct),
+                "text": str(r["text"] or ""),
             })
         return out
 
@@ -6135,6 +6435,195 @@ class InboxStore:
                 continue
             if k and t > 0:
                 out[k] = t
+        return out
+
+    def record_guide_trial(
+        self,
+        *,
+        account_id: str,
+        user_id: str,
+        feature: str,
+        ts: Optional[float] = None,
+        platform: str = "",
+    ) -> bool:
+        """记下「这个人做了这一项功能」。
+
+        只写 ``guide_trial_events``。不插消息、不改会话预览、不发私聊。
+        对方还没先私聊这个号（线程不存在，或第一句是我们发出去的）→ 不记。
+        同一人同一项只留一行。
+        """
+        from src.companion.group_show.funnel import trial_marker
+
+        marker = trial_marker(feature)
+        acct = str(account_id or "").strip()
+        uid = str(user_id or "").strip()
+        plat = str(platform or "").strip()
+        if not marker or not acct or not uid:
+            return False
+        feat = marker.split(":", 1)[1]
+        clauses = [
+            "account_id=?",
+            "chat_key=?",
+            "chat_type IN ('private', '')",
+        ]
+        params: List[Any] = [acct, uid]
+        if plat:
+            clauses.append("platform=?")
+            params.append(plat)
+        sql = (
+            "SELECT conversation_id, platform FROM conversations WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY created_at ASC"
+        )
+        try:
+            with self._lock:
+                convs = self._conn.execute(sql, params).fetchall()
+                picked = None
+                first_ts = 0.0
+                for conv in convs:
+                    cid = str(conv["conversation_id"] or "")
+                    if not cid:
+                        continue
+                    first = self._conn.execute(
+                        "SELECT direction, ts FROM messages "
+                        "WHERE conversation_id=? ORDER BY ts ASC, rowid ASC LIMIT 1",
+                        (cid,),
+                    ).fetchone()
+                    if first is None:
+                        continue
+                    if str(first["direction"] or "") not in ("in", "inbound"):
+                        continue
+                    try:
+                        first_ts = float(first["ts"] or 0.0)
+                    except (TypeError, ValueError):
+                        continue
+                    if first_ts <= 0:
+                        continue
+                    picked = conv
+                    break
+                if picked is None:
+                    return False
+                event_plat = plat or str(picked["platform"] or "")
+                try:
+                    event_ts = float(ts) if ts is not None else self._now()
+                except (TypeError, ValueError):
+                    event_ts = self._now()
+                if event_ts <= first_ts:
+                    event_ts = first_ts + 0.001
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO guide_trial_events"
+                    "(platform, account_id, chat_key, feature, ts) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (event_plat, acct, uid, feat, event_ts),
+                )
+                self._conn.commit()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] 向导试用事件写入失败", exc_info=True)
+            return False
+        return True
+
+    def guide_private_messages(
+        self,
+        *,
+        account_id: str = "",
+        chat_keys: Optional[Sequence[str]] = None,
+        platform: str = "",
+        limit: int = 800,
+    ) -> List[Dict[str, Any]]:
+        """向导号与这些 peer 的私聊：每条线程的第一句，外加 ``guide_trial:`` 事件行。
+
+        给向导漏斗用。第一句用来判断是不是对方先开口；事件行用来判断做了哪一项功能。
+        不在这里做归因——口径在 :mod:`src.companion.group_show.funnel`。
+        读挂 → 空列表（调用方标 degraded，别把查不到写成零添加）。
+        """
+        acct = str(account_id or "").strip()
+        keys = [str(k).strip() for k in (chat_keys or ()) if str(k or "").strip()]
+        keys = list(dict.fromkeys(keys))[:500]
+        if not acct or not keys:
+            return []
+        clauses = [
+            "c.account_id=?",
+            "c.chat_type IN ('private', '')",
+            "c.chat_key IN (" + ",".join("?" for _ in keys) + ")",
+            "(m.ts = (SELECT MIN(m2.ts) FROM messages m2 "
+            "WHERE m2.conversation_id = m.conversation_id) "
+            "OR m.text LIKE ? OR m.text LIKE ?)",
+        ]
+        params: List[Any] = [acct, *keys, "guide_trial:%", "%\nguide_trial:%"]
+        if platform:
+            clauses.append("c.platform=?")
+            params.append(str(platform))
+        sql = (
+            "SELECT c.chat_key AS user_id, c.account_id AS account_id, "
+            "m.ts AS ts, m.direction AS direction, m.text AS text "
+            "FROM messages m JOIN conversations c "
+            "  ON c.conversation_id = m.conversation_id "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY m.ts ASC LIMIT ?"
+        )
+        params.append(max(1, min(int(limit or 800), 2000)))
+        try:
+            with self._lock:
+                rows = self._conn.execute(sql, params).fetchall()
+        except Exception:  # noqa: BLE001
+            logger.debug("[inbox] 向导私聊查询失败", exc_info=True)
+            return []
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            uid = str(r["user_id"] or "").strip()
+            if not uid:
+                continue
+            try:
+                ts = float(r["ts"] or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "user_id": uid,
+                "account_id": str(r["account_id"] or acct),
+                "ts": ts,
+                "direction": str(r["direction"] or ""),
+                "text": str(r["text"] or ""),
+            })
+        seen = {r["user_id"] for r in out}
+        ev_keys = [k for k in keys if k in seen]
+        if ev_keys:
+            from src.companion.group_show.funnel import trial_marker
+            ev_sql = (
+                "SELECT chat_key AS user_id, account_id, ts, feature "
+                "FROM guide_trial_events WHERE account_id=? AND chat_key IN ("
+                + ",".join("?" for _ in ev_keys) + ")"
+            )
+            ev_params: List[Any] = [acct, *ev_keys]
+            if platform:
+                ev_sql += " AND platform=?"
+                ev_params.append(str(platform))
+            try:
+                with self._lock:
+                    ev_rows = self._conn.execute(ev_sql, ev_params).fetchall()
+            except Exception:  # noqa: BLE001
+                logger.debug("[inbox] 向导试用事件查询失败", exc_info=True)
+                ev_rows = []
+            for r in ev_rows:
+                uid = str(r["user_id"] or "").strip()
+                marker = trial_marker(r["feature"])
+                if not uid or not marker:
+                    continue
+                try:
+                    ts = float(r["ts"] or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if ts <= 0:
+                    continue
+                out.append({
+                    "user_id": uid,
+                    "account_id": str(r["account_id"] or acct),
+                    "ts": ts,
+                    "direction": "in",
+                    "text": marker,
+                })
+            out.sort(key=lambda row: row["ts"])
         return out
 
     # ── Phase A / C1：坐席绩效聚合 ───────────────────────────
@@ -6203,7 +6692,7 @@ class InboxStore:
                 scores = [r[0] for r in csat_rows if r[0] is not None and r[0] >= 0]
                 p["avg_csat"] = round(sum(scores) / len(scores), 1) if scores else None
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in InboxStore.get_agent_perf", exc_info=True)
 
         return perf
 
@@ -7257,7 +7746,7 @@ class InboxStore:
             track("session.handed_off",
                   {"session_id": cid, "reason": str(reason or "")})
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in InboxStore.record_escalation", exc_info=True)
         return True
 
     def escalation_takeovers(
@@ -8970,6 +9459,7 @@ class InboxStore:
                 try:
                     tags = json.loads(r["conv_tags"] or "[]")
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in InboxStore.remove_tag_from_all_conversations", exc_info=True)
                     continue
                 if not isinstance(tags, list) or t not in tags:
                     continue
@@ -9031,6 +9521,27 @@ class InboxStore:
                 "UPDATE conversations SET pref_engine = ?, updated_at = ? "
                 "WHERE conversation_id = ?",
                 (eng, now, cid),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def set_conversation_pref_tier(self, conversation_id: str, tier: str) -> bool:
+        """会话翻译档。空串＝标准档。只接受 std/free/pro/certified。
+
+        会话行不存在 → False。非法档名不落库，避免把提示和计费钉到陌生档。
+        """
+        cid = str(conversation_id or "").strip()
+        if not cid:
+            return False
+        raw = str(tier or "").strip().lower()
+        if raw not in ("", "std", "free", "pro", "certified"):
+            return False
+        now = self._now()
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE conversations SET pref_tier = ?, updated_at = ? "
+                "WHERE conversation_id = ?",
+                (raw, now, cid),
             )
             self._conn.commit()
             return cur.rowcount > 0
@@ -9142,7 +9653,7 @@ class InboxStore:
                 from src.utils.telemetry import track
                 track("session.closed", {"session_id": cid})
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore.set_conv_archived", exc_info=True)
         return True
 
     def set_travel_cleared(self, conversation_id: str) -> bool:
@@ -9706,7 +10217,7 @@ class InboxStore:
                 hr = dt.hour
                 matrix[wd][hr] += 1
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in InboxStore.activity_heatmap", exc_info=True)
 
         total = sum(matrix[wd][hr] for wd in range(7) for hr in range(24))
         peak_hour, peak_wd = 0, 0
@@ -9776,6 +10287,7 @@ class InboxStore:
         try:
             return json.loads(raw)
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in InboxStore.get_qa_score", exc_info=True)
             return None
 
     def batch_agent_qa_stats(
@@ -9815,6 +10327,7 @@ class InboxStore:
                 score = int(qa.get("score") or 0)
                 grade = str(qa.get("grade") or "N/A")
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in InboxStore.batch_agent_qa_stats", exc_info=True)
                 continue
             if agent not in agg:
                 agg[agent] = {"agent_id": agent, "scores": [], "grades": {}}

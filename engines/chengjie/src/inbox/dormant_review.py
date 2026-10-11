@@ -206,9 +206,11 @@ class DormantReviewStore:
 
     def get(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
+            if self._conn is None:
+                return None
             row = self._conn.execute("SELECT * FROM dormant_review WHERE conversation_id=?",
                                      (str(conversation_id or ""),)).fetchone()
-        return dict(row) if row is not None else None
+            return dict(row) if row is not None else None
 
     def list_pending(self, *, platform: str = "", account_id: str = "",
                      limit: int = 200) -> List[Dict[str, Any]]:
@@ -223,8 +225,10 @@ class DormantReviewStore:
         sql += " ORDER BY inbound_ts DESC LIMIT ?"
         args.append(max(1, min(1000, int(limit or 200))))
         with self._lock:
+            if self._conn is None:
+                return []
             rows = self._conn.execute(sql, args).fetchall()
-        return [dict(r) for r in rows]
+            return [dict(r) for r in rows]
 
     def count_pending(self, *, platform: str = "", account_id: str = "") -> int:
         sql = "SELECT COUNT(*) FROM dormant_review WHERE status='pending'"
@@ -289,8 +293,10 @@ class DormantReviewStore:
             sql += " WHERE status='pending'"
         sql += " ORDER BY created_ts DESC LIMIT ?"
         with self._lock:
+            if self._conn is None:
+                return []
             rows = self._conn.execute(sql, (int(limit),)).fetchall()
-        return [dict(r) for r in rows]
+            return [dict(r) for r in rows]
 
     def ack_login_review(self, review_id: int, *, by: str = "", now: Optional[float] = None) -> bool:
         with self._lock:
@@ -301,10 +307,16 @@ class DormantReviewStore:
             return (cur.rowcount or 0) > 0
 
     def close(self) -> None:
-        try:
-            self._conn.close()
-        except Exception:
-            pass
+        """与 account_blocklist.close 同因：teardown 关库时后台 settle 可能还在读写。"""
+        with self._lock:
+            conn = self._conn
+            self._conn = None
+            if conn is None:
+                return
+            try:
+                conn.close()
+            except Exception:
+                logger.debug("[dormant] close 失败", exc_info=True)
 
 
 _INSTANCES: Dict[str, DormantReviewStore] = {}

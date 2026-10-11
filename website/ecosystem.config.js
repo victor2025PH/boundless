@@ -33,7 +33,18 @@ module.exports = {
       exp_backoff_restart_delay: 200,
       merge_logs: true,
       time: true,
-      env: { NODE_ENV: "production", PORT: "3000" },
+      // 向导回传密钥只放服务器 .env.local（next start 会读）。这里不写死、不留空串，
+      // 避免空值盖住 .env.local。地址缺省见 lib/guide-trial-notify.ts。
+      env: {
+        NODE_ENV: "production",
+        PORT: "3000",
+        ...(process.env.GUIDE_TRIAL_URL
+          ? { GUIDE_TRIAL_URL: process.env.GUIDE_TRIAL_URL }
+          : {}),
+        ...(process.env.GUIDE_TRIAL_SECRET
+          ? { GUIDE_TRIAL_SECRET: process.env.GUIDE_TRIAL_SECRET }
+          : {}),
+      },
     },
   ],
 };

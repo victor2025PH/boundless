@@ -28,14 +28,14 @@ import logging
 import random
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from src.companion.group_show.casting import cast_roles, validate_casting
 from src.companion.group_show.director import GroupShowDirector
 from src.companion.group_show.ecp import project_history_for
 from src.companion.group_show.naturalness import naturalness_score
-from src.companion.group_show.pacing import beat_interval_seconds
+from src.companion.group_show.pacing import beat_interval_seconds, interval_subject
 from src.companion.group_show.playbook import (
     BeatDirective,
     CastMember,
@@ -43,6 +43,7 @@ from src.companion.group_show.playbook import (
     Playbook,
     ShowEvent,
     ShowState,
+    line_fault_for_beat,
     validate_playbook,
 )
 
@@ -139,7 +140,38 @@ def stub_generator(marker: str = "") -> GenerateFn:
     return _gen
 
 
-def llm_generator(ai_client: Any, *, temperature: float = 0.9) -> GenerateFn:
+def _show_model_overrides(temperature: float) -> Dict[str, Any]:
+    """坐席中档：温度沿用调用方，长度用中档上限。"""
+    from src.ai.conv_route import EFFORT_PARAMS
+    medium = EFFORT_PARAMS["medium"]
+    return {
+        "temperature": float(temperature),
+        "max_tokens": int(medium["max_tokens"]),
+    }
+
+
+async def call_show_model(ai_client: Any, prompt: str, *, temperature: float = 0.7) -> str:
+    """群戏台词。有本地路由就只打那一档；没有 tool_chat 的测试替身仍走 chat。"""
+    overrides = _show_model_overrides(temperature)
+    tool = getattr(ai_client, "tool_chat", None)
+    if tool is not None:
+        try:
+            out = tool(
+                prompt, purpose="group_show",
+                strategy_overrides=overrides, strict_route=True)
+        except TypeError:
+            out = tool(prompt, purpose="group_show", strategy_overrides=overrides)
+    else:
+        try:
+            out = ai_client.chat(prompt, strategy_overrides=overrides)
+        except TypeError:
+            out = ai_client.chat(prompt)
+    if hasattr(out, "__await__"):
+        out = await out
+    return str(out or "").strip()
+
+
+def llm_generator(ai_client: Any, *, temperature: float = 0.7) -> GenerateFn:
     """真 LLM 台词生成器（排练用近路）。
 
     ⚠ 这里走 ``ai_client.chat(prompt)`` 的**通用入口**，不是该号的人设发声链。
@@ -152,16 +184,12 @@ def llm_generator(ai_client: Any, *, temperature: float = 0.9) -> GenerateFn:
                    directive: BeatDirective) -> str:
         prompt = flatten_messages(messages)
         try:
-            out = await ai_client.chat(
-                prompt, strategy_overrides={"temperature": temperature})
-        except TypeError:
-            out = await ai_client.chat(prompt)
+            return await call_show_model(ai_client, prompt, temperature=temperature)
         except Exception as exc:  # noqa: BLE001 —— 单拍失败不该炸掉整场排练
             # 但必须留下痕迹：静默返空会演成空场还报「正常收场」
             logger.warning("[group_show] 台词生成失败 beat=%s: %s",
                            directive.beat_id, exc)
             return ""
-        return str(out or "").strip()
 
     return _gen
 
@@ -206,6 +234,7 @@ async def rehearse(
     max_speakers: int = 0,
     session_id: str = "",
     store: Any = None,
+    guide_account: str = "",
 ) -> RehearsalResult:
     """离线演一场戏，返回完整排练结果。**不发任何真消息。**
 
@@ -234,7 +263,8 @@ async def rehearse(
         playbook, candidates,
         fingerprint_groups=fingerprint_groups, persona_gender=persona_gender,
         co_performance=co_performance, max_speakers=max_speakers,
-        seed=str(group_key or ""))
+        seed=str(group_key or ""),
+        guide_account=str(guide_account or ""))
     # 复查必须拿到与选角同一份指纹表。漏传会让 validate_casting 走「没表→跳过」分支，
     # 于是同台关联复查静默失效——这行曾经真的漏了，且因为跳过时不出声而一直没被发现。
     warnings.extend(validate_casting(
@@ -295,6 +325,11 @@ async def rehearse(
             clock += director.cfg.human_yield_seconds + 1.0
             continue
 
+        # 排练没有真人可接时直接进剧本。真发会在这里等，不调用 release。
+        if director.waiting_for_people():
+            director.release_warmup()
+            continue
+
         speaker = director.select_next_speaker()
         directive = director.next_directive()
         if speaker is None or directive is None:
@@ -309,6 +344,22 @@ async def rehearse(
         if _is_awaitable(text):
             text = await text
         text = str(text or "").strip()
+        fault = line_fault_for_beat(
+            state.playbook, speaker.slot, directive.beat_id, text, state.events)
+        if text and fault:
+            retry_directive = replace(directive, must_not=tuple(
+                directive.must_not or ()) + (fault,))
+            messages = project_history_for(
+                speaker, state.events, directive=retry_directive,
+                group_hint=hint, name_resolver=lambda a: names.get(a, a))
+            text = gen(speaker, messages, retry_directive)
+            if _is_awaitable(text):
+                text = await text
+            text = str(text or "").strip()
+            if line_fault_for_beat(
+                    state.playbook, speaker.slot, directive.beat_id, text,
+                    state.events):
+                text = ""
         if not text:
             # 单拍生成失败：跳过而不是卡死（真发时同理，宁可少说一句）。
             # 但连续失败＝生成侧挂了，必须显式终止——空场报「completed」会骗人。
@@ -327,7 +378,9 @@ async def rehearse(
             continue
         skips = 0
 
-        beat = state.playbook.beat_at(state.beat_cursor) or state.current_beat
+        beat = interval_subject(
+            state.playbook.beat_at(state.beat_cursor) or state.current_beat,
+            directive.beat_id)
         interval = beat_interval_seconds(
             beat, prev_text_len=prev_len, next_text_len=len(text), rng=rng)
         clock += float(interval)

@@ -121,6 +121,7 @@ def scan_mutual_chat(
                 "managed_peer": _managed_peer(platform, chat_key),
             })
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in scan_mutual_chat", exc_info=True)
             continue
     items.sort(key=lambda x: -(x["n_in"] + x["n_out"]))
     return items[: int(cfg["max_list"])]

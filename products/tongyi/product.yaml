@@ -3,8 +3,8 @@
 #       复用 engines/ 的共享实现。其它 6 个产品照本模板填。
 #
 # ── 2026-08-19 定价决议（翻译免费化重定位，老板拍板）────────────────────────
-# 标准翻译（内置引擎 hy-mt2 本地/自有 GPU 池）**永久免费、不限字符**（公平使用
-# 200 万字符/日/授权）——翻译从「卖字符」转为获客钩子；付费点转移到：
+# 标准翻译走本部署的本地模型，不按字符扣 Token，不调用付费接口；本地模型没配好时
+# 转人工（公平使用 200 万字符/日/授权只提醒，不拦截）——翻译从「卖字符」转为获客钩子；付费点转移到：
 #   ① 专业翻译按 Token（AI 引擎+术语锁定/翻译记忆 10 Token/千字符；DeepL 认证 40/千字符）
 #   ② 翻译工作台订阅（多坐席收件箱/客户 journey/漏斗）$29/坐席/月
 #   ③ AI 成交能力走智聊 ChatX 档位（同一客户端）
@@ -16,8 +16,8 @@ brand_key: lingox                 # 对应 website/lib/brand.ts 的 ProductKey
 name:   { zh: 通译, en: LingoX }
 category: lingo                   # 三系：通达 Lingo
 tagline:
-  zh: 跨境实时聊天翻译 SCRM（标准翻译永久免费 · 术语锁定 · 客户资产沉淀）
-  en: Cross-border chat translation SCRM — standard translation free forever
+  zh: 跨境实时聊天翻译 SCRM（标准翻译走本部署本地模型，没配好转人工 · 术语锁定 · 客户资产沉淀）
+  en: Cross-border chat translation SCRM — local-model standard translation; a person takes it if unset
 
 engine: chengjie                                              # 承载引擎 engines/chengjie
 engine_overlay: engines/chengjie/config/lingox.overlay.example.yaml  # 裁剪为「纯翻译工作台」(已入库)
@@ -38,8 +38,8 @@ skus:
   - id: lingox-free
     name: { zh: 免费版, en: Free }
     unit: month
-    price: "0"                     # 标准翻译免费不限量（公平使用 200 万字符/日/授权）
-    includes: [多平台双向标准翻译不限量, 1 坐席, 术语表基础版]
+    price: "0"                     # 标准翻译走本地模型（公平使用 200 万字符/日/授权，只提醒）
+    includes: [多平台双向标准翻译（本地模型，没配好转人工）, 1 坐席, 术语表基础版]
   - id: lingox-workbench
     name: { zh: 翻译工作台·每坐席, en: Workbench per seat }
     unit: month
@@ -61,7 +61,7 @@ skus:
   - id: lingox-pro
     name: { zh: 专业（停售）, en: Pro (legacy) }
     unit: month
-    price: "198"                   # 停售 2026-08-19；「不限字符」由免费版标准翻译承接
+    price: "198"                   # 停售 2026-08-19；标准翻译由免费版的本地模型承接
     includes: [停售·存量服务到期]
 
 delivery:

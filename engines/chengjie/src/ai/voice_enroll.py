@@ -10,6 +10,7 @@ DashScope REST 直连（不依赖 SDK）。CLI 见 tools/qwen_voice_clone.py（�
 """
 from __future__ import annotations
 
+import logging
 import base64
 import json
 import mimetypes
@@ -61,6 +62,7 @@ def load_local_secret(name: str) -> str:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in load_local_secret", exc_info=True)
                 continue
             value = data.get(name) or data.get(name.lower())
             if value:

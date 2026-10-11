@@ -143,7 +143,7 @@ def _resolve_lang(store: Any, conversation_id: str) -> str:
         if lang:
             return lang[:2].lower()
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _resolve_lang", exc_info=True)
     return "zh"
 
 

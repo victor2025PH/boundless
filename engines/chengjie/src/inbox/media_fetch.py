@@ -203,7 +203,7 @@ def _safe_unlink(path: Optional[str]) -> None:
     try:
         os.unlink(path)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _safe_unlink", exc_info=True)
 
 
 __all__ = ["fetch_remote_media", "_is_blocked_ip", "_validate_url", "_host_in_allowlist"]

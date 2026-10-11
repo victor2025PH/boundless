@@ -1,0 +1,107 @@
+# 跨境私域 · 知识库种子（导入：POST /api/kb/import {"text": <本文件>, "format": "yaml", "mode": "update"}）
+# 每条 example_reply 里的 {占位} 上线前替换成真实政策；triggers 含中 / 英 / 他加禄说法。
+
+version: 1
+entries:
+- category: 价格与支付
+  title: 价格与套餐
+  triggers:
+  - 价格
+  - 多少钱
+  - 报价
+  - price
+  - how much
+  - magkano
+  - presyo
+  scenario: 客户问商品价格
+  steps: 先确认款式 / 数量，再按知识库价格表回复
+  principles: 只报知识库里的价格；促销以活动条目为准
+  example_reply_zh: 这款现在是 {price}，买两件以上有 {bundle_offer}。你想要哪个颜色？
+  forbidden: 编造折扣、承诺降价
+- category: 价格与支付
+  title: 付款方式
+  triggers:
+  - 付款方式
+  - 怎么付款
+  - payment method
+  - GCash
+  - Maya
+  - bank transfer
+  - bayad
+  - paano magbayad
+  scenario: 客户问怎么付款
+  steps: 列出支持的付款方式；只给官方收款渠道
+  principles: 绝不让客户转到私人账户
+  example_reply_zh: 可以用 {payment_methods} 付款，下单页面会显示官方收款信息～
+  forbidden: 提供私人账户、代收
+- category: 下单流程
+  title: 发货与物流时效
+  triggers:
+  - 发货
+  - 物流
+  - 几天到
+  - 运费
+  - shipping
+  - delivery
+  - padala
+  - kailan darating
+  scenario: 客户问多久到、运费
+  steps: 按目的地给出时效区间与运费规则
+  principles: 时效给区间，不保证具体日期；不承诺清关
+  example_reply_zh: 一般 {ship_days} 个工作日发出，到 {region} 大约 {transit_days} 天，运费 {shipping_fee}。清关时间以当地海关为准哦。
+  forbidden: 保证到货日期、保证不扣关税
+- category: 下单流程
+  title: 查询订单状态
+  triggers:
+  - 订单状态
+  - 查单
+  - 订单到哪了
+  - order status
+  - tracking
+  - nasaan na order ko
+  scenario: 客户问订单进度
+  steps: 请客户提供订单号或下单手机号后查询；查不到转人工
+  principles: 不在聊天里索要完整地址以外的敏感信息
+  example_reply_zh: 把订单号发我一下，我帮你查物流～
+- category: 常见故障
+  title: 退换货政策
+  triggers:
+  - 退货
+  - 换货
+  - 退款
+  - return
+  - refund
+  - exchange
+  - ibalik
+  - palitan
+  scenario: 客户要退换货
+  steps: 说明政策要点后转人工核实
+  principles: 退款类一律走人工 SOP
+  example_reply_zh: 收货 {return_days} 天内未使用可以申请退换，我先帮你登记，同事会联系你确认细节。
+- category: 活动优惠
+  title: 优惠与复购
+  triggers:
+  - 优惠
+  - 折扣
+  - 优惠券
+  - discount
+  - promo
+  - voucher
+  - may promo ba
+  scenario: 客户问优惠
+  steps: 只说当前进行中的活动
+  principles: 不制造紧迫感，不连发
+  example_reply_zh: 现在有 {current_promo}，到 {promo_end} 结束。需要的话我把链接发你～
+- category: 规则条款
+  title: 隐私与退订
+  triggers:
+  - 隐私
+  - 退订
+  - 不要再发
+  - privacy
+  - unsubscribe
+  - stop
+  scenario: 客户关心隐私或想退订
+  steps: 说明数据用途；想退订就按 STOP 流程确认一次
+  principles: 退订确认只发一次，不挽留
+  example_reply_zh: 我们只用你的联系方式处理订单和售后。想退订直接回复 STOP 就好。

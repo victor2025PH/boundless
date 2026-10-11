@@ -144,7 +144,10 @@ class TestChannelSnapshotName:
         class _FakeReg:
             def get(self, plat, acct):
                 if acct == "61580373548045":
-                    return {"label": "", "meta": {"self_name": "Micah Bindo"}}
+                    # 期望在线才进横幅（session_expected_online：online，或
+                    # offline 且 offline_reason 以 worker: 开头）。
+                    return {"label": "", "status": "online",
+                            "meta": {"self_name": "Micah Bindo"}}
                 return None
 
         import src.integrations.account_registry as reg_mod
@@ -175,5 +178,6 @@ class TestChannelSnapshotName:
         monkeypatch.setattr(reg_mod, "get_account_registry", lambda: _EmptyReg())
 
         snap = mod._channel_health_snapshot()
-        assert snap["count"] == 1
-        assert snap["unhealthy"][0]["name"] == ""
+        # 无注册表行＝登录幽灵，不进坐席横幅（2026-08-27 与看门狗同一判据）。
+        assert snap["count"] == 0
+        assert snap["unhealthy"] == []

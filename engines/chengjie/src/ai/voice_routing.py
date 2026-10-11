@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
 # 克隆类后端：路由到这些时保留 voice_profile（克隆音色）。其余视为「通用音色」降级档。
@@ -120,6 +121,7 @@ def resolve_tier_for_contact(contact_key: Optional[str]) -> Optional[str]:
         from src.utils.companion_context import resolve_entitlement
         ent = resolve_entitlement(contact_key)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in resolve_tier_for_contact", exc_info=True)
         return None
     if not isinstance(ent, dict):
         return None

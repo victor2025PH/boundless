@@ -143,6 +143,14 @@ telegram:
     emotion:
       enabled: false
       default: warm               # 无情绪信号时的默认基调（见 voice_emotion.EMOTIONS）
+      # 表达力档位（全局层，最低优先级；人设 voice_profile.expressiveness 覆盖全局，
+      # 收件箱会话级覆写再覆盖人设）：
+      #   restrained 克制：无线索归中性保真、不拼笑、口语化只换词、IndexTTS alpha≤0.45
+      #   natural    自然(默认)：人设基线收到 0.4、拼笑需文本笑点且只用人设自带素材、标记≤1
+      #   vivid      生动：接近旧默认（基线 0.6、标记≤2、允许公版罐头笑）
+      #   dramatic   戏剧：全放开（标记≤3、拼笑不需笑点、起伏编排钉开）
+      # 深夜（quiet hour）vivid/dramatic 自动降一档。也接受 克制/自然/生动/戏剧 与 0–100 数值。
+      expressiveness: natural
     # ── P0 TTS 输出缓存（默认开；同 文本+音色+后端+格式+情绪+参考音频指纹 命中即复用）──
     # neutral 输出与升级前一致，缓存对行为无副作用；换参考音频会自动失效。
     tts_cache:
@@ -161,6 +169,11 @@ telegram:
       backend: voice_clone_command
       command_args: []
       command_timeout_sec: 120
+      # 人设级表达力档位（restrained|natural|vivid|dramatic）；空=继承 emotion.expressiveness
+      expressiveness: ""
+      # 人设自带的笑声/呼吸素材（wav 路径）。natural 档只拼人设自带素材、不用公版罐头
+      # （克隆声里公版笑声是最响的「不是她」）；vivid/dramatic 档缺省回落公版素材。
+      burst_audio: {}
 
   # 插话吸收（2026-08-03，Stephanie2「主动等待」）：客户连发短消息在出队口合并成
   # 一条输入一次回答；生成/思考延迟期间客户又补话 → 放弃过期回复（撤销防重登记），
@@ -274,7 +287,10 @@ line:
 # WhatsApp Cloud API（官方 Business 通道：合规/高送达/不封号，根治 RPA 封号）
 # 控制台 Webhook URL 填: https://你的域名/wa/webhook（与 webhook_path 一致）。
 # 与 WhatsApp RPA(mode=device)/Baileys(mode=protocol) 可按账号并存；官方走 mode=official。
-# ⚠️ 24h 客服窗口：窗口外需用模板消息（本版先发自由文本，模板回退待补）。
+# 个人号 / 协议通道默认全自动自由文本，不需要 Meta 模板。下面的模板只给官方 Cloud，
+# 而且可选：name 留空 = 窗口外不回退模板，进待人工。Cloud 回退代码保留。
+# ⚠️ 24h 客服窗口（仅官方 Cloud）：窗口内自由文本；窗口外只能发已审核模板。
+# 回退是被动的：发送被官方拒为 window_expired 时才改发模板。没有「沉默满 24h」的定时外发。
 whatsapp_cloud:
   enabled: false
   phone_number_id: ""            # Cloud API 的 Phone Number ID（非手机号）
@@ -283,6 +299,65 @@ whatsapp_cloud:
   verify_token: ""               # GET 校验自定义口令（控制台填同值）
   webhook_path: "/wa/webhook"
   unsupported_type_reply: "目前仅支持文字消息。"
+  # 24h 窗口外回退模板（须先在 Meta 审核通过）。name 留空且 by_language 无 name = 不回退
+  # （窗口外失败 → 进待人工）。会话语言 zh/en/tl（Taglish、fil、ceb 归 tl）命中 by_language；
+  # 未知、为空或不在这三档：不发模板（不改用 default_language，也不拿中文顶上）。
+  # 只填顶层 name/language（旧形状）时不按语言分流。
+  # 正文与提交清单：config/presets/packs/<包>/wa_fallback_templates.yaml
+  # 与 docs/wa_cloud_window_fallback_templates.md。博彩模板只在 config/presets/internal/，
+  # 名字前缀 wa_fb_gamble_，公开包打不进去，公开形态也不会选中。
+  window_fallback_template:
+    name: ""                       # 旧形状：单模板。写了 by_language 之后不再用它顶未知语言
+    language: "zh_CN"
+    text_param: true               # 把事项文本作为正文 {{1}}（by_language 可再限 param_max_chars）
+    # default_language 不再参与选择。留着只为旧配置还能被读到，未知语言不会改发中文。
+    by_language: {}
+    # 审核通过后按所选行业包填名字（示例为跨境私域中性模板，勿填 wa_fb_gamble_*）：
+    # by_language:
+    #   zh: {name: cbp_svc_followup_zh, language: zh_CN, text_param: true, param_max_chars: 80}
+    #   en: {name: cbp_svc_followup_en, language: en, text_param: true, param_max_chars: 80}
+    #   tl: {name: cbp_svc_followup_fil, language: fil, text_param: true, param_max_chars: 80}
+  # STOP 硬闸：客户发 STOP/UNSUBSCRIBE/退订… 或停联短语 → 冻结（需人工+名单），之后一律不真发
+  stop_gate:
+    allow_farewell: false          # true = 放行主线「唯一一条告别」稿（默认连告别也不发）
+    extra_keywords: []             # 追加整句退订词
+    allow_resubscribe: true        # 已停联客户本人整句发 START / UNSTOP / 重新订阅 → 记为本人重新同意并解冻（审计 resubscribed）
+  # 自答路径进待人工的触发项（AI 异常 / 发送失败 恒进）
+  handoff:
+    on_human_request: true         # 客户点名要真人
+    on_media: true                 # 入站图片/语音/视频/文件（贴纸/表情回应不进）
+    on_empty_reply: true
+    on_delivery_failed: true       # status webhook = failed
+  # Meta 按条计费单价（PMP；价格随国家×类别变动，仓内不写死；未配置 = 只计条数不计金额）
+  pricing:
+    currency: "USD"
+    rates:
+      default: {}                  # 例：{marketing: 0.0, utility: 0.0, authentication: 0.0}
+  graph_base: ""                   # 仅测试/回环：留空 = Meta 官方 Graph
+
+# Telegram Bot API（官方 bot 轨；与 Telegram 个人号协议轨并列，platform=telegram mode=official，
+# account_id = bot 数字 id）。默认关。上线步骤：@BotFather 建 bot → 填 bot_token → 自拟 webhook_secret →
+# 调 setWebhook(url=<公网>/tg/bot/webhook, secret_token=<同值>)。健康：/api/admin/telegram-bot/health
+# 接入向导「Telegram 机器人」卡可直接填 bot_token / webhook_secret；setWebhook **只手动触发**：
+# 向导卡内「设置 Webhook」按钮（POST /api/admin/telegram-bot/set-webhook）或
+# python tools/tg_bot_set_webhook.py --url https://<你的域名> --apply（不带 --apply 只预览）。
+telegram_bot:
+  enabled: false
+  bot_token: ""                    # @BotFather 发的 token
+  webhook_secret: ""               # setWebhook 的 secret_token（A-Za-z0-9_-，1-256 字符）
+  webhook_path: "/tg/bot/webhook"
+  unsupported_type_reply: "目前仅支持文字消息。"
+  start_reply: ""                  # /start 欢迎语；空 = 交给 AI 打招呼
+  auto_account: true               # 启动时登记账号行（坐席可在收件箱接管回复）
+  stop_gate:
+    allow_farewell: false
+    extra_keywords: []
+    allow_resubscribe: true        # 已停联客户本人发 /start → 记为本人重新同意并解冻（Telegram 解除拉黑后点「开始」即发 /start）
+  handoff:
+    on_human_request: true
+    on_media: true
+    on_empty_reply: true
+  api_base: ""                     # 仅测试/回环：留空 = api.telegram.org
 
 # Instagram Messaging（官方，Graph API；与 Messenger 同体系，Phase H）。默认关。
 # webhook object=instagram；收件人是 IGSID；发送端点用 IG 账号 id + 关联 Page token。
@@ -1430,6 +1505,10 @@ whatsapp_rpa:
 # Telegram 通过 telegram.voice_reply 和本节 voice_profile 选择音色
 personas:
   default: warm_companion
+  # 从文档创建人设（B 线）。默认关；生产在 gitignore 的 config.local.yaml 里打开。
+  # 仓库不跟踪 config.yaml，提交的基线以本文件为准。
+  doc_import:
+    enabled: false
   profiles:
     - id: warm_companion
       name: 小灵
@@ -1753,6 +1832,20 @@ ai:
   #       base_url: https://open.bigmodel.cn/api/paas/v4
   #       model: glm-4-flash
 
+  # 备用链顺序（可选，P1-2 2026-10-08）：主链失败 / 熔断开路 / 欠费冷却后先试谁。
+  # lane：key_pool（上面的云端备用池）/ local（上面的 ai.fallback，第二推理端）。
+  # 缺省 [key_pool, local]（历史行为不变）。漏写的 lane 自动补在末尾（不会悄悄丢备用链；
+  # 真要不出云请用 ai.primary: local_only）。
+  # 智聊私信承接推荐（主模型 = 自建 chatx，第二推理端 = 另一台 LAN GPU，云池最后兜）：
+  #   base_url: http://192.168.0.173:8001     # 主：chatx（vLLM）
+  #   fallback: { enabled: true, base_url: http://<第二推理端>:11434, model: <模型名>, timeout: 60 }
+  #   key_pool: { keys: [ { name: cloud-1, api_key: <从环境/私有 overlay 注入>, base_url: ..., model: ... } ] }
+  #   fallback_order: [local, key_pool]
+  # 启动后后台探针对第二推理端只打 GET /v1/models（不生成），云池读巡检 ping 快照；
+  # 结果见 /health 的 ai_stats.backup（redundancy: ok / unknown / down / none）。
+  # 已配置的备用全部不可达 → ERROR 日志 + 主机告警「备用模型全部不可达」（30 分钟去抖）。
+  # fallback_order: [local, key_pool]
+
   # ── 多模型路由（像 Cursor 按任务挑模型；可选，默认空=不启用，行为不变）──────────
   # 与 key_pool（主 key 失效才顶班）正交：这里**主动按任务/调用方挑模型或端点**。
   #   models：命名模型档，每档 = 一个独立 OpenAI 兼容端点（本地 vLLM/Ollama 或任意云）。
@@ -2027,6 +2120,10 @@ companion:
   # ``python -m scripts.group_show_live --check`` 跑预检，再用导播台/API 真发。
   # 单号场景请用 ``config/playbooks/solo_*.yaml``（四角剧本 + 一个号会被拒演，防自问自答）。
   group_show:
+    # guide_account: ""      # 固定向导号的 account_id。剧本含 guide 槽时真发必填；不轮换、不许别的号顶替。
+    # guide_feature: ""      # 这一场只带的那一项功能 id（如 matrixx）。不配则用剧本里唯一的产品。
+    # 第一次真正用出结果时回传 feature（领取本身不算）。Telegram 用户名走 telegram 字段，
+    # 对得上向导号私聊里的 username 才记。不要写进聊天正文，也不要为此发链接。
     live:
       enabled: false         # 配置侧那把锁（缺省关；出事时改这里即可全局急停）
       # quiet_hours: [23, 8] # 禁演时段（本地钟点，半开半闭）；配 [0, 0] ＝ 不禁
@@ -2595,7 +2692,47 @@ companion:
   #   ⚠ 合规：抓群成员 + 冷触达属 Telegram ToS 灰区，务必配合「剔管理员/限速/可退订」护栏。
   group_members:
     enabled: false               # 总开关（默认关；开启走 config.local.yaml overlay）
-    daily_cap_per_account: 200   # 每号每天最多新入库多少人（=该号下游一天能聊完的量级）
+    daily_cap_per_account: 200   # 每号每天最多新入库多少人（入库配额，不是开口配额）
+    outreach_daily_cap: 8        # 同群开口：每号每天新人，代码夹在 5..10（写 200 也会变成 10）
+    outreach_min_gap_sec: 1500   # 同一号两条开口的最小间隔（秒）
+    # 号龄不爬坡。下面两键只留着兼容旧配置，每天条数直接用 outreach_daily_cap。
+    outreach_warmup_start_cap: 3
+    outreach_warmup_ramp_days: 0
+    outreach_hours: [10, 21]     # 本地时间只在这个区间放行发送；排队不限时段（管理台第④步可在线改，写 overlay）
+    # 每条开口还计入 companion_send_gate 的总发送量；红灯 / 总额度满 / 急停时发不出
+    # 开口文案由 AI 按「这个号的人设 + 默认工作目标 + 对方在群里说的话」生成，LLM 不在时回落模板；
+    # 每号「开口方式」在管理台切：manual（逐条点发）/ approve（批准后由调度器发）/ auto（全自动）
+    outreach_runner_enabled: true        # 调度器总闸（只跑本实例编排器 owns 的 TG 号；manual 模式的号它不碰）
+    outreach_runner_interval_sec: 150    # 调度器唤醒间隔（秒）；每次每号最多发 1 条
+    outreach_auto_gap_min_sec: 1500      # 调度器两条自动开口之间的随机抖动下限（25 分钟），叠在 outreach_min_gap_sec 之上
+    outreach_auto_gap_max_sec: 5400      # 抖动上限（90 分钟）
+    # 全自动（auto）门槛：风控 / 回复率，页面上关不掉；调度器每轮复核，不达标自动退回 approve。
+    # 号龄不拦全自动。outreach_auto_min_age_days 只留着兼容旧配置，判定不再读它。
+    outreach_auto_min_age_days: 0
+    outreach_auto_flood_lookback_days: 7 # 近 N 天撞过 Telegram 风控 → 不许
+    outreach_auto_min_reply_rate: 0.05   # 近 7 天开口回复率低于此 → 不许（样本 ≥ outreach_auto_min_sample 才看）
+    outreach_auto_min_sample: 10
+    # 72h 单次跟进：发出 N 小时没回音补一句（AI 按人设拟，轻、给台阶、不卖货），只一次；再过 N 小时没回封存
+    outreach_followup_enabled: true
+    outreach_followup_after_hours: 72
+    outreach_followup_close_after_hours: 72
+    outreach_followup_daily_cap: 5       # 每号每天最多跟进几条；跟进不占「每天新人」额度，但计入总发送闸门、共用最小间隔
+    # 第二跳：对方回了、我方（AI 自动回 / 坐席 / 手机）超过这么久还没回话 → 页面「回了但没接上」+ 审计提醒（每号每天一次）
+    outreach_stalled_after_hours: 48
+    # 群里先接话（管理台第⑤步，只逐条手动发）：公开回复有意向的人近期那句，之后再私聊
+    gtouch_daily_cap: 5                  # 每号每天最多在群里接几次话（0=关）
+    gtouch_group_daily_cap: 2            # 每个群每天最多几次（同群刷屏最招群主反感）
+    gtouch_min_gap_sec: 600              # 两次群里接话至少隔多久
+    gtouch_max_msg_age_hours: 48         # 只接这么新的发言（太旧再回很突兀）
+    gtouch_dm_after_hours: 6             # 群里接过话的人，过这么久才排进私聊开口（排最前）
+    # 开口切入方式 A/B（echo 接话茬 / group 从群切入 / ask 轻问一句）：ε-greedy 按近 30 天回复率择优
+    outreach_ab_explore: 0.25            # 探索流量比例（0=只用最好的；1=全随机）
+    outreach_ab_min_sample: 5            # 每种切入至少几条样本才参与「择优」；不够的先补样本
+    outreach_ab_prior_weight: 5          # 先验相当于几条样本（0=不平滑，只看实测）
+    outreach_ab_prior:                   # 先验回复率；跑出切片结论后在这里回灌，不用改代码
+      echo: 0.10
+      ask: 0.08
+      group: 0.06
     scan_limit: 3000             # 「发过言的人」的实现口径：回扫多少条群历史消息取发言人
     group_daily_cap: 0           # 每群每天入库上限（0=不限；多号并行按分片数均摊，防单群被薅太狠太扎眼）
     global_daily_cap: 0          # 全系统每天入库上限（0=不限；= 下游总触达产能的硬顶）
@@ -3387,6 +3524,14 @@ inbox:
     #   body {token 或 conversation_id, kind: signup|order|…, amount?, currency?, ref}
     # amount>0 记营收台账并推进成交阶段；ref 幂等防服务商重推重复记账。
     # 留空＝回传端点整体拒绝（不配即不暴露）。
+    # 官网第一次用量上报会打到这里。密钥必须与下面的 webhook_secret 相同，
+    # 不要另做一把，也不要写进仓库。官网进程在 VPS 上，经已有反向隧道访问本引擎。
+    # GUIDE_TRIAL_URL 不填时，官网默认打 http://127.0.0.1:18799/api/cta/convert
+    # （只在该隧道开着时通）。官网 .env.local 只加这一行即可：
+    #   GUIDE_TRIAL_SECRET=<与下面的 webhook_secret 相同>
+    # 本密钥留空＝官网不回传，本端点也整体拒绝。
+    # MatrixX 第一次确认送出消息后，向官网 POST /api/guide-trial
+    # （只带 telegram 用户名和 feature=matrixx，不带本密钥）。官网再用上面的密钥转发。
     webhook_secret: ""
 
   # ── E2 自动草稿生成（Auto-Draft Pipeline）──────────────────────
@@ -3434,6 +3579,17 @@ inbox:
     store_lookup: true        # 客户端行无 ts 时反查 inbox store 补时间真相
     repeat_guard: true        # 生成稿 vs 最近出站近重复 → 重写一次；仍雷同打 repeat_risk
     repeat_threshold: 0.6     # 归一化相似度阈值（proactive_variety 同源，生产语料校准）
+  # 知识库查不查 / 查无怎么办（P0-2 ～ P1-1，2026-09-29；SSOT src/utils/kb_policy.py）。
+  # 决策首先看**人设工作类型** kind（人设工作室「工作类型」，或按角色 / 标签推断）：
+  #   客服 / 销售 → 每条必查、命中以条目为准；查无按固定话术回一次，客户再追问标「需人工」；
+  #   陪聊       → 闲聊不查（下方业务词表命中 / 人设 kb_access: true / 报障群除外）。
+  # 本段全部可省（缺省即下列值）。
+  # kb_policy:
+  #   biz_keywords: ["活动", "会员"]   # 追加到陪聊闲聊闸的业务词表（默认含 通道/订单/费率/支付…）
+  #   biz_keywords_replace: false    # true = 只用上面的表，不并默认表
+  #   info_query_bypass: true        # 人设没表态 kind 时，「在问一件事」的句子不按闲聊跳过
+  #   nohit_handoff_at: 2            # 客服 / 销售连续查无几次标需人工
+  # 查无固定话术：知识库「系统话术」里建 template_key=kb_nohit_fallback 的条目即可覆盖内置句。
   # 当新入站消息到达时，自动分析风险并生成 AI 回复草稿，供坐席审批。
   # 草稿风险映射：low→L2（自动发送）/ medium→L3（需审批）/ high→L4（拦截）。
   auto_draft:
@@ -3939,18 +4095,27 @@ translation:
     statistical:
       enabled: false                 # 默认关；开后需装 lingua 或 langdetect（缺则自动跳过）
       min_chars: 12                  # 低于此长度不咨询统计层（短文本统计不可靠）
-  # P56：多翻译引擎（按 order 故障转移；首个可用且非空者获胜，AI 兜底）
+  # 免费档（请求 tier 缺省 / std / free）只走本地模型。
+  # 缺省 enforce：先 ollama_mt（部署自己填 base_url / model），繁体变体
+  # zh-tw / zh-hk / zh-hant 先 opencc。付费引擎（ai / deepl / google / microsoft /
+  # youdao / baidu / custom）不会被免费档调用。ai 即使指向局域网也算付费。
+  # 本地模型没配好或调用失败 → 翻译失败，出站转人工，不改打付费 API。
+  # 显式写成 legacy 才恢复旧链（会记 would_block）。pro / certified 以及任何
+  # 其它显式档名仍走下面的 order，认证档仍优先 DeepL。
+  free_tier_zero_cost: enforce
+  # P56：多翻译引擎（付费档按 order 故障转移；首个可用且非空者获胜）。
+  # 免费档不按这条顺序调用付费引擎：ollama_mt 优先，繁体变体 opencc 优先。
   engines:
     # 可选内置名：ollama_mt/ai/deepl/google/microsoft/youdao/baidu/opencc；
     # custom 段里的任意名字（OpenAI 兼容通用线）写进 order 即参战。
-    # 例：["ollama_mt", "gemini_flash", "qwen_mt", "youdao", "baidu", "microsoft", "ai"]
-    order: ["ai"]
+    # 付费档顺序。免费档会把已构建的 ollama_mt / opencc 排到前面。
+    order: ["ollama_mt", "opencc", "ai"]
     timeout_sec: 8
     # opencc（2026-08-29）：本地简→繁确定性转换线（零 token/微秒级/100% 保真），
     # 只吃「中文源 → zh-tw」，其他语对自动让位下游引擎。推荐姿势＝order 加 "opencc"
     # + per_lang_order 把 zh-tw 重排到 opencc 优先（LLM 兜「源不是中文」的场景）：
-    #   order: ["opencc", "ai"]
-    #   per_lang_order: {"zh-tw": ["opencc", "ai"]}
+    #   order: ["opencc", "ollama_mt", "ai"]
+    #   per_lang_order: {"zh-tw": ["opencc", "ollama_mt"]}
     # profile 可换 s2tw（仅字形不换词）/ s2hk（香港繁体）；缺 opencc 库自动跳过。
     # opencc:
     #   profile: "s2twp"               # 台湾正体 + 台湾用词（软件→軟體、视频→影片）
@@ -3988,15 +4153,21 @@ translation:
     #      translation_options:
     #        source_lang: "auto"
     #        target_lang: "{target_name}"   # 占位符：{target_lang}/{source_lang}/{target_name}/{source_name}
-    # 本地/局域网 Ollama 上的专用 MT 模型（默认适配腾讯 Hunyuan-MT 官方 prompt：
-    # zh↔xx 用中文指令、xx↔xx 用英文指令）。零 API 成本、亚秒延迟；缺 base_url/model
-    # 自动跳过。仅覆盖 Hunyuan-MT 模型卡内语种，集外目标语自动让位下一引擎。
+    # 本地/局域网专用 MT 模型（默认适配腾讯 Hunyuan-MT 官方 prompt：
+    # zh↔xx 用中文指令、xx↔xx 用英文指令）。零 API 成本。
+    # 缺省 = 语言机 173 的 vLLM（deploy/machines.json：ollama :11434 已停，
+    # 在线的是 chatx :8001，Qwen3-27B AWQ）。每个部署可改 base_url / model。
+    # 代码里地址和模型都空时也用同一缺省。只填地址不填模型 = 该线路不可用。
+    # 本部署不用本地模型时，把 ollama_mt 从 order 里拿掉（云轻量档就是这样）。
     ollama_mt:
-      base_url: ""                   # 如 http://192.168.0.176:11434（自动补 /v1）
+      base_url: http://192.168.0.173:8001
       # base_urls:                   # 多端点双活（优先于 base_url）：按序尝试，
-      #   - http://192.168.0.176:11434   # 端点异常进 60s 冷却降权（不剔除），
-      #   - http://192.168.0.140:11434   # 两台 LAN GPU 各跑同名模型即可互备
-      model: ""                      # 如 hy-mt2-7b-official:latest
+      #   - http://192.168.0.173:8001
+      model: chatx
+      api: openai                    # vLLM 走 /v1/chat/completions；原生 Ollama 改 native
+      payload_extra:
+        chat_template_kwargs:
+          enable_thinking: false     # Qwen3 默认思考会把译文吃空
       api_key: "ollama"
       timeout_sec: 10                # 覆盖全局 engines.timeout_sec（冷加载留裕量）
       keep_alive: "30m"              # Ollama 侧模型常驻时长（防频繁冷启动）
@@ -4771,6 +4942,8 @@ licensing:
     # 厂商机（私钥离线，scripts/fulfill_trial.py）签发 → 客户端轮询取回并自动
     # 落盘激活。改这里只在自建/私有化部署时需要，公版走默认官网。
     # site_url: https://bd2026.cc
+    # product: chatx                  # 智聊桌面领取单上的产品 id，缺省 chatx。
+    #                                 # MatrixX 客户端不走这条领取，不要在这里写成 matrixx。
     #
     # ── 邀请裂变聚合读数（**只在厂商 ops 实例开**）────────────────
     # ops-overview「🎁 邀请裂变」卡的数据开关：代理官网 /api/trial/referral-stats
@@ -5216,6 +5389,20 @@ compliance:
   # 运营方《危机干预协议》公示页 URL（SB 243 公示义务；配置后随披露语带出，
   # 官网模板页见 website /compliance/crisis-protocol）
   crisis_protocol_url: ""
+  # STOP 硬闸默认开（只有 enabled: false 才回到「只记录」）。多语确认默认关：
+  # 停联后的那一句仍用 farewell。显式 true 之后，只有 tl / ceb / hi 改用
+  # config/presets/snippets/stop_confirm_templates.yaml，en / zh 仍用 farewell。
+  # 不改变 STOP 词检测，也不走 LLM。
+  stop_gate:
+    enabled: true
+    multilingual_confirm: false
+
+# 垂直行业包。空 id = 没有激活包，启动不会按它自动播种知识库。
+# 写入仍要 CLI --apply 或 POST /api/kb/seed-pack 带 vertical_pack。
+# 公开包看不到 internal；未设置 CHATX_FLAVOR / CHATX_EDITION 按公开包。
+vertical_pack:
+  id: ""
+  allow_internal: false
 
 # ============ AI 助手悬浮球「小智」（2026-08-19 P0）============
 # 双壳（后台管理 + 坐席工作台）常驻 AI 助手：产品使用问答（独立帮助语料库
@@ -5338,9 +5525,12 @@ assistant:
     # 35 由 src/eval/assistant_qa_eval.py 实测校准（40 正样本 / 15 负样本）：
     # 正样本最低 41.2，取 35 留 6.2 余量 → 误拒 0/40、拦住 7/15 无依据提问。
     # 旧值 1.6 形同虚设（真实分数 25~240，从没拦下过任何东西）。
+    # 2026-10-03 语料到 403 条后中文分数整体上浮，复校为 57（误拒 0/48、拦住 7/13）。
     # 调高会开始误拒真问题，调低会放行更多硬答——改前先跑
     # `python -m scripts.run_eval --assistant-qa` 看代价。
-    min_score: 35
+    min_score: 57
+    # 不含汉字的问句（英文等）分数低一个量级，单独一条线。
+    min_score_latin: 35
     max_tokens: 8000           # 回答长度上限（2026-08-21 起不再设小额上限/超时）
     # 助手专属直连 LLM（可选）：主链被切 local_only 等场景下，助手问答直打
     # 此 OpenAI 兼容端点（快路径，逐 token 打字机），失败自动回落主链容灾

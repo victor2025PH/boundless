@@ -130,6 +130,7 @@ def _chat_summary(chat: Any) -> Optional[Dict[str, Any]]:
             "type": str(ctype),
         }
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _chat_summary", exc_info=True)
         return None
 
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -75,6 +76,22 @@ def _http(url: str, method: str = "GET", body: Optional[dict] = None) -> Dict[st
 
 
 # ── 配置 / 状态 ────────────────────────────────────────────────────────────
+
+_PRODUCT_RE = re.compile(r"^[A-Za-z0-9_\-]{1,40}$")
+
+
+def claim_product(config: Optional[dict] = None) -> str:
+    """领取单上的产品 id。缺省 ``chatx``。MatrixX 安装包把 ``licensing.trial.product`` 写成 ``matrixx``。"""
+    try:
+        raw = str(
+            (((config or {}).get("licensing") or {}).get("trial") or {}).get("product") or ""
+        ).strip()
+    except Exception:  # noqa: BLE001
+        raw = ""
+    if raw and raw.lower() != "one" and _PRODUCT_RE.fullmatch(raw):
+        return raw
+    return "chatx"
+
 
 def site_url(config: Optional[dict] = None) -> str:
     cfg = ((config or {}).get("licensing") or {}).get("trial") or {}
@@ -172,7 +189,7 @@ def claim(contact: str, *, config: Optional[dict] = None, source: str = "desktop
 
     c = normalize_contact(contact)
     body: Dict[str, Any] = {"fingerprint": fp, "contact": c,
-                            "source": source, "product": "chatx"}
+                            "source": source, "product": claim_product(config)}
     code = str(invite_code or "").strip().upper()
     if code:
         body["invite_code"] = code[:24]

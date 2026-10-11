@@ -2943,6 +2943,7 @@ class AutosendWorker:
             # 判定只读 stop_contact 模块，不按 risk_level 再算一遍档位。fail-open：判定异常放行。
             _store_sc = getattr(self._svc, "_store", None)
             _is_farewell = False
+            _frz = ""
             if _store_sc is not None and _conv:
                 try:
                     from src.inbox.stop_contact import (
@@ -2972,6 +2973,32 @@ class AutosendWorker:
                         _sc_log("skipped", conversation_id=_conv, reason=_frz,
                                 draft_id=str(draft_id), extra="stage=worker_cancel")
                         continue
+            # 智安 P0-2 STOP 硬闸：冻结已由上面处理；这里补「停联名单」来源（同平台同 external_id
+            # 在别的账号停过 / 同手机号停过 / 本账号名单）。命中 → 取消稿 + 审计 blocked（只留痕）。
+            # 开关关闭（compliance.stop_gate.enabled: false）时 outbound_check 只查冻结 → 此处不动作。
+            if _store_sc is not None and _conv and not _frz:
+                try:
+                    from src.compliance.stop_gate import outbound_check as _sg_check
+                    _sg_src = _sg_check(
+                        _store_sc, path="autosend_worker",
+                        # 账号 / 对端以会话 id 为准（platform:account:peer），平台取稿行
+                        platform=str(d.get("platform") or ""), conversation_id=_conv,
+                        config=getattr(self._svc, "_cfg", None) or None)
+                except Exception:
+                    _sg_src = ""
+                if _sg_src and _sg_src != "frozen":
+                    try:
+                        if hasattr(_store_sc, "update_draft_status"):
+                            _store_sc.update_draft_status(
+                                draft_id, status="cancelled", decided_by="stop_gate")
+                    except Exception:
+                        logger.debug(
+                            "[AutosendWorker] 取消停联名单草稿失败 draft_id=%s",
+                            draft_id, exc_info=True)
+                    self.total_skipped_stop_contact += 1
+                    logger.info("[stop-gate] guard=stop_gate 停联名单命中，取消 L2 稿 "
+                                "draft=%s conv=%s src=%s", draft_id, _conv, _sg_src)
+                    continue
             # Sprint1 统一出站闸门 → Q-3（#264 C）人工优先复检**第一处**：会话被显式降级
             # （接管→manual / 改 review 等）/ 坐席 60s 内打字或发送 / 会话级风险持有 /
             # 「需人工」标在场 → 本稿不 resolve、取消。同一函数在 _deliver_one 拟人等待后

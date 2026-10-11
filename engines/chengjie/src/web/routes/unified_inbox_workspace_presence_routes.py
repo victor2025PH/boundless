@@ -107,7 +107,7 @@ def register_workspace_presence_routes(app, *, api_auth, config_manager=None) ->
             if isinstance(raw, dict):
                 body = raw
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_workspace_presence_routes.api_workspace_heartbeat", exc_info=True)
         agent = _session_agent(request)
         coord = AgentCoordinator.from_request(request, config_manager)
         hb_status = str(body.get("status") or "")

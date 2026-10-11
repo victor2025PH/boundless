@@ -353,8 +353,8 @@ export default function OrderPanel() {
               <span className="mr-1.5">🎉</span>
               {zh ? (
                 <>
-                  <b className="text-emerald-300">标准翻译已永久免费、不限字符</b>
-                  ——下载智聊 ChatX 即用，无需购买。原「字符包 / 团队 / 专业」套餐停售：存量订阅服务到期，
+                  <b className="text-emerald-300">标准翻译走本部署的本地模型，不按字符扣费、不调用付费接口</b>
+                  ——下载智聊 ChatX 后，在本部署配好本地模型即可用；没配好时这条翻译转人工。原「字符包 / 团队 / 专业」套餐停售：存量订阅服务到期，
                   字符包未用完的字符按 <b className="text-emerald-300">150 万字符 = 60,000 Token</b> 免费换发（只多不少）。
                   专业翻译（术语锁定 / DeepL 认证 / 多模态）按 Token 计量，见「Token 包」。{" "}
                   <a href="/download/chatx" className="text-neon-cyan hover:underline">
@@ -363,8 +363,8 @@ export default function OrderPanel() {
                 </>
               ) : (
                 <>
-                  <b className="text-emerald-300">Standard translation is now free forever with unlimited characters</b>
-                  {" "}— just download ChatX. Legacy char packs & plans are discontinued: active subscriptions run to term, and
+                  <b className="text-emerald-300">Standard translation uses this deployment's local model — no per-character fee, no paid API</b>
+                  {" "}— download ChatX and point it at the local model. If that model is not set, the line waits for a person. Legacy char packs and plans are discontinued: active subscriptions run to term, and
                   unused char-pack balances convert to <b className="text-emerald-300">60,000 tokens per 1.5M chars</b> (always in your favor).
                   Pro translation (term-lock / certified DeepL / multimodal) meters in tokens — see Token packs.{" "}
                   <a href="/en/download/chatx" className="text-neon-cyan hover:underline">
@@ -1018,10 +1018,10 @@ function TrustGrid({ family, zh }: { family: OrderFamily; zh: boolean }) {
           },
           {
             icon: ShieldCheck,
-            title: zh ? "用尽永不断线" : "Never offline",
+            title: zh ? "翻译不偷换付费" : "No silent paid translation",
             desc: zh
-              ? "Token 用尽自动降级到免费引擎，翻译与会话不中断——补充后即刻恢复满血。"
-              : "When tokens run out, ChatX gracefully falls back to free engines — nothing stops. Top up to restore full power.",
+              ? "Token 用尽后，标准翻译仍只走本部署的本地模型；本地模型没配好就转人工，不会改用付费引擎。补一笔充值恢复专业翻译。"
+              : "When tokens run out, standard translation still uses only this deployment's local model. If that model is not set, a person takes the line — it does not switch to a paid engine. Top up to restore pro translation.",
           },
           {
             icon: Coins,

@@ -1,0 +1,44 @@
+# 人设身份口径片段（P0-5，2026-10-08 智语）
+# ─────────────────────────────────────────────────────────────────────
+# 口径（用户 2026-10-08 拍板）：被真诚问到时如实说一句是 AI 助手，再回到话题；所有人设一样。
+# 用法：① compliance 块并入实例 config.yaml；② 按人设语言把 forbidden_phrase_sets 里需要的组
+#       合并进 personas.profiles[*].speaking.forbidden_phrases（example_persona 是合并示例）。
+# 写禁词的三条规矩：
+#   1) 不要再写单个身份名词（AI / bot / robot / chatbot / human / real person / totoong tao /
+#      机器人 / 真人）。诚实档下守卫会自动忽略它们；回避档下它们会把如实披露句整句剥掉，
+#      而且会被原样注入提示词（「禁止使用：「AI」」），和诚实口径打架。
+#   2) 冒充真人一律写成声明式短语（I'm a real person / tao ako / 我是真人）。守卫在诚实档内置了
+#      human_claim 拦截（不依赖配置），这里写出来主要是给提示词看。
+#   3) 拉丁字母禁词按词边界匹配：bot 不再命中 abot / botika，AI 不再命中 kailangan / kumain；
+#      复数和 -ng 连接词照样命中（bots、websiteng）。http / https / www 按前缀拦整条链接。
+#      需要前缀或后缀匹配时显式写 depo* / *bot。中文等非拉丁禁词仍按子串（去空白）匹配。
+# 本文件不含任何密钥；不是可直接 --init 的场景预设（放在 snippets/ 下，不进 list_presets）。
+# ─────────────────────────────────────────────────────────────────────
+compliance:
+  disclosure:
+    honest_identity: true
+
+forbidden_phrase_sets:
+  identity_claims_en: ["I'm a real person", "I am a real person", "I'm human", "I am human",
+                       "I'm not a bot", "I'm not an AI", "I'm not a robot"]
+  identity_claims_tl: ["tao ako", "totoong tao ako", "tunay na tao ako", "real person ako",
+                       "hindi ako bot", "hindi ako AI", "di ako bot"]
+  identity_claims_ceb: ["tawo ko", "tinuod nga tawo ko", "dili ko bot", "dili ko AI"]
+  identity_claims_zh: ["我是真人", "我是活人", "我不是机器人", "我不是AI", "我不是人工智能"]
+  identity_claims_hi: ["मैं इंसान हूँ", "मैं असली इंसान हूँ", "मैं बॉट नहीं हूँ"]
+  gambling_safety: ["sure win", "siguradong panalo", "guaranteed win*", "guaranteed profit",
+                    "easy money", "kikita ka", "free credits", "稳赚不赔", "包赚", "保证收益"]
+  links: ["http", "https", "www.", ".com", ".club"]
+  service_frame_en: ["customer service", "support team"]
+
+example_persona:
+  id: example_tl_friend
+  name: "Example (Taglish friend)"
+  identity:
+    deny_ai: false
+    claim_human: false
+  speaking:
+    forbidden_phrases: ["I'm a real person", "I'm human", "I'm not a bot", "tao ako",
+                        "totoong tao ako", "real person ako", "hindi ako bot", "tawo ko",
+                        "sure win", "siguradong panalo", "guaranteed win*", "easy money",
+                        "customer service", "support team"]

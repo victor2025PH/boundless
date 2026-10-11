@@ -58,6 +58,9 @@
      （红须 700：600 在红软底徽章上只有 4.1）。
      成对阈值由 tests/test_theme_contrast_gate.py 钉住——改任何一侧先跑它。 */
   --t:#111827; --t2:#4b5563; --t3:#5b6b85;
+  /* 旧名别名：多页 style 写 var(--t1)/var(--bg1) 且不带回落，未定义则整条声明失效。 */
+  --t1:var(--t); --bg1:var(--bg);
+  --brand:var(--p); --rps-warn:var(--amber);
   --bd:rgba(15,27,45,.1); --bd2:rgba(15,27,45,.18);
   /* 侧栏自有调色（--sb-*）：侧栏内部原本整片写死 rgba(255,255,255,.x) 文字/描边，
      只有在深底上才成立 —— 白天模式切过去时侧栏必须仍是深色，否则白字配白底全糊。
@@ -1002,7 +1005,7 @@ function _admThemeWrite(m){
     if(!j.night||typeof j.night!=='object') j.night={mode:'auto',start:1320,end:480};
     j.night.mode=m; j.ts=Date.now(); anim=(j.anim!==false);
     localStorage.setItem('ws_appearance_v1',JSON.stringify(j));
-    fetch('/api/workspace/prefs',{method:'POST',credentials:'same-origin',
+    window.apiFetch('/api/workspace/prefs',{method:'POST',credentials:'same-origin',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({appearance:j})}).catch(function(){});
   }catch(_){}
   var rm=false; try{rm=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;}catch(_){}
@@ -1626,7 +1629,7 @@ function _diffLines(oldL, newL){
   }
   function probe(){
     if(done) return;
-    fetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
+    window.apiFetch('/api/assistant/bootstrap?page='+encodeURIComponent(location.pathname),{cache:'no-store'}).then(function(r){
       return r.ok ? r.json() : null;
     }).then(function(b){
       if(b&&b.ok&&b.enabled){ inject(b); return; }
@@ -1677,7 +1680,7 @@ function _diffLines(oldL, newL){
   async function tick(){
     if(shown) return;
     try{
-      var r=await fetch(URL+'?_='+Date.now(),{cache:'no-store'});
+      var r=await window.apiFetch(URL+'?_='+Date.now(),{cache:'no-store'});
       if(!r.ok) return;
       var lines=String(await r.text()).split(/\r?\n/);
       var cur=String(lines[0]||'').trim();

@@ -29,8 +29,10 @@ from src.web.routes.unified_inbox_services import (
     _get_translation_service,
     _inbox_store,
     _list_default_langs,
+    _effective_conv_translation_tier,
     _resolve_conv_engine,
     _resolve_conv_language,
+    _resolve_conv_translation_tier,
     _resolve_default_lang,
     _resolve_default_reply_lang,
 )
@@ -295,7 +297,7 @@ def _log_toolbox_asr(chain: str, received: dict, out: dict, *, src: str) -> None
             out.get("reason") or "", out.get("asr_code") or "",
             out.get("asr_model") or "", out.get("asr_latency_ms") or "")
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _log_toolbox_asr", exc_info=True)
 
 
 def register_translate_routes(app, *, api_auth) -> None:
@@ -348,12 +350,17 @@ def register_translate_routes(app, *, api_auth) -> None:
             engine = _resolve_conv_engine(request, platform, account_id, chat_key)
 
         svc = _get_translation_service(request)
+        tier = _effective_conv_translation_tier(
+            request, platform, account_id, chat_key,
+            str(body.get("tier") or ""),
+        )
         result = await svc.translate(
             text,
             target_lang=target_lang,
             source_lang=source_lang,
             style=style,
             engine=engine,
+            tier=tier,
         )
         # quotawall v2 P2.6（2026-08-21）：授权字符池耗尽（licensing.enforce 开）时
         # 服务层刻意软失败（自动链绝不阻断消息投递），但**坐席手动翻译**必须显式
@@ -417,7 +424,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                 try:
                     bres = await svc.translate(
                         result.translated_text, target_lang=back_target,
-                        source_lang=target_lang, style=style,
+                        source_lang=target_lang, style=style, tier=tier,
                     )
                     resp["back"] = {
                         "ok": bool(bres.ok),
@@ -471,6 +478,12 @@ def register_translate_routes(app, *, api_auth) -> None:
         engine = str(body.get("engine") or "").strip().lower()
         if not engine:
             engine = _resolve_conv_engine(request, platform, account_id, chat_key)
+        # 与单条 /translate 同口径：显式已知档记住，省略不擦掉已钉的付费档。
+        # 视口懒翻不带 tier，钉了专业档的会话按专业档译（可能计 Token）。
+        tier = _effective_conv_translation_tier(
+            request, platform, account_id, chat_key,
+            str(body.get("tier") or ""),
+        )
 
         svc = _get_translation_service(request)
         _MAX_ITEMS = 50
@@ -483,7 +496,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             async with sem:
                 result = await svc.translate(
                     text, target_lang=target_lang, source_lang=src,
-                    style=style, engine=engine,
+                    style=style, engine=engine, tier=tier,
                 )
             return iid, result
 
@@ -772,11 +785,25 @@ def register_translate_routes(app, *, api_auth) -> None:
 
     @app.get("/api/unified-inbox/translation-engines")
     async def api_unified_inbox_translation_engines(
-        request: Request, target_lang: str = "zh", _=Depends(api_auth)
+        request: Request, target_lang: str = "zh", tier: str = "",
+        platform: str = "", account_id: str = "default", chat_key: str = "",
+        _=Depends(api_auth),
     ):
-        """指定目标语的引擎能力矩阵：让坐席在切换目标语时即知主引擎是否兜底。"""
+        """指定目标语的引擎能力矩阵。带会话时按该会话的翻译档，不按整箱。
+
+        查询串 ``tier`` 优先（并记住到会话）；否则读 ``conversations.pref_tier``。
+        都没有 = 标准档。专业/认证档不报「本地模型没配好」。
+        """
         svc = _get_translation_service(request)
-        return {"ok": True, "matrix": svc.engine_matrix(target_lang)}
+        if str(tier or "").strip():
+            resolved = _effective_conv_translation_tier(
+                request, platform, account_id, chat_key, tier)
+        elif str(chat_key or "").strip() and str(platform or "").strip():
+            resolved = _resolve_conv_translation_tier(
+                request, platform, account_id, chat_key)
+        else:
+            resolved = ""
+        return {"ok": True, "matrix": svc.engine_matrix(target_lang, tier=resolved)}
 
     @app.get("/api/lang-catalog")
     async def api_lang_catalog(
@@ -846,8 +873,16 @@ def register_translate_routes(app, *, api_auth) -> None:
                     "candidates": []}
 
         svc = _get_translation_service(request)
+        tier = _effective_conv_translation_tier(
+            request,
+            str(body.get("platform") or "").lower(),
+            str(body.get("account_id") or "default"),
+            str(body.get("chat_key") or ""),
+            str(body.get("tier") or ""),
+        )
         data = await svc.compare_translations(
             text, target_lang=target_lang, source_lang=source_lang, style=style,
+            tier=tier,
         )
         cands = data.get("candidates") or []
         # P1-XF（2026-08-16）智能融合：fuse=true → 成功候选交 LLM 择优合成一条
@@ -860,6 +895,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                     svc, text=text, candidates=cands,
                     source_lang=str(data.get("source_lang") or source_lang or ""),
                     target_lang=target_lang,
+                    tier=tier,
                 )
             except Exception:
                 data["fusion"] = {"ok": False, "reason": "fusion_error"}
@@ -907,12 +943,16 @@ def register_translate_routes(app, *, api_auth) -> None:
         engine = str(body.get("engine") or "").strip().lower()
         if not engine:
             engine = _resolve_conv_engine(request, platform, account_id, chat_key)
+        tier = _effective_conv_translation_tier(
+            request, platform, account_id, chat_key,
+            str(body.get("tier") or ""),
+        )
 
         from src.ai.document_translate import DocumentTranslateService
         svc = DocumentTranslateService(_get_translation_service(request))
         _doc_res = await svc.translate_document(
             text, target_lang=target_lang, source_lang=source_lang,
-            style=style, engine=engine,
+            style=style, engine=engine, tier=tier,
         )
         # 坐席字符计量归因（2026-08-16）：源文本就在手上，按 len(text) 记——与
         # /translate 同口径（整篇成功才记；分段部分失败时 ok=False 不记，宁少勿多）。
@@ -1108,7 +1148,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                 return {"ok": False, "reason": "no_vision_backend",
                         "message": "未配置可用的图像识别后端（Ollama base_url 或智谱 api_key）"}
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_image", exc_info=True)
 
         path, reason = decode_image_to_temp(image_b64)
         if path is None:
@@ -1132,7 +1172,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             try:
                 _os.remove(path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_image", exc_info=True)
 
     @app.post("/api/unified-inbox/translate-voice")
     async def api_unified_inbox_translate_voice(request: Request, _=Depends(api_auth)):
@@ -1216,7 +1256,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             try:
                 _os.remove(path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_voice", exc_info=True)
 
     @app.post("/api/unified-inbox/translate-video")
     async def api_unified_inbox_translate_video(request: Request, _=Depends(api_auth)):
@@ -1306,7 +1346,7 @@ def register_translate_routes(app, *, api_auth) -> None:
             try:
                 _os.remove(path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_video", exc_info=True)
 
     @app.post("/api/unified-inbox/translate-message-media")
     async def api_unified_inbox_translate_message_media(request: Request, _=Depends(api_auth)):
@@ -1443,7 +1483,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                         return {"ok": False, "reason": "no_vision_backend",
                                 "message": "未配置可用的图像识别后端"}
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)
                 # P3（2026-08-18）：patch=true → 译文贴回原图（bbox OCR + 逐块译 + 回绘）。
                 # 计量按全部识出块的源文本长度（真送翻译引擎的量）；PNG 走 base64 内联
                 # （几百 KB 级，一次性展示不值得走令牌存储的取回即删语义——灯箱要反复切看）。
@@ -1502,7 +1542,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                                 lang=target_lang, stats=pout.get("stats"),
                                 ms=int((_ix_mono() - _ix_t0) * 1000))
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)
                     pout["media_kind"] = "image"
                     pout["from_upload"] = False
                     pout["from_remote"] = _tmp_download is not None
@@ -1544,7 +1584,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                                 lang=target_lang, stats=uout.get("stats"),
                                 ms=int((_ix_mono() - _ix_t0) * 1000))
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)
                         return out
                 svc = ImageTranslateService(
                     _get_translation_service(request),
@@ -1569,7 +1609,7 @@ def register_translate_routes(app, *, api_auth) -> None:
                             lang=target_lang, stats=None,
                             ms=int((_ix_mono() - _ix_t0) * 1000))
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)
                 return _attach_vision_failure_message(request, out)
 
             from src.ai.voice_translate import (
@@ -1635,4 +1675,4 @@ def register_translate_routes(app, *, api_auth) -> None:
                 try:
                     os.unlink(_tmp_download)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_translate_routes.api_unified_inbox_translate_message_media", exc_info=True)

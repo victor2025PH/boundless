@@ -13,7 +13,10 @@ Usage::
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -114,6 +117,36 @@ def _merge_voice_profile(merged: Dict[str, Any], vp: Dict[str, Any]) -> bool:
     for k in ("backend", "voice", "model", "format"):
         if vp.get(k):
             merged[k] = vp[k]
+    return True
+
+
+#: 人设 ``voice_profile.human_feel`` 档位 → ``avatar_voice.colloquial`` 叠加键。
+#: 档位随人设包分发：全局 colloquial 缺省关（客户包）时人设照样有真人感；
+#: mode / provider / 端点等运营键不碰（客户无 LAN 改写模型时走规则档）。
+HUMAN_FEEL_PRESETS: Dict[str, Dict[str, Any]] = {
+    "lively": {"enabled": True, "rewrite_intensity": "vivid", "human_ticks": True,
+               "think_prob": 0.28, "laugh_prob": 0.08,
+               "disfluency": True, "disfluency_every": 5},
+    "natural": {"enabled": True, "rewrite_intensity": "natural",
+                "human_ticks": False, "disfluency": False},
+    "off": {"enabled": False},
+}
+
+
+def apply_persona_human_feel(merged: Dict[str, Any]) -> bool:
+    """把生效 voice_profile 的 ``human_feel`` 档位叠到 ``merged["avatar_voice"]``。"""
+    vp = merged.get("voice_profile")
+    av = merged.get("avatar_voice")
+    if not isinstance(vp, dict) or not isinstance(av, dict):
+        return False
+    preset = HUMAN_FEEL_PRESETS.get(str(vp.get("human_feel") or "").strip().lower())
+    if not preset:
+        return False
+    col = dict(av.get("colloquial") or {}) if isinstance(av.get("colloquial"), dict) else {}
+    col.update(preset)
+    av = dict(av)
+    av["colloquial"] = col
+    merged["avatar_voice"] = av
     return True
 
 
@@ -229,6 +262,7 @@ def resolve_voice_cfg(
         av = full_config.get("avatar_voice")
         if isinstance(av, dict) and av:
             merged["avatar_voice"] = dict(av)
+            apply_persona_human_feel(merged)
 
         # ── 注入 RVC 变声配置（.176:6242；人设 voice_profile.rvc_voice 指定 66 音色之一时，
         #    在克隆输出 WAV 上再变声成该音色）。令牌走 svc_token_env（secrets），不入库。──
@@ -360,11 +394,21 @@ def resolve_emotion_for_send(
             except Exception:
                 rel_stage = None
 
-        from src.ai.voice_emotion import derive_emotion
+        from src.ai.voice_emotion import (
+            derive_emotion,
+            expression_policy,
+            resolve_expressiveness,
+        )
+        # 表达力档位只决定「无线索时基线多收」（克制档→neutral）；线索情绪的
+        # intensity 缩放在 TTSPipeline.synthesize 入口统一做一次（那里也接得到
+        # 骂战覆写/调用方显式 emotion），避免两处叠缩。
+        level = resolve_expressiveness(voice_cfg, persona=persona)
+        policy = expression_policy(level)
         return derive_emotion(
             intent=intent, rel_stage=rel_stage, csat=csat,
             text=text, default=default, persona=persona,
-            peer_audio_emotion=peer_audio_emotion)
+            peer_audio_emotion=peer_audio_emotion,
+            baseline_intensity=policy.baseline_intensity)
     except Exception:
         return None
 
@@ -382,6 +426,7 @@ def resolve_effective_voice_context(
     intent: Optional[str] = None,
     csat: Optional[float] = None,
     peer_audio_emotion: Optional[Dict[str, Any]] = None,
+    expressiveness: Any = None,
 ) -> Dict[str, Any]:
     """Resolve the actual persona, voice config, and emotion used for one send.
 
@@ -391,6 +436,10 @@ def resolve_effective_voice_context(
 
     ``peer_audio_emotion``：上一条客户语音的声学情绪（见 speech_emotion），让出站情感声
     回应「听到的语气」。未提供 → 行为不变。
+
+    ``expressiveness``：会话级表达力覆写（收件箱「本会话收着点」）；未提供时走会话
+    覆写表 → 人设 voice_profile.expressiveness → 全局 emotion.expressiveness → natural。
+    解出的档位写回 ``voice_cfg["voice_expressiveness"]``，TTSPipeline 与情绪派生读同一份。
     """
     cfg = full_config or {}
     resolved_persona: Dict[str, Any] = {}
@@ -444,6 +493,7 @@ def resolve_effective_voice_context(
                     voice_cfg, resolved_persona.get("voice_profile") or {}):
                 voice_cfg["voice_source_layer"] = (
                     f"persona:{resolved_id}" if resolved_id else "persona:inline")
+                apply_persona_human_feel(voice_cfg)
             # 人设性别随行（L-2 #205 兜底同性别选声）；resolve_voice_cfg 已注入时不覆盖
             _g = str(resolved_persona.get("gender") or "").strip()
             if _g and voice_cfg and not voice_cfg.get("persona_gender"):
@@ -507,6 +557,24 @@ def resolve_effective_voice_context(
         _evp["emotion"] = vp_eff["emotion"]
         emo_persona["voice_profile"] = _evp
 
+    # 表达力档位（会话 > 人设 > 全局）在此解一次并写回 voice_cfg：情绪派生、
+    # TTSPipeline 各表达层、气泡可解释信息都读同一份。
+    try:
+        from src.ai.voice_emotion import resolve_expressiveness
+        _sess_level = expressiveness
+        if _sess_level is None and chat_key and account_id:
+            _sess_level = get_session_expressiveness(
+                str(platform or ""), str(account_id or ""), str(chat_key))
+        voice_cfg["voice_expressiveness"] = resolve_expressiveness(
+            voice_cfg, persona=emo_persona or None, session=_sess_level)
+        voice_cfg["voice_expressiveness_source"] = (
+            "session" if _sess_level else (
+                "persona" if (vp_eff or {}).get("expressiveness")
+                or (emo_persona.get("voice_profile") or {}).get("expressiveness")
+                else "global"))
+    except Exception:
+        logger.debug("[persona_voice] 表达力档位解析跳过", exc_info=True)
+
     emotion = resolve_emotion_for_send(
         voice_cfg, text, platform=platform, account_id=account_id,
         chat_key=chat_key or contact_key, intent=intent, csat=csat,
@@ -518,6 +586,7 @@ def resolve_effective_voice_context(
         "persona_source": source,
         "voice_cfg": voice_cfg,
         "emotion": emotion,
+        "expressiveness": voice_cfg.get("voice_expressiveness"),
     }
 
 
@@ -788,6 +857,89 @@ def is_conv_binding_key(binding_key: str) -> bool:
         and all(p.strip() for p in parts)
         and parts[0].strip().lower() in _CONV_KEY_PLATFORMS
     )
+
+
+# ── 会话级表达力覆写（收件箱「本会话收着点 / 放开点」）────────────────────
+# 与 conv_binding_key 同键（platform:account_id:chat_key）；进程内 dict +
+# ``voice_expressiveness_runtime.json``（与 config.yaml 同目录）落盘，重启不丢。
+# 只存档位字串，不存 EmotionSpec——档位是运营语言，spec 是引擎细节。
+SESSION_EXPRESSIVENESS_FILENAME = "voice_expressiveness_runtime.json"
+_session_expr: Dict[str, str] = {}
+_session_expr_loaded = False
+
+
+def _session_expr_path() -> Path:
+    env_path = os.environ.get("AITR_CONFIG_PATH")
+    if env_path:
+        return Path(env_path).expanduser().parent / SESSION_EXPRESSIVENESS_FILENAME
+    env_dir = os.environ.get("AITR_DATA_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser() / "config" / SESSION_EXPRESSIVENESS_FILENAME
+    return Path(__file__).resolve().parents[2] / "config" / SESSION_EXPRESSIVENESS_FILENAME
+
+
+def _session_expr_load() -> None:
+    global _session_expr_loaded
+    if _session_expr_loaded:
+        return
+    _session_expr_loaded = True
+    try:
+        p = _session_expr_path()
+        if p.is_file():
+            data = json.loads(p.read_text(encoding="utf-8") or "{}")
+            if isinstance(data, dict):
+                _session_expr.update(
+                    {str(k): str(v) for k, v in data.items() if v})
+    except Exception:
+        logger.debug("[persona_voice] 会话表达力覆写表读取失败", exc_info=True)
+
+
+def _session_expr_save() -> None:
+    try:
+        p = _session_expr_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(_session_expr, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+        os.replace(tmp, p)
+    except Exception:
+        logger.debug("[persona_voice] 会话表达力覆写表落盘失败", exc_info=True)
+
+
+def get_session_expressiveness(
+    platform: str, account_id: str, chat_key: str,
+) -> str:
+    """该会话的表达力覆写档位；无覆写返回 ``""``。永不抛。"""
+    try:
+        _session_expr_load()
+        return _session_expr.get(conv_binding_key(platform, account_id, chat_key), "")
+    except Exception:
+        return ""
+
+
+def set_session_expressiveness(
+    platform: str, account_id: str, chat_key: str, level: Any,
+) -> str:
+    """写/清会话覆写。``level`` 空/None/"inherit" = 清除（回落人设/全局）。
+
+    返回规范化后的档位（清除时 ``""``）。
+    """
+    from src.ai.voice_emotion import normalize_expressiveness
+    _session_expr_load()
+    key = conv_binding_key(platform, account_id, chat_key)
+    raw = str(level or "").strip().lower()
+    if not raw or raw in ("inherit", "auto", "default_inherit", "none", "null"):
+        _session_expr.pop(key, None)
+        _session_expr_save()
+        return ""
+    lv = normalize_expressiveness(raw)
+    if not lv:
+        _session_expr.pop(key, None)
+    else:
+        _session_expr[key] = lv
+    _session_expr_save()
+    return lv
 
 
 def resolve_effective_persona(

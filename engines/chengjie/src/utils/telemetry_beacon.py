@@ -127,7 +127,7 @@ class _Beacon(logging.Handler):
                 if len(self._pending) > 100:  # 极端刷错兜底
                     self._pending.pop(next(iter(self._pending)))
         except Exception:
-            pass  # 回传是旁路，任何异常吞掉
+            logging.getLogger(__name__).debug("swallowed in _Beacon.emit", exc_info=True)
 
     # ── 生命周期 ──
     def start(self) -> None:
@@ -172,7 +172,7 @@ class _Beacon(logging.Handler):
             try:
                 self.flush_pending()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in _Beacon._loop", exc_info=True)
 
     # ── 发送 ──
     def flush_pending(self) -> int:
@@ -238,7 +238,7 @@ def note_milestone(kind: str, detail: str = "") -> None:
     try:
         b.note_event("milestone", "INFO", f"{key} {sanitize_message(detail)}".strip())
     except Exception:  # noqa: BLE001 —— 回传是旁路
-        pass
+        logging.getLogger(__name__).debug("swallowed in note_milestone", exc_info=True)
 
 
 def install_beacon(config: Optional[dict],
@@ -265,6 +265,6 @@ def reset_for_tests() -> None:
             try:
                 logging.getLogger().removeHandler(_installed)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in reset_for_tests", exc_info=True)
         _installed = None
         _MILESTONE_SENT.clear()

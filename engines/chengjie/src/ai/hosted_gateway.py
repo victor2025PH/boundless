@@ -955,6 +955,52 @@ def _fallback_is_lan_chatx(fb: Any) -> bool:
     return str(fb.get("model") or "").strip().lower() == "chatx"
 
 
+def _chatx_fallback_absent(fb: Any) -> bool:
+    """没有可列出的 ChatX 档。显式 ``enabled: false`` 视为用户关掉，不补。"""
+    if not isinstance(fb, dict):
+        return True
+    if fb.get("enabled") is False:
+        return False
+    return not str(fb.get("base_url") or "").strip() or not str(fb.get("model") or "").strip()
+
+
+def _models_has_chatx_row(ai: Dict[str, Any]) -> bool:
+    models = ai.get("models")
+    if not isinstance(models, dict):
+        return False
+    spec = models.get("unrestricted")
+    return (isinstance(spec, dict)
+            and bool(str(spec.get("base_url") or "").strip())
+            and bool(str(spec.get("model") or "").strip()))
+
+
+def seed_hosted_chatx(cfg: Dict[str, Any], gw_base: str) -> bool:
+    """外网客户档没有 ChatX 端点时，补一条官网中继 fallback（``model=chatx``）。
+
+    办公室档已有局域网 fallback，或用户显式关掉 / 自配了别的 fallback，都不动。
+    聊天主链仍是 DeepSeek（``chat_fallback: false``）；只让「无限制」目录出现 ChatX 行。
+    纯内存，不写盘。
+    """
+    ai = cfg.get("ai") if isinstance(cfg.get("ai"), dict) else None
+    if not ai or _models_has_chatx_row(ai):
+        return False
+    gw = str(gw_base or "").rstrip("/")
+    if not gw:
+        return False
+    fb = ai.get("fallback") if isinstance(ai.get("fallback"), dict) else None
+    if not _chatx_fallback_absent(fb):
+        return False
+    ai["fallback"] = {
+        "enabled": True,
+        "base_url": gw,
+        "model": "chatx",
+        "timeout": 90,
+        "chat_fallback": False,
+    }
+    ai["_hosted_chatx_seeded"] = True
+    return True
+
+
 def apply_hosted_chatx(cfg: Dict[str, Any], gw_base: str) -> bool:
     """把 ``ai.fallback`` 从 LAN chatx 改写到官网网关（纯内存，可逆）。
 
@@ -1011,6 +1057,9 @@ def ensure_hosted_chatx(
 
     办公室直连低延迟；外网同一产品名、同一 model=chatx，由网关 ``CHATX_RELAY_URLS``
     转到同一台 173。未配中继时网关必须 503，不得把 chatx 钳成 DeepSeek。
+
+    客户档若整段没有 fallback（升级安装的旧种子），补一条官网 chatx，模型列表才有
+    「无限制」行。已有局域网档或用户自配档不覆盖。
     """
     cfg = getattr(config_manager, "config", None) or {}
     if not _wants_hosted(cfg):
@@ -1039,6 +1088,10 @@ def ensure_hosted_chatx(
 
     fb = ai.get("fallback") if isinstance(ai.get("fallback"), dict) else None
     if not _fallback_is_lan_chatx(fb):
+        if seed_hosted_chatx(cfg, gw):
+            _stamp_env()
+            logger.info("[hosted-chatx] 客户档无 ChatX 端点 → 补官网中继 model=chatx（无限制档）")
+            return True
         return False
     if chk(str(fb.get("base_url") or "")):
         return False

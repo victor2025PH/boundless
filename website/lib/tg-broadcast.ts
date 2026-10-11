@@ -58,7 +58,8 @@ async function postTo(
   text: string,
   withButton: boolean,
   campaign = "",
-  site?: SiteButton
+  site?: SiteButton,
+  editMessageId?: number
 ): Promise<BroadcastResult> {
   const body: Record<string, unknown> = {
     chat_id: chat,
@@ -67,8 +68,9 @@ async function postTo(
     disable_web_page_preview: true,
   };
   if (withButton) body.reply_markup = richButtons(mediumFor(chat), campaign, site);
+  if (editMessageId) body.message_id = editMessageId;
   try {
-    const data = await callApi(token, "sendMessage", body);
+    const data = await callApi(token, editMessageId ? "editMessageText" : "sendMessage", body);
     return {
       chat,
       ok: Boolean(data?.ok),
@@ -138,13 +140,15 @@ export async function broadcastMessage(opts: {
   campaign?: string;
   sitePath?: string;
   siteLabel?: string;
+  /** 修正已发帖：对 target 的每个 chat 就地 editMessageText（按钮按同一 campaign 重建，不丢） */
+  editMessageId?: number;
 }): Promise<{ ok: boolean; results: BroadcastResult[] }> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return { ok: false, results: [{ chat: "-", ok: false, error: "no_bot_token" }] };
   const chats = targetChats(opts.target);
   const site = opts.sitePath || opts.siteLabel ? { path: opts.sitePath, label: opts.siteLabel } : undefined;
   const results = await Promise.all(
-    chats.map((c) => postTo(token, c, opts.text, opts.withButton, opts.campaign ?? "", site))
+    chats.map((c) => postTo(token, c, opts.text, opts.withButton, opts.campaign ?? "", site, opts.editMessageId))
   );
   return { ok: results.length > 0 && results.every((r) => r.ok), results };
 }

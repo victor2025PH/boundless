@@ -136,6 +136,7 @@ def _tombstone_deleted_at(store: Any, conversation_id: str) -> Optional[float]:
     try:
         return fn(conversation_id)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _tombstone_deleted_at", exc_info=True)
         return None
 
 
@@ -258,7 +259,7 @@ def ingest_collected_chats(
                    conversation_id=conv_id, msg_id=str(_lc.get("msg_id") or ""),
                    ts=_lc.get("ts") or 0, direction=direction, detail=detail)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in ingest_collected_chats._ledger", exc_info=True)
 
     for chat in chats or []:
         # store-backed 会话（ProtocolInboxAdapter/WebInboxAdapter 经 store_row_to_chat 读出，
@@ -450,7 +451,7 @@ def ingest_collected_chats(
                                 _dp_store.resolve_open_loop(_cid, _rt)
                                 _dp_stats.incr("loops_resolved")
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("swallowed in ingest_collected_chats", exc_info=True)
                         # 机会式巩固（节流 15min/会话）：关系画像 L5 + 内部梗
                         try:
                             if _dp_store.due_for_consolidation(_cid):

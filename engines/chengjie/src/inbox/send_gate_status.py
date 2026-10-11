@@ -56,7 +56,10 @@ def send_gate_snapshot(
       「系统自动风控（PeerFlood…）+ 倒计时」vs「管理员手动冻结」，不再一律
       说「运营手动」（自动置位被错误归因是实录误导事故）。取不到详情时缺省
       不带该键，前端回落通用文案（旧后端兼容＝feat 特性探测同哲学）。
-    - 返回 None ＝ 护栏没拦且闸门未启用——调用方（横幅/搭便车字段）直接略过。
+    - ``rate_degraded``：发送限速闸判定异常、按 fail-open 放行后的累计次数
+      ``{count, days}``。``days`` 是最近若干个 UTC 日的 ``[{day, n}]``；库打不开时为空。
+      只给横幅展示，不把发送改成拦截，也不改日上限。次数为 0 时不带该键。
+    - 返回 None ＝ 护栏没拦、闸门未启用、且本进程没有限速闸异常放行。
     """
     p = str(platform or "").lower()
     a = str(account_id or "default")
@@ -147,7 +150,30 @@ def send_gate_snapshot(
                          exc_info=True)
             kill = None
 
-    if not blocked and quota is None:
+    rate: Optional[Dict[str, Any]] = None
+    if blocked and str(reason or "").startswith("send_rate_gate:"):
+        # 智安发送限速闸：带「已发/上限/预计恢复时刻」，横幅与 409 告诉坐席什么时候恢复
+        try:
+            from src.compliance.send_rate_gate import block_info
+            rate = block_info(p, a, origin=str(origin or "manual"), chat_key=str(chat_key or ""),
+                              config=cfg, registry=registry, now=now)
+            if rate and rate.get("frees_at"):
+                frees_at = float(rate["frees_at"])
+        except Exception:
+            logger.debug("[send-gate-status] 限速闸详情取数失败（回落通用文案）", exc_info=True)
+            rate = None
+
+    degraded_n = 0
+    degraded_days: list = []
+    try:
+        from src.compliance.send_rate_gate import degraded_count, degraded_trend
+        degraded_n = int(degraded_count() or 0)
+        degraded_days = list(degraded_trend() or [])
+    except Exception:
+        degraded_n = 0
+        degraded_days = []
+
+    if not blocked and quota is None and degraded_n <= 0:
         return None
     out: Dict[str, Any] = {
         "blocked": bool(blocked),
@@ -155,8 +181,13 @@ def send_gate_snapshot(
         "quota": quota,
         "frees_at": frees_at,
     }
+    if degraded_n > 0:
+        # 限速闸异常后仍放行。横幅只报次数，不把发送改成拦截，也不改日上限。
+        out["rate_degraded"] = {"count": degraded_n, "days": degraded_days}
     if kill:
         out["kill"] = kill
+    if rate:
+        out["rate"] = rate
     return out
 
 
@@ -171,6 +202,11 @@ def blocked_reason_key(reason: str) -> str:
         return "banned"
     if r.startswith("send_gate:"):
         return "gate"
+    # 智安发送限速闸（send_guard 第 4 道）：预热期硬上限 / 脚本测试日上限——各自一条人话
+    if r.startswith("send_rate_gate:warmup"):
+        return "rate_warmup"
+    if r.startswith("send_rate_gate:script"):
+        return "rate_script"
     if r.startswith("kill_switch"):
         return "killswitch"
     if r.startswith("canary"):

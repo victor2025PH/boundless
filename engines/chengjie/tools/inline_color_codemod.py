@@ -259,6 +259,28 @@ _E = [
     ("bd", "#fca5a5", "--th-bd-red3", "rgba(248,81,73,.4)"),
     ("bd", "#c4b5fd", "--th-bd-violet3", "rgba(167,139,250,.4)"),
     ("bd", "#2d6cdf", "--th-bd-blue2d", "#58a6ff"),
+    # 模板已引用、原先未进表的名字。role=keep 不参与 (ink|bg|bd, 字面量)
+    # 替换，避免同字面量抢走已有 token；--emit-css 仍会写出定义。
+    ("keep", "#cbd5e1", "--th-bd", "#3b3f4a"),
+    ("keep", "rgba(245,158,11,.35)", "--th-bd-amber3", "rgba(227,179,65,.4)"),
+    ("keep", "rgba(239,68,68,.3)", "--th-bd-red30", "rgba(248,81,73,.35)"),
+    ("keep", "rgba(34,197,94,.35)", "--th-bd-green30", "rgba(63,185,80,.4)"),
+    ("keep", "rgba(20,184,166,.35)", "--th-bd-teal30", "rgba(45,212,191,.4)"),
+    ("keep", "#b45309", "--th-bg-amber7", "#e3b341"),
+    ("keep", "#64748b", "--th-bg-slate5", "#94a3b8"),
+    ("keep", "#334155", "--th-bg-slate7", "#cbd5e1"),
+    ("keep", "#ccfbf1", "--th-bg-teal100", "rgba(45,212,191,.16)"),
+    ("keep", "#64748b", "--th-ink-gray6", "#9aa0aa"),
+    ("keep", "#64748b", "--th-ink-sub", "#b4b8c0"),
+    ("keep", "#115e59", "--th-ink-teal8", "#5eead4"),
+    # 2026-10-09 内联色收口：映射表外的告警晕 / 橙标 / 玻璃底，亮值＝原字面量。
+    ("bg", "rgba(220,38,38,.08)", "--th-bg-rose08", "rgba(248,81,73,.1)"),
+    ("bd", "rgba(220,38,38,.35)", "--th-bd-rose35", "rgba(248,81,73,.4)"),
+    ("bg", "rgba(220,38,38,.10)", "--th-bg-rose10", "rgba(248,81,73,.14)"),
+    ("bg", "rgba(255,120,60,.14)", "--th-bg-orange14", "rgba(240,160,90,.2)"),
+    ("ink", "#e0783c", "--th-ink-orange", "#f0a36a"),
+    ("bg", "rgba(255,255,255,.85)", "--th-bg-glass85", None),
+    ("bg", "rgba(245,158,11,.14)", "--th-bg-amber14", "rgba(227,179,65,.16)"),
 ]
 
 def _norm(lit: str) -> str:

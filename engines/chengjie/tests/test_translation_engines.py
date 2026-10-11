@@ -116,8 +116,10 @@ def test_router_describe_marks_deepl_fallback_to_ai():
 
 
 def test_service_engine_matrix_delegates():
+    # 能力矩阵委托：DeepL 不支持泰语时 effective 落到下一可用引擎。
+    # 免费档重排是另一条契约（test_free_tier_zero_cost_zhiyu），这里显式 legacy。
     router = EngineRouter([DeepLEngine("k"), _FixedEngine("ai", available=True)])
-    svc = TranslationService(engine_router=router)
+    svc = TranslationService(engine_router=router, free_tier_zero_cost=False)
     m = svc.engine_matrix("th")
     assert m["primary"] == "deepl" and m["effective"] == "ai"
 
@@ -271,6 +273,57 @@ def test_ollama_mt_base_url_forms():
     assert OllamaMTEngine("http://a:1", "m")._base_urls == ["http://a:1"]
     # _base_url 兼容属性 = 首端点
     assert OllamaMTEngine(["http://a:1", "http://b:2"], "m")._base_url == "http://a:1"
+
+
+def test_blank_local_mt_defaults_to_lan_vllm_chatx():
+    """地址和模型都空 → 173 的 vLLM chatx。只填地址不补模型。显式地址不被盖掉。"""
+    from src.ai.translation_engines import (
+        DEFAULT_LOCAL_MT_API, DEFAULT_LOCAL_MT_BASE_URL, DEFAULT_LOCAL_MT_MODEL,
+    )
+    eng = build_engines(
+        {"engines": {"order": ["ollama_mt"], "ollama_mt": {"base_url": "", "model": ""}}},
+        ai_client=None,
+    )
+    mt = eng[0]
+    assert mt.available is True
+    assert mt._base_url == DEFAULT_LOCAL_MT_BASE_URL
+    assert mt._model == DEFAULT_LOCAL_MT_MODEL
+    assert mt._api == DEFAULT_LOCAL_MT_API
+    assert mt._payload_extra.get("chat_template_kwargs", {}).get("enable_thinking") is False
+
+    missing = build_engines({"engines": {"order": ["ollama_mt"]}}, ai_client=None)
+    assert missing[0]._base_url == DEFAULT_LOCAL_MT_BASE_URL
+    assert missing[0]._model == DEFAULT_LOCAL_MT_MODEL
+
+    custom = build_engines(
+        {"engines": {"order": ["ollama_mt"],
+                     "ollama_mt": {"base_url": "http://127.0.0.1:11434", "model": "hy"}}},
+        ai_client=None,
+    )
+    assert custom[0]._base_url == "http://127.0.0.1:11434"
+    assert custom[0]._model == "hy"
+    assert custom[0]._api == "native"
+
+
+def test_config_examples_preset_local_mt():
+    import yaml
+    from pathlib import Path
+
+    from src.ai.translation_engines import DEFAULT_LOCAL_MT_BASE_URL, DEFAULT_LOCAL_MT_MODEL
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("config/config.example.yaml", "config/lingox.overlay.example.yaml"):
+        text = (root / rel).read_text(encoding="utf-8")
+        assert "http://192.168.0.173:8001" in text, rel
+        assert "model: chatx" in text, rel
+    seed_text = (root / "config/config.desktop.min.yaml").read_text(encoding="utf-8")
+    assert "192.168." not in seed_text
+    seed = yaml.safe_load(seed_text) or {}
+    mt = ((seed.get("translation") or {}).get("engines") or {}).get("ollama_mt") or {}
+    assert not str(mt.get("base_url") or "").strip()
+    assert not str(mt.get("model") or "").strip()
+    eng = build_engines({"engines": {"order": ["ollama_mt"], "ollama_mt": mt}}, ai_client=None)
+    assert eng[0]._base_url == DEFAULT_LOCAL_MT_BASE_URL
+    assert eng[0]._model == DEFAULT_LOCAL_MT_MODEL
 
 
 def test_build_engines_with_ollama_mt():
@@ -621,6 +674,8 @@ async def test_opencc_engine_converts_and_yields():
     eng = OpenCCEngine()
     assert eng.available is True
     assert eng.supports_target("zh-tw") is True
+    assert eng.supports_target("zh-hk") is True
+    assert eng.supports_target("zh-hant") is True
     assert eng.supports_target("zh") is False
     assert eng.supports_target("yue") is False   # 粤语是语言变体不是字形转换
 

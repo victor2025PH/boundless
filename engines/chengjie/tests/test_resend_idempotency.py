@@ -108,9 +108,12 @@ def test_wiring_send_route_checks_prior_id():
     assert "resend_of_cmid" in src, "路由要收前端带来的原件 id"
     assert "resend_verdict(" in src, "裁决必须走单一事实源纯函数"
     assert "guard=resend_dup" in src, "压制要留可 grep 的日志标签"
-    # 裁决必须发生在真发送之前——落在 reserve 之前即可保证（reserve 之后才是发送链）
-    i_verdict = src.index("resend_verdict(")
-    i_reserve = src.index("_dedup.reserve(_dedup_scope, _client_msg_id)")
+    # 裁决必须发生在这条文本路由自己的 reserve 之前。文件更早处还有
+    # 媒体发送的 reserve，那是另一条路由，不能拿来当文本裁决的锚。
+    i_fn = src.index("async def api_unified_inbox_send(")
+    seg = src[i_fn:src.index("\n    @app.", i_fn)]
+    i_verdict = seg.index("resend_verdict(")
+    i_reserve = seg.index("_dedup.reserve(_dedup_scope, _client_msg_id)")
     assert i_verdict < i_reserve, "裁决要在占位/发送之前，别发完了才判"
 
 

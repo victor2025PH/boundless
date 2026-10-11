@@ -103,23 +103,43 @@ def _patched_limiter(monkeypatch, sends: int, now: float) -> AutoReplyLimiter:
 
 
 def test_snapshot_blocked_numbers_match_gate(monkeypatch):
+    """额度数字与闸门同口径。D-Q2：额度不拦人工；自动道用尽仍拦。
+
+    快照缺省 origin=manual（坐席预检）。人工视角 blocked 必须是 False，
+    但 quota.auto_blocked 与自动道 frees 仍在。origin=auto 才是
+    send_gate:daily_cap。banned 另测，不在这条额度用例里放行。
+    """
     from src.inbox.send_gate_status import send_gate_snapshot
     now = time.time()
-    _patched_limiter(monkeypatch, sends=3, now=now)   # used=3 >= cap=3 → 拦
-    snap = send_gate_snapshot(
+    _patched_limiter(monkeypatch, sends=3, now=now)   # used=3 >= cap=3
+    cfg = _gate_cfg(target_cap=3)
+    reg = _FakeRegistry()
+    auto = send_gate_snapshot(
         "telegram", "default", "999",
-        config=_gate_cfg(target_cap=3), registry=_FakeRegistry(), now=now)
-    assert snap is not None
-    assert snap["blocked"] is True
-    assert snap["reason"] == "send_gate:daily_cap"   # P3 更名后的新发射值
-    # used/cap 与闸门 evaluate 同口径（cap=满 ramp 的 target_cap；
-    # reserve 缺省 0 → auto_cap==cap）
-    assert snap["quota"]["used"] == 3
-    assert snap["quota"]["cap"] == 3
-    assert snap["quota"]["auto_cap"] == 3
-    assert snap["quota"]["reserve"] == 0
+        config=cfg, registry=reg, now=now, origin="auto")
+    assert auto is not None
+    assert auto["blocked"] is True
+    assert auto["reason"] == "send_gate:daily_cap"
+    assert auto["quota"]["used"] == 3
+    assert auto["quota"]["cap"] == 3
+    assert auto["quota"]["auto_cap"] == 3
+    assert auto["quota"]["reserve"] == 0
+    assert auto["quota"]["auto_blocked"] is True
     # 滚动窗释放时刻：第 3-3+1=1 老（now-180s）+24h
-    assert snap["frees_at"] == pytest.approx(now - 180.0 + _DAY, abs=1.0)
+    assert auto["frees_at"] == pytest.approx(now - 180.0 + _DAY, abs=1.0)
+
+    manual = send_gate_snapshot(
+        "telegram", "default", "999",
+        config=cfg, registry=reg, now=now)  # 缺省 manual
+    assert manual is not None
+    assert manual["blocked"] is False
+    assert manual["quota"]["used"] == 3
+    assert manual["quota"]["cap"] == 3
+    assert manual["quota"]["auto_cap"] == 3
+    assert manual["quota"]["auto_blocked"] is True
+    assert manual["frees_at"] is None
+    assert manual["quota"]["auto_frees_at"] == pytest.approx(
+        now - 180.0 + _DAY, abs=1.0)
 
 
 def test_snapshot_allowed_has_quota_but_not_blocked(monkeypatch):
@@ -467,9 +487,16 @@ def test_gate_decision_reserve_splits_lanes():
     assert d_manual["allowed"] is True
     assert d_auto["auto_cap"] == 7 and d_auto["recommended_cap"] == 10
     assert d_manual["reserve_for_manual"] == 3
-    # used=10 → 两道都拦（人工也不许超总额度）
+    # D-Q2：额度永不限制人工。used=10 超过 cap(10) 时自动道仍拦，人工道放行。
+    # banned 仍拦人工——那是号已封，不是额度。
     sig2 = dict(sig, sends_today=10)
-    assert gate_decision(sig2, origin="manual", **kw)["allowed"] is False
+    d_auto2 = gate_decision(sig2, origin="auto", **kw)
+    d_man2 = gate_decision(sig2, origin="manual", **kw)
+    assert d_auto2["allowed"] is False and d_auto2["reason"] == "daily_cap"
+    assert d_man2["allowed"] is True and d_man2["reason"] == "ok"
+    banned = dict(sig2, banned=True)
+    d_ban = gate_decision(banned, origin="manual", **kw)
+    assert d_ban["allowed"] is False and d_ban["reason"] == "banned"
     # reserve=0 → 两道同值（与旧行为一致）
     kw0 = dict(kw, reserve_for_manual=0)
     assert gate_decision(sig, origin="auto", **kw0)["allowed"] is True

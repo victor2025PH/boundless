@@ -171,7 +171,11 @@ FIDELITY_PROMPT_RULE = (
     "Proper nouns (place names, person names, brand names) and numbers must "
     "be preserved exactly - never substitute a different place/person/number "
     "even if it seems more plausible in context; if unsure how to translate "
-    "a name, keep the original word untranslated."
+    "a name, keep the original word untranslated. "
+    "When the target language uses a different writing system, "
+    "render names in the target script (established translation or "
+    "transliteration) - never leave source-script words such as "
+    "Chinese characters in the output."
 )
 
 

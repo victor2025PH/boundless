@@ -94,7 +94,7 @@
 
   <div id="gr-disabled" class="gr-card" style="display:none;"><div class="gr-empty">{{ (i18n or {}).get('goal_rpt_disabled', "工作目标功能未启用（companion.goals.enabled）") }}</div></div>
   <!-- Q-5 D（#263）：连续 N 轮抽取 facts=0 slots=0 → 告警行（记忆页 #cs-stall 同口径） -->
-  <div id="gr-extract-stall" role="alert" style="display:none;margin:0 0 12px;padding:8px 12px;border-radius:8px;font-size:.8rem;font-weight:600;line-height:1.5;color:var(--tk-danger-ink,#dc2626);background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.35);"></div>
+  <div id="gr-extract-stall" role="alert" style="display:none;margin:0 0 12px;padding:8px 12px;border-radius:8px;font-size:.8rem;font-weight:600;line-height:1.5;color:var(--tk-danger-ink,#dc2626);background:var(--th-bg-rose08,rgba(220,38,38,.08));border:1px solid var(--th-bd-rose35,rgba(220,38,38,.35));"></div>
 
   <div id="gr-body">
     <!-- KPI -->
@@ -106,6 +106,7 @@
       <div class="gr-kpi"><div class="val" id="kpi-miss">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_miss', "未达成") }}</div></div>
       <div class="gr-kpi"><div class="val" id="kpi-days">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_avg_days', "平均达成天数") }}</div></div>
     </div>
+    <div id="gr-excluded" style="display:none;margin:0 0 12px;font-size:.8rem;line-height:1.6;"></div>
 
     <!-- 账号视角 -->
     <div class="gr-card">
@@ -266,7 +267,11 @@ var GR_I18N = {
   chain_fail: {{ ((i18n or {}).get('goal_rpt_chain_fail', "启动失败"))|tojson }},
   trend_title: {{ ((i18n or {}).get('goal_rpt_trend_title', "完成趋势（近 {n} 天）"))|tojson }},
   trend_done: {{ ((i18n or {}).get('goal_rpt_trend_done', "完成"))|tojson }},
-  trend_won: {{ ((i18n or {}).get('goal_rpt_trend_won', "赢单"))|tojson }}
+  trend_won: {{ ((i18n or {}).get('goal_rpt_trend_won', "赢单"))|tojson }},
+  excluded: {{ ((i18n or {}).get('goal_rpt_excluded', "内部对聊不计入完成率：已剔除 {n} 场"))|tojson }},
+  excluded_synthetic: {{ ((i18n or {}).get('goal_rpt_excluded_synthetic', "合成演练"))|tojson }},
+  excluded_internal_peer: {{ ((i18n or {}).get('goal_rpt_excluded_internal_peer', "登记的智聊或演练对"))|tojson }},
+  excluded_chatx_handshake: {{ ((i18n or {}).get('goal_rpt_excluded_chatx_handshake', "握手指纹，对面像另一台智聊"))|tojson }}
 };
 var grPage = 1, grTotal = 0, grPageSize = 25, grSendRow = null, grDebT = null;
 var grSel = {};          // goal_id -> {conversation_id, name}（跨页保持）
@@ -286,10 +291,37 @@ function grStatusBadge(st){
 }
 function grKindTxt(k){ return k==='order'?GR_I18N.kind_order : k==='manual'?GR_I18N.kind_manual : k==='auto'?GR_I18N.kind_auto : '—'; }
 
+function grRenderExcluded(ex){
+  var box = document.getElementById('gr-excluded');
+  if(!box) return;
+  var n = ex && ex.n || 0;
+  if(!n){ box.style.display='none'; box.innerHTML=''; return; }
+  var label = String(GR_I18N.excluded||'').replace('{n}', String(n));
+  box.style.display='block';
+  box.innerHTML = '<button type="button" class="gr-act" id="gr-excluded-btn">'+esc(label)+'</button>'
+    +'<div id="gr-excluded-list" style="display:none;margin-top:6px;"></div>';
+  document.getElementById('gr-excluded-btn').onclick = function(){
+    var list = document.getElementById('gr-excluded-list');
+    if(!list) return;
+    if(list.style.display!=='none'){ list.style.display='none'; return; }
+    list.innerHTML = (ex.rows||[]).map(function(r){
+      var why = GR_I18N['excluded_'+String(r.reason||'')] || '';
+      return '<div><button type="button" class="gr-act" data-gr-x="'+esc(r.conversation_id)+'">'
+        +esc(r.conversation_id)+'</button> '+esc(why)+'</div>';
+    }).join('');
+    list.style.display='block';
+    list.onclick = function(ev){
+      var id = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-gr-x');
+      if(!id) return;
+      try{ sessionStorage.setItem('ws_focus_conv', id); }catch(_){}
+      location.href = '/workspace';
+    };
+  };
+}
 async function grLoad(){
   var days = document.getElementById('f-days').value;
   try{
-    var r = await fetch('/api/goals/report/accounts?days='+days);
+    var r = await window.apiFetch('/api/goals/report/accounts?days='+days);
     if(r.status===403){ document.getElementById('gr-disabled').style.display='block'; document.getElementById('gr-body').style.display='none'; return; }
     document.getElementById('gr-disabled').style.display='none';
     document.getElementById('gr-body').style.display='block';
@@ -309,6 +341,7 @@ async function grLoad(){
     document.getElementById('kpi-active').textContent = t.active!=null?t.active:'—';
     document.getElementById('kpi-miss').textContent = ((t.failed||0)+(t.expired||0))||'—';
     document.getElementById('kpi-days').textContent = t.avg_days_to_done!=null?t.avg_days_to_done:'—';
+    grRenderExcluded(d.excluded_internal);
     grRenderAccounts(d.accounts||[]);
     grRenderTrend(d.trend||[]);
     grRenderHeat(d.heat||{});
@@ -367,7 +400,7 @@ async function grLoadContacts(){
     +(acct?('&account_id='+encodeURIComponent(acct)):'');
   var tb = document.getElementById('gr-ct-rows');
   try{
-    var r = await fetch(q);
+    var r = await window.apiFetch(q);
     if(r.status===403) return;
     var d = await r.json();
     grTotal = d.total||0;
@@ -475,7 +508,7 @@ function grClearSel(){
 // ── P1：一键启动后续链（链缺席时先导入种子链，幂等） ────────────
 async function grLoadChains(){
   try{
-    var r = await fetch('/api/workspace/workflow-chains');
+    var r = await window.apiFetch('/api/workspace/workflow-chains');
     if(!r.ok){ grChains = null; return; }
     var d = await r.json();
     grChains = {};
@@ -487,11 +520,11 @@ async function grStartChain(p, btn){
   try{
     if(grChains && !grChains[p.chain_id]){
       try{
-        await fetch('/api/workspace/workflow-chains/seed', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+        await window.apiFetch('/api/workspace/workflow-chains/seed', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
         await grLoadChains();
       }catch(_){}
     }
-    var r = await fetch('/api/workspace/conv/'+encodeURIComponent(p.conversation_id)+'/start-chain', {
+    var r = await window.apiFetch('/api/workspace/conv/'+encodeURIComponent(p.conversation_id)+'/start-chain', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({chain_id: p.chain_id, goal_id: p.goal_id})
     });
@@ -531,7 +564,7 @@ async function grObPreview(){
   var box = document.getElementById('gr-ob-preview');
   if(!text){ box.style.display='block'; box.textContent = GR_I18N.ob_empty_tpl; return; }
   try{
-    var r = await fetch('/api/unified-inbox/outreach/preview', {
+    var r = await window.apiFetch('/api/unified-inbox/outreach/preview', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({conversation_ids: grObIds()})
     });
@@ -563,7 +596,7 @@ async function grObExecute(){
   var btn = document.getElementById('gr-ob-exec-btn');
   btn.disabled = true; btn.textContent = GR_I18N.ob_sending;
   try{
-    var r = await fetch('/api/unified-inbox/outreach/execute', {
+    var r = await window.apiFetch('/api/unified-inbox/outreach/execute', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         filters: {conversation_ids: grObIds()},
@@ -678,7 +711,7 @@ async function grExportCsv(){
       +(tpl?('&template='+encodeURIComponent(tpl)):'')
       +(acct?('&account_id='+encodeURIComponent(acct)):'');
     try{
-      var r = await fetch(q);
+      var r = await window.apiFetch(q);
       if(!r.ok) break;
       var d = await r.json();
       all = all.concat(d.rows||[]);
@@ -724,7 +757,7 @@ async function grSend(){
   var btn = document.getElementById('gr-send-btn');
   btn.disabled = true;
   try{
-    var r = await fetch('/api/unified-inbox/send', {
+    var r = await window.apiFetch('/api/unified-inbox/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         platform: grSendRow.platform, account_id: grSendRow.account_id,
@@ -751,7 +784,7 @@ function grNext(){ if(grPage*grPageSize<grTotal){ grPage++; grLoadContacts(); } 
 
 async function grLoadTemplates(){
   try{
-    var r = await fetch('/api/goals/templates');
+    var r = await window.apiFetch('/api/goals/templates');
     if(!r.ok) return;
     var d = await r.json();
     var sel = document.getElementById('f-template');

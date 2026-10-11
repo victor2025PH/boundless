@@ -53,7 +53,7 @@ def _parse(raw: Any) -> Optional[Dict[str, Any]]:
         if isinstance(got, dict) and got.get("reason"):
             return got
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _parse", exc_info=True)
     return None
 
 
@@ -75,6 +75,7 @@ def record(store: Any, cid: str) -> Optional[Dict[str, Any]]:
     try:
         return _parse(store.get_app_setting(_key(cid), ""))
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in record", exc_info=True)
         return None
 
 
@@ -313,6 +314,7 @@ def cooldown_record(store: Any, cid: str, *, now: Optional[float] = None) -> Opt
     try:
         got = json.loads(str(store.get_app_setting(_ckey(cid), "") or "") or "{}")
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in cooldown_record", exc_info=True)
         return None
     if not isinstance(got, dict) or not got.get("category"):
         return None

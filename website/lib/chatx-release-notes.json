@@ -1,5 +1,377 @@
 [
   {
+    "version": "1.0.109",
+    "date": "2026-10-07",
+    "title": {
+      "zh": "正式安装包带上内测的人设、克隆声和相册",
+      "en": "The public installer now includes the internal personas, cloned voices, and albums"
+    },
+    "tags": [
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "这一版安装包带上了内测里的人设、克隆参考音和相册。新安装后打开人设页就能看到随包人设。",
+        "已经在用的人设、聊天记录和设置都保留，升级不会盖掉你改过的内容。",
+        "听克隆声：人设页 → 编辑该人设 → 语音区，参考音已经挂在人设上。",
+        "看相册：人设页里打开该人设的相册。",
+        "群成员提取还是工作台右侧「群成员提取」卡，打开管理台后按页面上的步骤走。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "This installer includes the internal personas, cloned-voice references, and albums. After a fresh install, open the Personas page to see the bundled personas.",
+        "Personas, chats, and settings you already have are kept. An upgrade does not overwrite what you changed.",
+        "To hear a cloned voice: Personas → edit that persona → the voice section. The reference audio is already attached.",
+        "To see the photos: open that persona's album from the Personas page.",
+        "Group member extraction is still the \"Group member extraction\" card on the right of the workbench. Open the console and follow the steps on the page.",
+        "All data is kept.",
+        "Download: https://bd2026.cc/download/chatx"
+      ]
+    }
+  },
+  {
+    "version": "1.0.107",
+    "date": "2026-10-02",
+    "title": {
+      "zh": "群成员获客：群里先接话再私聊，回复看得见",
+      "en": "Group outreach: reply in the group first, then DM - and see who replied"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "群成员获客改版：入口在工作台右侧「群成员提取」卡 → 打开管理台。页面顶部是步骤条：① 提取群成员 → ② 群里先接话 → ③ 私聊开口 → ④ 效果与成交；开口账号在页面中间的吸顶条里选一次，②③ 共用。",
+        "目标客户在人设里填：人设页 → 编辑开口号用的人设 →「目标客户（群成员获客）」，填意向关键词和排除词，或在「按行业套用」里选跨境电商、外贸 B2B、客服/私域、教育培训、本地生活一键追加，改完点保存。群发言命中意向词的人先开口，命中排除词的永远不碰；不填意向词，「群里先接话」不会列人。",
+        "群里先接话再私聊：第②步列出近 48 小时说过话、有意向的人，点「AI 拟稿」（或「AI 拟稿今天这批」）→ 看一眼改一改 →「发到群里…」，页面里再确认一次（显示回的是 TA 哪句话）才发。",
+        "一个人只在群里被接一次，在多个群也只接一次。",
+        "接话后 6 小时内不私聊 TA，之后 TA 排到私聊最前面，私信顺着群里那句开口；TA 若已在私聊队列里，开场会退回重拟（你手改过的保留），批准后发的模式需要重新批准。",
+        "私聊被隐私挡住的人，TA 之后主动私聊这个号会记为「群里接话后来找」，回复和成交都算这条线。",
+        "接话只回最近 48 小时的发言，隔一两天在第①步重新提取一次；列表为空时页面有「用这个号去重新提取」入口。",
+        "群里回你了：有人在群里回复了你那条接话，第②步下方「群里回你了（近 3 天）」会列出谁回的、回了什么，点「去群里接着聊」直达工作台里那个群。本人回的算作回应，之后的私聊开场会顺着 TA 回的那句聊。",
+        "效果看得见：第④步统计新增「群里接话」一层——接了多少人、多少人回应（群里回你 / 主动私聊来），以及「先在群里接过话再私聊」和「冷私聊」的回复率对比（不到 10 条会提示先别下结论）；成交名单会标出哪些来自群里接话。",
+        "老号申报号龄更稳：第③步「这个号的真实号龄」填了之后，按大的那个算每日额度；但要先在系统里发满 10 条私聊开口（近 7 天）才能切「全自动」，撞一次 Telegram 风控，申报自动作废、回到新号爬坡。",
+        "小智更诚实：与软件无关的闲聊（天气、做菜、写诗等）会如实说没有依据，不再拿一条沾边的帮助硬答；问「目标客户关键词在哪填」「群里有人回我在哪看」这类新功能也能答上。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Group-member outreach redesigned: open it from the \"Group member extraction\" card on the right of the workbench -> Open console. A step bar runs across the top: 1 Extract members -> 2 Reply in the group first -> 3 DM openers -> 4 Results and deals; pick the sending account once in the sticky bar mid-page and steps 2 and 3 share it.",
+        "Target customers live in the persona: Personas page -> edit the persona your outreach account uses -> \"Target customers (group member outreach)\". Fill intent keywords and exclusions, or append a one-click industry preset (cross-border e-commerce, B2B export, customer service, education, local services), then save. Members whose group messages hit a keyword go first; exclusion hits are never contacted; without keywords, \"Reply in the group first\" lists nobody.",
+        "Reply in the group, then DM: step 2 lists people with intent who spoke in the last 48 hours. Click \"AI draft\" (or \"AI-draft today's batch\"), edit, then \"Post in group...\", and confirm on the page (it shows which of their messages you are answering).",
+        "Each person is replied to in a group only once, even across several groups.",
+        "Nobody is DMed within 6 hours of a group reply; after that they move to the front of the DM queue and the DM picks up from the group reply. If they were already queued, the opener goes back for a redraft (your hand edits are kept) and needs approval again in approve-then-send mode.",
+        "People whose privacy settings block DMs: if they later DM this account it is recorded as \"came to us after a group reply\", and replies and deals are credited to it.",
+        "Only the last 48 hours of messages qualify, so re-extract in step 1 every day or two; an empty list offers \"Re-extract with this account\".",
+        "Replied to you in the group: when someone answers your group reply, step 2 shows it under \"Replied to you in the group (last 3 days)\" with who and what, and \"Continue in the group\" opens that group in the workspace. A reply from the member counts as a response, and the later DM opener picks up from it.",
+        "See the results: step 4 adds a group-reply layer (how many you replied to, how many responded in the group or came to DM) and compares the reply rate of DMs after a group reply against cold DMs (with a warning under 10 sends); the won list marks deals that came after a group reply.",
+        "Safer declared account age: \"Real account age\" in step 3 still sets the daily ramp from the larger value, but full auto only unlocks after 10 DM openers from this system in the last 7 days, and one Telegram flood limit voids the declaration and puts the account back on the new-account ramp.",
+        "A more honest Xiaozhi: off-topic chit-chat (weather, recipes, poems) now gets an honest \"no basis\" instead of a loosely related help article, and questions about the new features (\"where do I set target customer keywords\", \"where do I see group replies\") are answered.",
+        "All data is kept.",
+        "Download: https://bd2026.cc/download/chatx"
+      ]
+    }
+  },
+  {
+    "version": "1.0.106",
+    "date": "2026-10-02",
+    "title": {
+      "zh": "克隆声更像本人；人设可设「语音失败时改发文字」；切回自动后 AI 补答",
+      "en": "Cloned voices sound more like the person; persona option to send text if voice fails; AI catches up when you switch back to auto"
+    },
+    "tags": [
+      "feature",
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "克隆声更像本人：用 IndexTTS 克隆声时，带情绪的句子（开心、激动等）以前会把声音拉偏、听着像换了个人；现在情绪只做轻微润色，音色保持是你登记的那个人。无需设置，升级即生效。",
+        "人设新增「语音失败时」：打开人设页，编辑人设，语音区「语气表达」卡里第四个下拉（默认「跟随全局」，改完点保存）。",
+        "改发文字：语音合成失败（引擎掉线、超时等）时，照常把整段回复以文字发出去，客户不会收不到回复。适合销售、客服这类「语音只是加分项」的人设。",
+        "转待发（不发）：和以前一样，回复进工作台待发队列并弹窗提醒，等人放行。",
+        "用于 Telegram 自动回复。",
+        "切回自动后 AI 会补答：会话头从「人工」切回自动档（或开了自动接回、到点交还 AI）时，如果客户最后一条消息还没人回，AI 马上补写一条回复，不用等客户再发一句。只补私聊、24 小时内的消息；最后一条是你发的、或已有待发草稿时不补，不会重复。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Cloned voices sound more like the real person: with IndexTTS clone voices, emotional lines (happy, excited, etc.) used to pull the voice off so it sounded like someone else; emotion is now only a light touch and the timbre stays the person you enrolled. Nothing to set up, it works after the update.",
+        "New persona option \"If voice fails\": open the Personas page, edit a persona, and find the fourth dropdown in the \"Tone\" card of the voice section (defaults to \"Follow global\"; save after changing).",
+        "Send as text: when voice synthesis fails (engine offline, timeout, etc.) the full reply is sent as text, so the customer is never left without an answer. Good for sales or support personas where voice is a bonus.",
+        "Hold (don't send): same as before, the reply goes to the workbench queue with an alert until someone approves it.",
+        "Applies to Telegram auto-replies.",
+        "AI catches up when you switch back to auto: when the thread header goes from Manual back to an automatic mode (or auto hand-back returns it to AI) and the customer's last message is still unanswered, AI drafts a reply right away instead of waiting for the next message. Private chats only, messages within 24 hours; skipped when the last message is yours or a draft is already pending, so nothing is sent twice.",
+        "All data is kept.",
+        "Download: https://bd2026.cc/download/chatx"
+      ]
+    }
+  },
+  {
+    "version": "1.0.105",
+    "date": "2026-10-02",
+    "title": {
+      "zh": "人设回复形态：真人感、每条发语音、语音文字分开说；语音不再结巴；群成员同群开口",
+      "en": "Persona reply style: human feel, voice on every reply, split voice and text; no more stutter; same-group outreach"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "人设说话更像真人，每个人设可以单独设置回复方式。打开人设页，编辑人设，在语音区的「语气表达」卡里有三个新下拉（默认都是「跟随全局」，改完点保存）：",
+        "① 真人感：选「活泼」，语音里会带思考声（嗯……）、轻笑，偶尔自我纠正一下，听起来像真人在说话；选「自然」只改成口语，不加小动作；选「关闭」照稿念。",
+        "② 何时发语音：每条回复都发 / 对方发语音时才发 / 智能判断 / 不发语音。",
+        "③ 语音文字分开说：打开后，一条回复的前半句用语音说、后半句发文字，内容不重复，一次展示两种能力。",
+        "②③ 用于 Telegram 自动回复，需要语音页的 Telegram 语音回复总开关是开着的。",
+        "语音不再结巴：不会重复词，也不会在词组、人名、数字中间断开。",
+        "群成员同群开口：在群成员管理台（收件箱右栏「工具箱」→「群成员提取」→「打开管理台」）新增第④步「今日开口」。选号 → 「生成今日队列」→ 「AI 拟稿」（按这个号的人设和对方在群里说过的话写一句开场）→ 逐条修改或跳过 → 「批准」。可以选手动逐条发、批准后自动发，或全自动（只有注册满 14 天、近期没撞过风控的号才能开）。每号每天 5–10 人，只在白天发；72 小时没回音会补一句跟进，只补一次。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Personas sound more human, and each persona can set its own reply style. Open the Personas page, edit a persona, and find three new dropdowns in the \"Tone\" card of the voice section (all default to \"Follow global\"; save after changing):",
+        "(1) Human feel: \"Lively\" adds thinking sounds, light laughs and the odd self-correction so the voice sounds like a real person; \"Natural\" only makes it conversational; \"Off\" reads the text as written.",
+        "(2) When to send voice: every reply / only when they send voice / smart / never.",
+        "(3) Split voice and text: the first part of a reply is spoken and the rest is sent as text, without repeating, showing both abilities at once.",
+        "(2) and (3) apply to Telegram auto-replies and need the Telegram voice-reply master switch on the Voice page to be on.",
+        "No more stuttering in voice: no repeated words, and no breaks inside phrases, names or numbers.",
+        "Same-group outreach: the group-members console (inbox right rail → Toolbox → Group member extraction → Open console) gains step 4 \"Today's openers\". Pick an account → Build today's queue → AI draft (one opening line from this account's persona and what the person said in the group) → edit or skip each → Approve. Send manually one by one, auto-send after approval, or fully automatic (only for accounts registered 14+ days with no recent rate-limit hits). 5-10 people per account per day, daytime only; one follow-up after 72 hours of silence, once.",
+        "All your data is kept.",
+        "Download: https://bd2026.cc/download/chatx"
+      ]
+    }
+  },
+  {
+    "version": "1.0.104",
+    "date": "2026-10-01",
+    "title": {
+      "zh": "内测用户全功能开放：群成员提取等五项出厂即开",
+      "en": "Full feature set for beta users: group extraction and four more on by default"
+    },
+    "tags": [
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "内测用户全功能开放：群成员提取、人工操作台、团队协作、AI 与转接设置、驾驶舱这五项不用再去开发者工具逐个勾，装上这版就有。以前在开发者工具里勾过又消失的，这版会自动打开一次。",
+        "群成员提取怎么用：收件箱右栏切到「工具箱」，点「群成员提取」卡上的「打开管理台」。① 勾选用哪些在线的 Telegram 号拉，选目标群和每号每日上限，点「发起提取」；② 在「提取任务」看进度；③ 在「成员库」按群查看、搜名字、导出 CSV。只读提取，不会主动私聊任何人。",
+        "升级后不想看某一项，仍可在开发者工具「内部功能显隐」取消勾选，之后不会再被打开。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Full feature set for beta users: Group member extraction, Manual console, Team collaboration, AI & hand-off settings and Cockpit are on out of the box — no more ticking them one by one in Developer Tools. If you ticked one before and it vanished, this version turns it on once for you.",
+        "How to use Group member extraction: in the inbox right rail open Toolbox and click \"Open console\" on the Group member extraction card. (1) Pick the online Telegram accounts to pull with, choose the target group and the daily cap per account, click Start; (2) watch progress under Extraction jobs; (3) browse by group, search and Export CSV under Member DB. Read-only — it never messages anyone.",
+        "Don't want one of them? Untick it under Developer Tools → Internal feature visibility; it stays off afterwards.",
+        "Your data is kept."
+      ]
+    }
+  },
+  {
+    "version": "1.0.103",
+    "date": "2026-09-29",
+    "title": {
+      "zh": "开发者工具对所有用户可见",
+      "en": "Developer Tools is visible to every user"
+    },
+    "tags": [
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "开发者工具现在所有人都能在软件里打开。",
+        "用法：侧栏点「更多」，再点「开发者工具」（完整模式在「支持」里；也可以按 Ctrl+K 搜「开发者」）。输入开发者密码，在「内部功能显隐」勾选要显示的功能，然后刷新。人工操作台要退出智聊再打开一次。",
+        "数据都保留。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Developer Tools is now visible for everyone inside the app.",
+        "How: in the sidebar open More, then Developer Tools (under Support in full mode; or press Ctrl+K and search Developer). Enter the developer password, tick the features under Internal feature visibility, then refresh. The manual console needs ChatX closed and opened once.",
+        "Your data is kept."
+      ]
+    }
+  },
+  {
+    "version": "1.0.102",
+    "date": "2026-09-29",
+    "title": {
+      "zh": "客服回复先查知识库，未命中可一键补条目",
+      "en": "Support replies check the knowledge base; one click to add a missed entry"
+    },
+    "tags": [
+      "feature",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "做客服：人设工作室 → 打开人设 →「工作类型」选客服或销售 → 保存。客服 / 销售每条回复先查知识库，命中按条目答；没查到先回一句固定话术，再追问会标需人工。",
+        "知识库没答上：工作台草稿条点「知识库 · 未命中」，标题和触发词已按客户原话填好，写好示例回复保存即向量化这一条。",
+        "看这个号在干什么：工作台左侧点账号，菜单里显示人设、工作类型、知识库必查还是闲聊不查、档位。",
+        "这台机器做什么生意：自动回复设置第一张卡，选陪伴或销售。不必进开发者模式。人设标成客服后仍按人设查库。",
+        "数据都保留。升级后请重启一次工作台。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Support work: Persona Studio → open the persona → set Work type to Support or Sales → save. Support / sales replies check the knowledge base first and answer from matching entries; a miss sends one fixed line, a repeat question is flagged for a human.",
+        "If the knowledge base missed: click Knowledge base · no match on the draft bar. Title and triggers are pre-filled from the customer's words; write the sample reply and save to vectorize that entry.",
+        "See what an account is doing: click the account on the left. The menu shows persona, work type, whether the knowledge base is required, and automation mode.",
+        "What this machine is for: first card on Auto-reply Settings, Companion or Sales. Developer mode is not needed. A Support persona still queries the knowledge base.",
+        "Data is kept. Restart the workbench once after upgrading."
+      ]
+    }
+  },
+  {
+    "version": "1.0.101",
+    "date": "2026-09-28",
+    "title": {
+      "zh": "知识库可导入并向量化，外网也能用无限制 ChatX",
+      "en": "Knowledge import and vectorization, unrestricted ChatX on remote installs"
+    },
+    "tags": [
+      "feature",
+      "fix"
+    ],
+    "highlights": {
+      "zh": [
+        "知识库可以按模板导入：打开知识库，点顶栏「导入」，先下载 Excel 模板照着填，看预览再确认。导错了到「更多 → 导入记录」整批撤销。",
+        "导入或新建之后点「更多 → 向量化」（导入完成页也有这个按钮），等进度走完。已经向量化过的条目会跳过，不用重新导入，也不用重装。",
+        "无限制：打开会话，点输入框上方「模型」，选「ChatX聊天模型」（标着无限制，路径写「SVIP企业搭建」）。外网和办公室一样用这一档。点「模式」可以改回标准，或再调上下文、力度、思考。",
+        "Telegram 用手机号登录后，左侧会出现这个账号，和扫码一样。如果侧边栏还是空的，升级后用手机号再登录一次。",
+        "数据都保留。升级后请重启一次工作台。",
+        "下载：https://bd2026.cc/download/chatx"
+      ],
+      "en": [
+        "Import a knowledge sheet: open Knowledge, click Import, download the Excel template, preview, then confirm. Undo a bad batch from More, then Import history.",
+        "After import or a new entry, open More, then Vectorize (the import-done page has the same button) and wait for the bar. Entries that already have vectors are skipped. Do not re-import and do not reinstall.",
+        "Unrestricted: open a chat, click Model above the composer, and choose ChatX chat model. It is marked Unrestricted and the path reads SVIP企业搭建. Remote installs get the same row as the office machine.",
+        "Mode can switch back to Standard, or adjust context, effort and thinking.",
+        "A Telegram phone login shows the account in the left list, the same as a QR login. If the sidebar is still empty, sign in with the phone number once more after upgrading.",
+        "Data is kept. Restart the workbench once after upgrading."
+      ]
+    }
+  },
+  {
+    "version": "1.0.100",
+    "date": "2026-09-26",
+    "title": {
+      "zh": "预置声试听修复 + 登录不再 2 小时掉线",
+      "en": "Preset-voice preview fix + sign-in no longer drops after 2 hours"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "修复预置声试听失败：选日语、英语等外语预置声时，试听会自动换成与音色同语种的试听句，不再提示「文本语种与将念出的语种不一致」",
+        "登录不再 2 小时自动失效：只要在使用就会自动续期；桌面端偶遇登录过期时会在后台自动重新登录，不再反复弹出「登录已失效」",
+        "数据与平台登录不受影响；升级后请重启一次工作台"
+      ],
+      "en": [
+        "Fixed preset-voice preview failures: previewing a Japanese, English or other non-Chinese preset voice now uses a sample sentence in that voice's language instead of failing with a language-mismatch error",
+        "Sign-in no longer expires after 2 hours: the session renews automatically while you keep working, and the desktop app silently signs back in if the session does expire, so the repeated \"session expired\" banner is gone",
+        "Data and platform logins are unaffected; please restart the workbench once after upgrading"
+      ]
+    }
+  },
+  {
+    "version": "1.0.98",
+    "date": "2026-09-24",
+    "title": {
+      "zh": "LINE 支持发送图片与语音：公共版默认开启，升级自动生效",
+      "en": "LINE can now send images and voice notes: on by default in the public edition, enabled automatically on upgrade"
+    },
+    "tags": [
+      "feature"
+    ],
+    "highlights": {
+      "zh": [
+        "LINE 账号支持发送图片与语音：公共版此前 LINE 只能收发文字、工作台提示「未开放发媒体」，本版起默认开启，坐席与 AI 都可以在 LINE 会话里发图、发语音",
+        "已安装的旧版本升级后自动开启，无需手动改配置；如曾在设置中主动关闭过，保持关闭不变",
+        "数据、各平台登录状态一律不受影响；升级后请重启一次工作台"
+      ],
+      "en": [
+        "LINE accounts can now send images and voice notes: the public edition previously limited LINE to text and the workbench showed \"media sending not enabled\"; it is now on by default for both agents and AI replies in LINE conversations",
+        "Existing installs enable it automatically on upgrade with no manual configuration; if you had explicitly turned it off, it stays off",
+        "Data and platform logins are unaffected; please restart the workbench once after upgrading"
+      ]
+    }
+  },
+  {
+    "version": "1.0.97",
+    "date": "2026-09-23",
+    "title": {
+      "zh": "语音语气可调：人设「语气表达」四档 + 会话级覆盖；工具箱语音报错真因、外语译文不再夹中文；人设「应用到…」补全微信 PC 等全部平台",
+      "en": "Adjustable voice expressiveness: four persona levels + per-conversation override; real voice-send error reasons, no Chinese left in translations; persona apply-to covers every connected platform"
+    },
+    "tags": [
+      "feature",
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "语音更「像人」可调：人设页新增「语气表达」四档（克制 / 自然 / 生动 / 夸张），配合「基线情绪」设置，控制语音里笑声、感叹与情绪起伏的强弱；默认「自然」，觉得情感表达太满就调低一档，即刻生效",
+        "语音预览可对比：人设页语音预览支持同一段话在不同档位下试听对比，选好再保存",
+        "单个会话可临时覆盖：工作台语音面板可为当前客户单独指定档位（不改人设），并显示当前生效档位与来源（会话 / 人设 / 全局）；点「👎」可一键降一档",
+        "语音发送与预览带说明：发送记录与预览结果标出本次使用的表达档位与情绪，便于回看为什么这条语音是这个语气",
+        "工具箱「发送语音给对方」失败提示不再显示 [object Object]，改为直接给出真实原因（平台不支持 / 渠道断开 / 发送受限等）",
+        "中→英等外语翻译不再夹中文：译文若残留「智聊」「西贡十五日」等中文专名，会自动带提示定向重译一次，专名译出或音译",
+        "人设「应用到…」弹窗补全所有已接入平台：微信 PC、微信客服、抖音、QQ 机器人、网页客服等账号均可指定人设；按平台分组、平台名中文化，并显示每个账号在线 / 离线 / 待登录 / 异常等状态，微信 PC 多窗口逐行可辨",
+        "数据、各平台登录状态一律不受影响；升级后请重启一次工作台"
+      ],
+      "en": [
+        "Adjustable voice expressiveness: the persona page gains four levels (restrained / natural / vivid / dramatic) plus a baseline-emotion setting that controls how much laughter, exclamation and emotional swing the voice carries; default is natural - drop one level if it feels too intense, effective immediately",
+        "Compare voice previews: preview the same line at different levels side by side before saving",
+        "Per-conversation override: the workbench voice panel can set a level for the current customer only (persona untouched), shows the effective level and its source (conversation / persona / global), and a thumbs-down lowers it one level",
+        "Explainable sends: send records and previews show the expressiveness level and emotion used, so you can see why a voice note sounds the way it does",
+        "Toolbox \"send voice to customer\" failures no longer show [object Object]; the real reason (platform unsupported / channel disconnected / sending restricted) is displayed",
+        "Translations into English and other non-Chinese languages no longer leave Chinese proper nouns behind: leftover Chinese is re-translated once with targeted hints so names are translated or transliterated",
+        "Persona \"apply to...\" now lists every connected platform: WeChat PC, WeChat Customer Service, Douyin, QQ bot, web chat and more can be assigned a persona; accounts are grouped by platform with localized names and show online / offline / awaiting login / error status, with WeChat PC windows listed individually",
+        "Data and platform logins are unaffected; please restart the workbench once after upgrading"
+      ]
+    }
+  },
+  {
+    "version": "1.0.96",
+    "date": "2026-09-22",
+    "title": {
+      "zh": "「不误发、不编造」：出站真实性专项收口——发图按需、事实核对、记忆只用亲口所述、翻译不够稳不直发；微信 PC 版双开互不串扰",
+      "en": "Send only what is true: outbound truth controls - photos on request only, fact gate, stated-only memory, no low-confidence translations; WeChat PC dual-account isolation"
+    },
+    "tags": [
+      "fix",
+      "improve"
+    ],
+    "highlights": {
+      "zh": [
+        "发图更可靠：客户点名要某个场景的照片（比如「发张你在海边的」），相册里没有对应的就如实说没有，不再拿一张无关的自拍或别的图顶上；只有客户明确要图、AI 先前承诺过要发、或客户接受了「给你看张照片」的提议时，才会从通用相册挑图（Bug 群 #332 / #339）",
+        "AI 不再「编」：出站前多一道事实核对——客户没说过的个人情况、没发生过的共同经历、没有依据的第三方消息和「我给你安排好了」式的空头承诺，一律先删掉重写，删不干净就转人工处理而不是发出去（Bug 群 #341 / #342）",
+        "主动搭话只用客户亲口说过的记忆：AI 主动开场、关怀、复聊时引用的记忆，只取客户明确讲过的内容，AI 自己推断出来的印象不再当事实说出口；同一个问题（含天气类问句）24 小时内不会重复问",
+        "固定开场词治理：连续用同一句感叹开场（如「Ha,」）会被自动摘掉；开场复读累计达到阈值会在后台告警，便于及时发现生成质量回退（Bug 群 #340）",
+        "翻译更稳：发给外语客户前，译文置信度不够的不再直接发出，改为重译或转人工；中等置信度按目标语言分桶记录，便于逐语种复核（Bug 群 #343，印地语等小语种重点关注）",
+        "运营下指令要图但相册没货：不再让 AI 对客户改口，改为在坐席侧留下提示，由人来补图或调整；成功补发后提示自动清除",
+        "微信 PC 版多账号：同一台机器双开两个微信互不串扰——每个账号独立驱动、绑定登录窗口与微信号，串号自动切窗，两号发送不再互相排队；账号卡片新增 24 小时活动报告与时间线；全自动节奏对齐自然档",
+        "其他：安装器长路径补删日志收敛（不再被被占用文件的祖先链刷成 failed）；网关实例 ID 解析跨平台修复；语音服务探针令牌来源统一",
+        "数据、各平台登录状态一律不受影响；升级后请重启一次工作台，让新的出站核对生效"
+      ],
+      "en": [
+        "More reliable photo sending: when a customer asks for a specific scene (\"send one of you at the beach\") and the album has no match, the AI now says so honestly instead of substituting an unrelated selfie or random picture; the generic album is only used when the customer explicitly asks for a photo, the AI previously promised one, or the customer accepted an offer to see one (bug group #332 / #339)",
+        "No more made-up facts: a fact gate now runs before every outgoing message - personal details the customer never stated, shared experiences that never happened, unsupported third-party claims and \"I've arranged it for you\" style empty promises are stripped and the reply rewritten; if that fails the conversation is routed to a human instead of being sent (bug group #341 / #342)",
+        "Proactive messages only use memories the customer actually stated: openers, care messages and re-engagement drafts draw only on what the customer explicitly said, never on impressions the AI inferred on its own; the same question (including weather questions) is not asked twice within 24 hours",
+        "Fixed-opener control: repeating the same interjection opener (e.g. \"Ha,\") is stripped automatically, and a repeat-count alarm surfaces generation regressions early (bug group #340)",
+        "Steadier translation: low-confidence translations are no longer sent as-is to foreign-language customers - they are retranslated or handed to a human; medium-confidence sends are recorded per target language for review (bug group #343, with extra attention to Hindi and other smaller languages)",
+        "Operator-directed photo requests with no matching asset no longer make the AI change its story to the customer; a seat-side note is left for a human to add the photo or adjust, and clears automatically once a photo is sent",
+        "WeChat PC multi-account: two WeChat instances on one machine no longer interfere - each account has its own driver bound to its login window and WeChat ID, mis-routed windows are re-targeted automatically, and sends from the two accounts no longer queue behind each other; account cards gain a 24-hour activity report and timeline; full-auto pacing aligned to the natural profile",
+        "Also: installer long-path cleanup logging no longer reports locked-file ancestors as failures; cross-platform fix for gateway instance-ID parsing; unified token source for the voice-service probe",
+        "Data and platform logins are unaffected; restart the workbench once after upgrading so the new outbound checks take effect"
+      ]
+    }
+  },
+  {
     "version": "1.0.95",
     "date": "2026-09-21",
     "title": {

@@ -1,0 +1,84 @@
+# 博彩运营商 · 知识库种子（internal_only）。只放会员服务与合规条目；不放赔率、投注技巧、促销话术。
+
+version: 1
+entries:
+- category: 规则条款
+  title: 年龄与资格
+  triggers:
+  - 年龄
+  - 几岁可以
+  - 未成年
+  - age
+  - how old
+  - ilang taon
+  scenario: 客户问参与资格
+  steps: 说明最低年龄与 KYC 要求
+  principles: 未满年龄一律拒绝服务
+  example_reply_zh: 我们的服务只面向年满 {min_age} 岁、已完成实名认证的成年人。
+- category: 账户会员
+  title: 登录与密码重置
+  triggers:
+  - 登录不上
+  - 忘记密码
+  - login
+  - forgot password
+  - hindi maka-login
+  scenario: 客户登录问题
+  steps: 引导到官网自助重置；不在聊天里收密码或验证码
+  principles: 绝不索要密码 / OTP
+  example_reply_zh: 可以在官网登录页点「忘记密码」自助重置。请不要把密码或验证码发给任何人，包括我们。
+- category: 价格与支付
+  title: 充值与提款咨询（转收银）
+  triggers:
+  - 余额
+  - 提款
+  - 到账
+  - balance
+  - withdraw
+  - deposit
+  - cash out
+  - pera ko
+  scenario: 客户问余额 / 充值 / 提款
+  steps: 按余额红线：只发转收银话术并转人工
+  principles: AI 不报不确认任何金额与时效
+  example_reply_zh: 账户和资金的问题需要收银同事在后台核实，我已经帮你转过去了，请稍等。
+  forbidden: 报余额、承诺到账时间
+- category: 活动优惠
+  title: 活动条款查询
+  triggers:
+  - 活动规则
+  - 条款
+  - terms
+  - promo terms
+  - mechanics
+  scenario: 客户问活动规则
+  steps: 给官方条款链接；年龄未核实或在自我排除名单的不回复活动内容
+  principles: 不主动推活动
+  example_reply_zh: 活动条款以官网公布为准：{terms_link}。
+- category: 规则条款
+  title: 负责任博彩与自我排除
+  triggers:
+  - 戒
+  - 限额
+  - 冷静期
+  - 自我排除
+  - self-exclusion
+  - limit
+  - tumigil
+  scenario: 客户想限制或停止
+  steps: 提供限额 / 冷静期 / 自我排除入口并转人工
+  principles: 不劝阻、不挽留
+  example_reply_zh: 你可以随时设置存款限额、冷静期或自我排除，我请同事帮你办理：{rg_link}
+- category: 规则条款
+  title: 牌照与公司信息
+  triggers:
+  - 牌照
+  - 合法吗
+  - license
+  - licensed
+  - PAGCOR
+  - lisensya
+  scenario: 客户问是否持牌
+  steps: 给出牌照编号与监管机构公开信息
+  principles: 只给真实公开信息
+  example_reply_zh: '{operator_name} 持有 {regulator} 颁发的牌照，编号 {license_no}，可在监管机构官网查询。'

@@ -253,17 +253,56 @@ LANG_LABELS: Dict[str, str] = {
 }
 
 
+# 预置声试听稿（按音色语种）：试听文本必须与音色同语种，否则语种一致性闸
+# （tts_pipeline._lang_consistency）判 lang_mismatch 不出声。刻意不含人名——
+# 中文人名混进外语句子会把检测拉偏。
+PREVIEW_SAMPLES: Dict[str, str] = {
+    "zh": "你好呀，很高兴认识你！今天想聊点什么？",
+    "yue": "你好呀！我哋終於見面喇，好開心㗎！今日你想同我傾啲咩嘢呀？",
+    "en": "Hi there, it's so nice to meet you! What would you like to chat about today?",
+    "ja": "こんにちは、はじめまして！今日はどんなことをお話ししましょうか？",
+    "ko": "안녕하세요, 만나서 정말 반가워요! 오늘은 어떤 이야기를 나눠 볼까요?",
+    "th": "สวัสดีค่ะ ยินดีที่ได้รู้จักนะ วันนี้อยากคุยเรื่องอะไรดี",
+    "vi": "Xin chào, rất vui được làm quen với bạn! Hôm nay bạn muốn trò chuyện về điều gì?",
+    "id": "Halo, senang sekali berkenalan denganmu! Hari ini mau ngobrol tentang apa?",
+    "ms": "Hai, gembira sangat dapat berkenalan dengan anda! Hari ini nak berbual tentang apa?",
+    "es": "¡Hola, qué gusto conocerte! ¿De qué te gustaría hablar hoy?",
+    "fr": "Bonjour, ravie de faire ta connaissance ! De quoi aimerais-tu parler aujourd'hui ?",
+    "de": "Hallo, schön, dich kennenzulernen! Worüber möchtest du heute sprechen?",
+    "it": "Ciao, che piacere conoscerti! Di cosa ti piacerebbe parlare oggi?",
+    "pt": "Olá, que bom te conhecer! Sobre o que você gostaria de conversar hoje?",
+    "ru": "Привет, очень рада знакомству! О чём тебе хотелось бы поговорить сегодня?",
+    "ar": "مرحبا، سعيدة جدا بالتعرف عليك! عن ماذا تحب أن نتحدث اليوم؟",
+    "hi": "नमस्ते, आपसे मिलकर बहुत खुशी हुई! आज आप किस बारे में बात करना चाहेंगे?",
+    "tr": "Merhaba, tanıştığıma çok sevindim! Bugün ne hakkında konuşmak istersin?",
+    "fil": "Kumusta, ikinagagalak kitang makilala! Ano ang gusto mong pag-usapan ngayon?",
+    "km": "សួស្តី រីករាយណាស់ដែលបានស្គាល់អ្នក! ថ្ងៃនេះចង់និយាយអំពីអ្វីដែរ?",
+    "he": "שלום, כל כך נעים להכיר אותך! על מה תרצה לדבר היום?",
+    "el": "Γεια σου, χαίρομαι πολύ που σε γνωρίζω! Για τι θα ήθελες να μιλήσουμε σήμερα;",
+    "nl": "Hallo, wat leuk om je te leren kennen! Waar wil je vandaag over praten?",
+    "pl": "Cześć, bardzo miło cię poznać! O czym chciałbyś dziś porozmawiać?",
+    "sv": "Hej, så roligt att träffa dig! Vad vill du prata om i dag?",
+    "uk": "Привіт, дуже рада знайомству! Про що тобі хотілося б поговорити сьогодні?",
+}
+
+
+def preview_sample(lang: Any) -> str:
+    """音色语种 → 试听稿；目录外语种返回空串（调用方用界面语言的默认稿）。"""
+    return PREVIEW_SAMPLES.get(normalize_lang(lang), "")
+
+
 def catalog_payload() -> Dict[str, Any]:
     """给前端选择器的整包（语种表 + 全部音色 + openai 表）。"""
     return {
         "languages": [{"code": c, "label": l} for c, l in languages()],
         "edge_voices": [dict(_BY_ID[vid]) for vid, *_ in _V],
         "openai_voices": [{"id": k, "gender": g} for k, g in OPENAI_VOICES.items()],
+        "preview_samples": dict(PREVIEW_SAMPLES),
     }
 
 
 __all__ = [
-    "LANG_LABELS", "OPENAI_VOICES", "catalog_payload", "edge_voice_lang",
+    "LANG_LABELS", "OPENAI_VOICES", "PREVIEW_SAMPLES", "catalog_payload", "edge_voice_lang",
     "is_known_edge_voice", "languages", "normalize_gender", "normalize_lang",
-    "pick_edge_voice", "voice_meta", "voices_for",
+    "pick_edge_voice", "preview_sample", "voice_meta", "voices_for",
 ]

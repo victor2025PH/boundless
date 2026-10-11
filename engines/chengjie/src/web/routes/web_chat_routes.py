@@ -358,7 +358,7 @@ def register_web_chat_routes(app, *, config_manager=None) -> None:
             try:
                 is_new = store.get_conversation(cid) is None
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_web_chat_routes.chat_message", exc_info=True)
         try:
             service.record_message(store, vid, text=text, direction="in")
         except Exception:
@@ -371,9 +371,9 @@ def register_web_chat_routes(app, *, config_manager=None) -> None:
                 try:
                     store.set_automation_mode(cid, service.default_mode)
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_web_chat_routes.chat_message", exc_info=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_web_chat_routes.chat_message", exc_info=True)
         _funnel_on_message(_contact_hooks(request), service, vid, text, direction="in")
         _publish_inbox_event(cid, service, vid, text, direction="in")
 
@@ -383,7 +383,7 @@ def register_web_chat_routes(app, *, config_manager=None) -> None:
             try:
                 mode = store.get_automation_mode(cid) or service.default_mode
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_web_chat_routes.chat_message", exc_info=True)
         if mode == "auto_ai":
             asyncio.create_task(run_web_ai_reply(
                 skill_manager=_skill_manager(request), inbox_store=store,
@@ -437,7 +437,7 @@ def register_web_chat_routes(app, *, config_manager=None) -> None:
                                  "direction": m.get("direction") or "in",
                                  "ts": m.get("ts") or 0})
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_web_chat_routes.chat_history", exc_info=True)
         return JSONResponse({"ok": True, "messages": msgs})
 
     # ── 页面 / 嵌入脚本 ──────────────────────────────────────
@@ -458,7 +458,7 @@ def register_web_chat_routes(app, *, config_manager=None) -> None:
                 from src.licensing import get_license_manager
                 lic = get_license_manager().status()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_web_chat_routes._brand", exc_info=True)
             cfg = (config_manager.config or {}) if config_manager else {}
             return get_branding(cfg, lic)
         except Exception:

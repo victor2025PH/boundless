@@ -40,6 +40,38 @@ from src.web.web_i18n import tr
 logger = logging.getLogger(__name__)
 
 
+def registry_runtime_mode(platform: str, mode: str) -> str:
+    """登录向导形态 → 注册表运行形态。
+
+    telegram 的 ``phone`` 只是验证码向导；会话与扫码一样走 pyrogram protocol worker。
+    写成 phone 编排器没有 telegram:phone 工厂，账号登上后侧边栏不出现。
+    """
+    p = str(platform or "").lower()
+    m = str(mode or "").strip().lower()
+    if p == "telegram" and m == "phone":
+        return "protocol"
+    return m or "device"
+
+
+def _kick_orchestrator_after_login() -> None:
+    """登录成功后催一次编排器巡检，让新号马上进 platform_status（侧边栏账号条）。
+
+    不催要等下一轮 15s 巡检才 start。``create_task`` 不 await：sync 会拉起 worker，
+    Telegram 握手是秒级，不能卡住 2.5s 一轮的登录轮询。只用已在跑的单例，
+    避免空配置误建编排器。
+    """
+    try:
+        import asyncio
+        from src.integrations.account_orchestrator import get_orchestrator_if_running
+        orch = get_orchestrator_if_running()
+        if orch is None:
+            return
+        task = asyncio.create_task(orch.sync())
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+    except Exception:
+        logger.debug("登录后催编排器巡检失败（等 15s 兜底）", exc_info=True)
+
+
 def _funnel(sess, stage: str, *, reason_code: str = "") -> None:
     """记一次登录漏斗分段（每会话每段只记一次）。
 
@@ -150,12 +182,14 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         """登录成功后把账号 + mode + 代理 + 指纹 + 备注落库，并把代理标记为已分配。"""
         try:
             get_account_registry().upsert(
-                platform, account_id, mode=getattr(sess, "mode", "device"),
+                platform, account_id,
+                mode=registry_runtime_mode(platform, getattr(sess, "mode", "device")),
                 status="online",
                 label=(getattr(sess, "label", "") or None),
                 proxy_id=(getattr(sess, "proxy_id", "") or None),
                 fingerprint_id=(getattr(sess, "fingerprint_id", "") or None),
             )
+            _kick_orchestrator_after_login()
             if getattr(sess, "proxy_id", ""):
                 get_proxy_pool().assign(sess.proxy_id, f"{platform}:{account_id}")
         except Exception:
@@ -456,7 +490,8 @@ def register_platform_login_routes(app, *, api_auth, config_manager=None) -> Non
         if account_id:
             try:
                 get_account_registry().upsert(
-                    platform, account_id, mode=mode, status="pending",
+                    platform, account_id,
+                    mode=registry_runtime_mode(platform, mode), status="pending",
                     label=cfg_label or None, proxy_id=cfg_proxy_id or None,
                     fingerprint_id=fingerprint_id or None)
                 if cfg_proxy_id:

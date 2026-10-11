@@ -64,6 +64,8 @@ SHARED_HOST_GROUP = f"{HOST_GROUP_PREFIX}:{DEFAULT_HOST_TAG}"
 #: advocate 种草角缺位＝这场戏没有落点，等于白演；asker 不抛痛点，advocate 只能硬广；
 #: skeptic 撑可信度（一边倒好评最假）；bystander 附和角锦上添花，第一个被砍。
 SLOT_PRIORITY: Dict[str, int] = {
+    # 向导是公开身份，开口预算先留给它。没声明这个槽的剧本不受影响。
+    "guide": -1,
     "advocate": 0,
     "asker": 1,
     "skeptic": 2,
@@ -401,6 +403,27 @@ def _blocked_reason(
     return BLOCKED_ROLE
 
 
+def _pin_account(
+    pool: Sequence[Dict[str, str]],
+    account_id: str,
+    used_accounts: Set[str],
+    used_groups: Set[str],
+) -> Optional[Dict[str, str]]:
+    """把向导钉在指定账号上。号不在池里、或指纹组已被占用，返回 None，不另找人。"""
+    want = _s(account_id)
+    if not want:
+        return None
+    for cand in pool:
+        if cand.get("account_id") != want:
+            continue
+        if cand["account_key"] in used_accounts:
+            return None
+        if cand["fingerprint_group"] in used_groups:
+            return None
+        return cand
+    return None
+
+
 def cast_roles(
     playbook: Playbook,
     candidates: Sequence[Dict[str, Any]],
@@ -415,6 +438,7 @@ def cast_roles(
     role_counts: Optional[Mapping[Tuple[str, str], int]] = None,
     role_limit: int = NORMAL_ROLE_CO,
     prior_slots: Optional[Mapping[str, str]] = None,
+    guide_account: str = "",
 ) -> Casting:
     """把剧本角色槽分配给候选账号，返回 :class:`Casting`。
 
@@ -473,7 +497,11 @@ def cast_roles(
         :meth:`~src.companion.group_show.store.GroupShowStore.prior_slots` 派生。
         传了就**群内粘住角色**：上次演过本槽的号优先、在本群演过别的槽的号最后
         （防「上一场泼冷水、下一场安利」的当群翻脸，2026-07-27 双号灰度实录）。
-        跨群轮转不受影响——这本台账是按目标群查的。不传＝无行为变化。
+        跨群轮转不受影响——这本台账是按目标群查的。        不传＝无行为变化。
+    guide_account:
+        向导槽钉死的账号 id。剧本声明了 ``guide`` 且这里非空时，**只**用这个号，
+        不在号池里就让向导槽空着，绝不换一个号顶上（顶上的号会用公开身份邀请私聊）。
+        空串＝不钉（排练预览仍可按优先级挑一个号演向导；真发路径会在开演前拒绝）。
 
     硬约束（任何情况下都成立）
     --------------------------
@@ -502,25 +530,35 @@ def cast_roles(
         cap = max(0, _int(max_speakers))
 
         blocked: List[Tuple[str, str]] = []
+        pinned_guide = _s(guide_account)
         for slot in slot_fill_order(playbook):
-            if cap and len(chosen) >= cap:
+            # 向导不受开口预算砍人：预算要砍的是帮手，不是那个固定公开号。
+            if cap and len(chosen) >= cap and slot.strip().lower() != "guide":
                 # 开口人数已到预算：**仍然走完循环**，让剩下的槽如实进 unfilled，
                 # 而不是提前 break——导演要能看出「这场是被预算压成几个人的」。
                 blocked.append((slot, BLOCKED_BUDGET))
                 continue
-            cand = _pick_for_slot(
-                pool, slot, playbook_id, used_accounts, used_groups,
-                cast_genders, gender_by_persona, co_performance, chosen_ids,
-                _int(co_limit), _s(seed), role_counts, _int(role_limit),
-                prior_slots=prior_slots,
-            )
+            if slot.strip().lower() == "guide" and pinned_guide:
+                cand = _pin_account(
+                    pool, pinned_guide, used_accounts, used_groups)
+            else:
+                cand = _pick_for_slot(
+                    pool, slot, playbook_id, used_accounts, used_groups,
+                    cast_genders, gender_by_persona, co_performance, chosen_ids,
+                    _int(co_limit), _s(seed), role_counts, _int(role_limit),
+                    prior_slots=prior_slots,
+                )
             if cand is None:
                 # 号已用尽（或剩下的全被指纹/闸门锁死）——后面的低优先级槽多半也填不上，
                 # 但仍然走完循环，让 unfilled 如实反映全部空槽，并逐槽记下原因：
                 # 四种空槽长得一样、处置却相反，糊在一起运营只能靠猜。
-                blocked.append((slot, _blocked_reason(
-                    pool, slot, used_accounts, used_groups, co_performance,
-                    chosen_ids, _int(co_limit), role_counts, _int(role_limit))))
+                # 钉死的向导号不在可用池里时，不要改问「主推到线没有」——号在，只是不是那个号。
+                if slot.strip().lower() == "guide" and pinned_guide:
+                    blocked.append((slot, BLOCKED_POOL))
+                else:
+                    blocked.append((slot, _blocked_reason(
+                        pool, slot, used_accounts, used_groups, co_performance,
+                        chosen_ids, _int(co_limit), role_counts, _int(role_limit))))
                 continue
             chosen[slot] = cand
             used_accounts.add(cand["account_key"])
@@ -602,8 +640,13 @@ def validate_casting(
             for slot in sorted({s for s in filled if s and s not in declared}):
                 problems.append(f"演员表出现剧本未声明的角色槽: {slot}")
 
-        # ④ 核心角缺位＝这场戏没有落点，白演还白担风险
-        if "advocate" not in filled:
+        # ④ 核心角缺位＝这场戏没有落点，白演还白担风险。
+        #    声明了向导的剧本，落点是向导而不是种草角（种草角可以不出现）。
+        #    没声明向导的旧剧本仍要求 advocate，文案保持原样。
+        if "guide" in declared:
+            if "guide" not in filled:
+                problems.append("核心角色 guide 未配上——向导缺位，这场戏没有落点")
+        elif "advocate" not in filled:
             if "advocate" in declared:
                 problems.append("核心角色 advocate 未配上——种草角缺位，这场戏没有落点")
             else:

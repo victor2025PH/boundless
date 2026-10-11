@@ -88,11 +88,11 @@
      此前这里写死 zh:en 三元——繁体坐席会被硬塞英文副驾（zh_hant P3 修复）。
      语言切换走整页刷新(wsToggleLang→/set_lang)，组件随新 LANG 重渲，无需热切换。 -->
 <script>window.CP_LANG = window.WS_LANG || 'zh';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260919a"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20261008a"></script>
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
-<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260912b"></script>
+<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20261008a"></script>
 {% endif %}
-<script src="/copilot/client/copilot-client.js?v=20260912q21"></script>
+<script src="/copilot/client/copilot-client.js?v=20260922a"></script>
 <script src="/copilot/sidebar-chrome.js?v=20260828b"></script>
 <script src="/copilot/components/cp-panel-base.js?v=20260817t"></script>
 <script src="/copilot/components/cp-rel-stage.js?v=20260905a"></script>
@@ -100,7 +100,7 @@
 <script src="/copilot/components/cp-collab.js?v=20260822c"></script>
 <script src="/copilot/components/cp-chain-exec.js?v=20260905b"></script>
 <script src="/copilot/components/cp-draft.js?v=20260912q21"></script>
-<script src="/copilot/components/cp-voice.js?v=20260919a"></script>
+<script src="/copilot/components/cp-voice.js?v=20260922a"></script>
 <script src="/copilot/components/cp-xlate-tools.js?v=20260912q21"></script>
 <script src="/copilot/components/cp-goal.js?v=20260912a"></script>
 <script src="/copilot/components/cp-origin.js?v=20260820a"></script>
@@ -655,6 +655,8 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
     <div class="buried-hint" id="buried-hint" style="display:none;" role="button" tabindex="0"
          onclick="_gotoBuriedArchive()"
          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();_gotoBuriedArchive();}"></div>
+    {# 会话语言仍未知的存量。计数来自全库，不靠当前列表窗口。不在这里执行回填。 #}
+    <div class="buried-hint" id="lang-unknown-hint" style="display:none;" role="status"></div>
     {# #222（M-4 A）群/频道视图说明条：AutoDraft skip_group_chats 开着时，群/频道只收不回、
        未读天然堆积且不计入账号角标——说清楚，坐席才不会把它当成幽灵未读。内容由 _renderScopeNote 填充。 #}
     <div class="buried-hint scope-note" id="scope-note" style="display:none;" aria-live="polite"></div>
@@ -806,13 +808,13 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
           <span class="hdr-eff-chip" id="mode-eff-chip" onclick="openAiDiag()" style="display:none;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber8,#92400e);white-space:nowrap;cursor:pointer;"></span>
           <!-- Q-14 #262：「AI 本轮未生成（超时 · 23:41）」灰标——/thread 响应 ai_last_fail 有值才显示；
                点「重试起草」走既有 /api/drafts/{id}/regenerate；该会话下次 AI 成功自动清。 -->
-          <span class="hdr-eff-chip" id="aif-chip" style="display:none;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-gray100,#f1f5f9);color:var(--th-ink-gray6,#64748b);white-space:nowrap;"><span id="aif-chip-text"></span><button class="hdr-btn" id="aif-retry-btn" onclick="aifRetryDraft()" style="padding:0 6px;font-size:11px;line-height:16px;" data-i18n="inbox.aif.retry">重试起草</button></span>
+          <span class="hdr-eff-chip" id="aif-chip" style="display:none;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--th-bg-gray100,#f3f4f6);color:var(--th-ink-gray6,#64748b);white-space:nowrap;"><span id="aif-chip-text"></span><button class="hdr-btn" id="aif-retry-btn" onclick="aifRetryDraft()" style="padding:0 6px;font-size:11px;line-height:16px;" data-i18n="inbox.aif.retry">重试起草</button></span>
           <!-- P0 2026-08-09 AI 状态体检入口：why_no_reply 排障 CLI 的面板化。
                「为什么这条没自动回」从工程师 SSH 变成坐席自己点一下。 -->
           <button class="hdr-btn" id="ai-diag-btn" onclick="openAiDiag()" title="AI 回复链路体检：这个会话为什么没自动回" data-i18n-title="inbox.diag.btn_t"><span>🩺</span><span data-i18n="inbox.diag.btn">AI 状态</span></button>
           <button class="hdr-btn" id="ai-toggle-btn" onclick="toggleAiDraft()" style="display:none;" title="待审 AI 草稿队列（仅「AI草稿/多选」档显示，人工审批后发送）" data-i18n-title="inbox.ai.pending_t"><span data-i18n="inbox.ai.pending">📝 待审</span><span id="ai-pending-badge" style="display:none;margin-left:4px;background:var(--th-bg-red5,#ef4444);color:var(--th-ink-inverse,#fff);border-radius:9px;font-size:11px;font-weight:700;padding:0 5px;">0</span></button>
           <!-- 实施97 线 A：微信客服会话独有——把会话转给企微客服后台的接待人员（本端 AI 同时停手）。仅 wechat_kf 会话显示 -->
-          <button class="hdr-btn" id="kf-transfer-btn" onclick="kfTransferToHuman()" style="display:none;" data-i18n-title="inbox.kf.transfer_t"><span>🧑‍💼</span><span data-i18n="inbox.kf.transfer">转企微人工</span></button>
+          <button class="hdr-btn" id="kf-transfer-btn" onclick="kfTransferToHuman()" style="display:none;" data-i18n-title="inbox.kf.transfer_t"><span data-ui-icon="user" data-size="14"></span><span data-i18n="inbox.kf.transfer">转企微人工</span></button>
           <button class="hdr-btn" id="info-toggle-btn" onclick="toggleInfoSidebar()" title="业务助手（AI回复/洞察/客户档案）" data-i18n-title="inbox.assist_t"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="14" y1="3" x2="14" y2="21"/></svg><span data-i18n="inbox.assist">助手</span></button>
           <!-- P17 Phase2: 右栏收起时的「工作目标」快捷入口（U6 窄屏可达性；JS 按 featureOn+会话选中 控显） -->
           <button class="hdr-btn" id="goal-quick-btn" onclick="_openGoalQuick()" style="display:none;" title="工作目标（工作计划）" data-i18n-title="inbox.goal.title_hint"><svg class="rt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></svg><span data-i18n="inbox.goal.title">工作目标</span></button>
@@ -872,7 +874,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
          注释里也别写出那个连写序列）。 #}
       @media (prefers-reduced-motion: reduce){ #budget-banner.bb-flash,#budget-banner.bb-soft .bb-ic,#budget-banner.bb-hard .bb-ic{animation:none;}}
       /* 新账号接管确认横幅（P0 2026-08-30）：信息蓝，pending 空时隐藏 */
-      #am-banner{align-items:center;gap:10px;padding:8px 14px;font-size:13px;line-height:1.5;background:rgba(59,130,246,.12);color:var(--tk-brand,#2563eb);border-bottom:1px solid rgba(59,130,246,.3);flex-wrap:wrap;}
+      #am-banner{align-items:center;gap:10px;padding:8px 14px;font-size:13px;line-height:1.5;background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 12%, transparent);color:var(--tk-brand,#1e8cf2);border-bottom:1px solid color-mix(in srgb, var(--tk-brand,#1e8cf2) 30%, transparent);flex-wrap:wrap;}
       /* #142 真发总闸应急态（2026-09-02）：全局横幅（琥珀加粗，比 send-gate 更醒目）
          + 会话级拦截提示条。显隐由 _renderDpGlobalBanner/_renderDpConvBanner 驱动。 */
       #dpause-banner{align-items:center;gap:10px;flex-wrap:wrap;padding:9px 14px;font-size:13px;font-weight:700;line-height:1.5;background:var(--th-bg-amber100,#fef3c7);color:var(--th-ink-amber5,#92400e);border-bottom:2px solid var(--th-bd-amber5,#f59e0b);}
@@ -1007,7 +1009,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
             <div class="slash-panel" id="slash-panel">
               <div class="slash-panel-hdr">
                 <span data-i18n="inbox.slash.hdr">/ 指令 · 回复模板 + 知识库</span>
-                <span id="slash-cmd-hint" style="font-size:11px;color:var(--th-ink-gray3,#d1d5db);" data-i18n="inbox.slash.hint_idle">输入关键词过滤 · ↑↓ 选择 · Enter 确认</span>
+                <span id="slash-cmd-hint" style="font-size:11px;color:var(--text-sub);" data-i18n="inbox.slash.hint_idle">输入关键词过滤 · ↑↓ 选择 · Enter 确认</span>
               </div>
               <div id="slash-items"></div>
             </div>
@@ -1019,21 +1021,26 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
               <div class="cdraft-hd" id="cdraft-hd" onclick="_cdraftHdClick(event)">
                 <span class="cd-ic"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 3l1.7 4.6L17 9l-4.3 1.4L11 15l-1.7-4.6L5 9l4.3-1.4L11 3z"/><path d="M18 13l.8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8L18 13z"/></svg></span>
                 <span data-i18n="inbox.cdraft.ready">AI 草稿已就绪</span>
-                <span class="cdraft-risk" id="cdraft-risk" style="display:none;"></span>
                 <span class="cdraft-reason" id="cdraft-reason" style="display:none;" title="为什么这条要你确认" data-i18n-title="inbox.l1r.chip_t"></span>
-                <span class="cdraft-reason lp-cdraft" id="lp-cdraft" style="display:none;" title="对方消息里判不出语言（首条问候 / 表情 / 图片），本轮按人设默认语言起草；对方一开口就会跟随对方语言" data-i18n-title="inbox.lp.chip_t"></span>
-                <span class="cdraft-n" id="cdraft-n" style="display:none;"></span>
+                <span class="cdraft-reason cdraft-sticky" id="cdraft-sticky" style="display:none;" title="停联或要钱，不折进查看" data-i18n-title="inbox.cdraft.sticky_t"></span>
                 <span class="cdraft-acts">
                   <button type="button" class="cdraft-btn primary" onclick="acceptComposerDraft()" title="填入输入框，可编辑后发送" data-i18n-title="inbox.cdraft.accept_t"><span data-i18n="inbox.cdraft.accept">采用</span><kbd>Tab</kbd></button>
-                  <button type="button" class="cdraft-btn" onclick="_openAiDraftPanel()" title="展开待审草稿面板（可直接放行/驳回）" data-i18n-title="inbox.cdraft.panel_t" data-i18n="inbox.cdraft.panel">面板</button>
-                  <button type="button" class="cdraft-btn" onclick="dismissComposerDraft()" title="本会话内忽略这条草稿" data-i18n-title="inbox.cdraft.dismiss_t"><span data-i18n="inbox.cdraft.dismiss">忽略</span><kbd>Esc</kbd></button>
                   <button type="button" class="cdraft-btn cd-expand" onclick="_cdraftExpand()" data-i18n="inbox.cdraft.expand">查看</button>
                 </span>
               </div>
               <div class="cdraft-body" id="cdraft-body" onclick="acceptComposerDraft()" title="点击填入输入框" data-i18n-title="inbox.cdraft.body_t" tabindex="0"></div>
-              <!-- K-3 B（#183 #177，J-10 交办）：这条草稿用了哪几条 AI 记忆（/api/episodic-memory/used，
-                   与草稿所回复的入站 id 对账；旧后端 404 / 本轮没用记忆 → 容器留空不占位） -->
-              <div class="mem-chips" id="cdraft-mem"></div>
+              <div class="cdraft-more" id="cdraft-more">
+                <div class="cdraft-more-row">
+                  <span class="cdraft-risk" id="cdraft-risk" style="display:none;"></span>
+                  <span class="cdraft-reason lp-cdraft" id="lp-cdraft" style="display:none;" title="对方消息里判不出语言（首条问候 / 表情 / 图片），本轮按人设默认语言起草；对方一开口就会跟随对方语言" data-i18n-title="inbox.lp.chip_t"></span>
+                  <span class="cdraft-reason cdraft-kbd" id="cdraft-kbd" style="display:none;" title="这条草稿的知识库使用情况" data-i18n-title="inbox.kbd.chip_t"></span>
+                  <span class="cdraft-n" id="cdraft-n" style="display:none;"></span>
+                  <button type="button" class="cdraft-btn" onclick="_openAiDraftPanel()" title="展开待审草稿面板（可直接放行/驳回）" data-i18n-title="inbox.cdraft.panel_t" data-i18n="inbox.cdraft.panel">面板</button>
+                  <button type="button" class="cdraft-btn" onclick="dismissComposerDraft()" title="本会话内忽略这条草稿" data-i18n-title="inbox.cdraft.dismiss_t"><span data-i18n="inbox.cdraft.dismiss">忽略</span><kbd>Esc</kbd></button>
+                </div>
+                <!-- K-3 B：这条草稿用了哪几条 AI 记忆。默认折在查看里。 -->
+                <div class="mem-chips" id="cdraft-mem"></div>
+              </div>
             </div>
             <!-- 身份可视化：回复区身份条（以哪个人设 · 哪个号回复；未绑人设=黄色警示）。
                  2026-08-17 起可点击=直达工具箱人设卡（_identBarJump，含键盘 Enter/Space） -->
@@ -1636,7 +1643,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
               {% if (ui_vis or {}).get('group_extract') %}
               <section class="cp-card" style="padding:12px;">
                 <div class="cp-card-ttl" style="margin-bottom:6px;"><span class="cp-card-ic" data-cp-ic="link"></span><span data-i18n="inbox.tgm.title">群成员提取</span></div>
-                <div style="font-size:12px;color:var(--text-tiny);line-height:1.5;margin-bottom:8px;" data-i18n="inbox.tgm.desc">多号进群 → 限速拉「发言且非管理员」的人入库 → 每日控量。只读提取；私聊触达是独立步骤。</div>
+                <div style="font-size:12px;color:var(--text-tiny);line-height:1.5;margin-bottom:8px;" data-i18n="inbox.tgm.desc">先在群里接有意向的人的话。提取只是把人放进库，不发消息。</div>
                 <a class="asb-btn" style="text-decoration:none;display:inline-block;" href="/tools/tg-members" target="_blank" rel="noopener" data-i18n="inbox.tgm.open">🧲 打开管理台</a>
               </section>
               {% endif %}
@@ -2128,13 +2135,13 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
 /* ===== 常量 ===== */
 // wechat（个人微信 PC 副驾，准入区）不进 FIXED_PLATS：仅在该桌面账号真的接入时按「有账号的平台」动态出现，
 // 这里只给它配色/显示名，免得动态出现时退灰色兜底。
-const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',qq:'#1EBAFC',wechat_kf:'#07C160',wechat:'#07C160',web:'#3b82f6'};
-const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',qqbot:'🤖',qq:'🐧',web:'🌐'};   // wechat_kf / wechat 走 platformIconSVG，文本回落取 PI[p]||默认气泡（实施97：不再各占一个 emoji，emoji ratchet 天花板）
-const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',qqbot:'QQ Bot',qq:'QQ',wechat_kf:'WeChat Service',wechat:'WeChat',web:'Web'};
+const PC = {telegram:'#2BA5E0',line:'#00C300',messenger:'#0084FF',whatsapp:'#25D366',instagram:'#E1306C',zalo:'#0068FF',qqbot:'#1E63FF',qq:'#1EBAFC',wechat_kf:'#07C160',wechat:'#07C160',web:'#3b82f6',douyin:'#FE2C55',tiktok:'#25F4EE'};
+const PI = {telegram:'✈️',line:'💚',messenger:'💙',whatsapp:'📱',instagram:'📸',zalo:'💬',web:'🌐'};   // wechat_kf / wechat / qq / qqbot 走 platformIconSVG（已有矢量），文本回落取 PI[p]||默认气泡。qq/qqbot 不占 emoji 额度（实施97 天花板）
+const PN = {telegram:'Telegram',line:'LINE',messenger:'Messenger',whatsapp:'WhatsApp',instagram:'Instagram',zalo:'Zalo',qqbot:'QQ Bot',qq:'QQ',wechat_kf:'WeChat Service',wechat:'WeChat',web:'Web',douyin:'Douyin',tiktok:'TikTok'};
 // 左栏常驻平台（无会话也显示；= 后端已实现接入的平台，见 platform_readiness._IMPLEMENTED_MODES）。
 // IG/Zalo/QQ 机器人/微信客服为官方 API 形态：未配凭证时以「未接入」暗态常驻，hover 卡 + 空态引导接入（2026-08-07）。
 // 仅有图标没有后端的平台（X/Signal/个人微信/Viber）刻意不进此表——展示了也没有接入路径。
-const FIXED_PLATS = ['telegram','line','whatsapp','messenger','instagram','zalo','qqbot','qq','wechat_kf'];
+const FIXED_PLATS = ['telegram','line','whatsapp','messenger','instagram','zalo','qqbot','qq','wechat_kf','douyin','tiktok'];
 const PLAT_DESC = {
   telegram:window.T('inbox.plat.telegram_desc'),
   line:window.T('inbox.plat.line_desc'),
@@ -2145,6 +2152,8 @@ const PLAT_DESC = {
   qqbot:window.T('inbox.plat.qqbot_desc'),
   qq:window.T('inbox.plat.qq_desc'),
   wechat_kf:window.T('inbox.plat.wechat_kf_desc'),
+  douyin:window.T('inbox.plat.douyin_desc'),
+  tiktok:window.T('inbox.plat.tiktok_desc'),
   web:window.T('inbox.plat.web_desc'),
 };
 // 各平台接入方式一句话说明（账号抽屉空状态 note 行）：登录形态不同，别让「扫码」心智一刀切
@@ -2159,6 +2168,8 @@ const PLAT_NOTE = {
   qqbot:window.T('inbox.acct.note_qqbot'),
   qq:window.T('inbox.acct.note_qq'),
   wechat_kf:window.T('inbox.acct.note_wechat_kf'),
+  douyin:window.T('inbox.acct.note_douyin'),
+  tiktok:window.T('inbox.acct.note_tiktok'),
 };
 const PLAT_STATE_LABEL = {on:window.T('inbox.pstate.on'),off:window.T('inbox.pstate.off'),none:window.T('inbox.pstate.none')};
 const PLAT_STATE_COLOR = {on:'#16a34a',off:'#dc2626',none:'#94a3b8'};
@@ -2347,7 +2358,7 @@ function avatarInitial(name){ return (name||'?').trim().charAt(0).toUpperCase();
 var _PREG = {};
 (function(){
   try {
-    fetch('/static/platform_registry.json', {cache:'no-store'})
+    window.apiFetch('/static/platform_registry.json', {cache:'no-store'})
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){
         if (!j || !Array.isArray(j.platforms)) return;
@@ -2532,6 +2543,7 @@ function rebuildAccountMeta(){
     accountMeta[`${pl}:${id}`]={label:a.label||'', running:!!a.running,
       persona_id:a.persona_unselected?'':(a.persona_id||''), persona_name:a.persona_name||'',
       persona_unselected:!!a.persona_unselected,
+      persona_kind:a.persona_kind||'', ident_kb:a.ident_kb||'', ident_mode:a.ident_mode||'',
       self_name:a.self_name||'', self_username:a.self_username||'', self_avatar:a.self_avatar||''};
   });
 }
@@ -2560,6 +2572,12 @@ function _accountsForPlatform(p){
     // + 账号门禁快照（冷静期 / 降级红标 / 登录后待确认）——chip 标签与会话横幅同源
     if(a.channel_state){ map[id].channel_state=String(a.channel_state); map[id].channel_reason=String(a.channel_reason||''); map[id].channel_detail=String(a.channel_detail||''); }
     if(a.gate && typeof a.gate==='object') map[id].gate=a.gate;
+    map[id].persona_unselected=!!a.persona_unselected;
+    map[id].persona_id=a.persona_unselected?'':(a.persona_id||'');
+    map[id].persona_name=a.persona_name||'';
+    map[id].persona_kind=a.persona_kind||'';
+    map[id].ident_kb=a.ident_kb||'';
+    map[id].ident_mode=a.ident_mode||'';
     // platform_status.unread/attn 与 unread/attnByAccount 同源（P6/P8 enrich）；有则先铺底
     if(useSrv && a.unread!=null) map[id].unread=Number(a.unread)||0;
     if(useSrvAttn && a.attn!=null) map[id].attn=Number(a.attn)||0;
@@ -3235,7 +3253,7 @@ async function cleanupStaleHistAccounts(btn){
     {title:window.T('inbox.acct.hist_purge_title'),iconName:'trash',tone:'danger',okText:window.T('inbox.acct.hist_purge_btn2')});
   if(!ok2) return;
   _acctBtnBusy(btn,true);
-  let done=0, failed=0;
+  let purged=0, failed=0;
   for(const h of targets){
     let res=null;
     try{
@@ -3243,14 +3261,14 @@ async function cleanupStaleHistAccounts(btn){
       // 旧后端未装载：整批止步一次性提示（别对着 404 连轰 N 个失败 toast）
       if(res.status===404){ _toast(window.T('inbox.acct.hist_purge_unready'),'#d97706'); _acctBtnBusy(btn,false); return; }
       if(res.okHttp&&res.data&&res.data.ok){
-        done++;
+        purged++;
         if(_histView && _histView.aid===String(h.account_id) && _histView.pl===String(h.platform)) exitAcctHistView();
       } else failed++;
     }catch(_){ failed++; }
   }
   _uiBeacon('acct_hist_cleanup');
-  if(failed) _toast(window.Tf('inbox.acct.hist_cleanup_part',{n:done,f:failed}),'#d97706');
-  else _toast(window.Tf('inbox.acct.hist_cleanup_done',{n:done}),'#16a34a');
+  if(failed) _toast(window.Tf('inbox.acct.hist_cleanup_part',{n:purged,f:failed}),'#d97706');
+  else _toast(window.Tf('inbox.acct.hist_cleanup_done',{n:purged}),'#16a34a');
   _acctBtnBusy(btn,false);
   await loadChats();
   renderDrawerAccounts();
@@ -3304,7 +3322,7 @@ function _pcReportHtml(ent,aid){
   const tl=(ent.open&&Array.isArray(r.timeline)&&r.timeline.length)?`<ul class="acct-timeline">${r.timeline.map(m=>{
     const who=m.display_name||'?';
     const txt=m.text||(m.media_type?`[${m.media_type}]`:'');
-    return `<li class="${m.direction==='out'?'out':'in'}" title="${esc(new Date((m.ts||0)*1000).toLocaleString())}"><span class="tl-ago">${esc(_pcAgo(m.ts))}</span><span class="tl-dir">${m.direction==='out'?'→':'←'}</span><span class="tl-who">${esc(who)}</span><span class="tl-txt">${esc(txt)}</span></li>`;
+    return `<li class="${m.direction==='out'?'out':'in'}" title="${esc(m.ts?window.wsFmtDateTime(m.ts):'')}"><span class="tl-ago">${esc(_pcAgo(m.ts))}</span><span class="tl-dir">${m.direction==='out'?'→':'←'}</span><span class="tl-who">${esc(who)}</span><span class="tl-txt">${esc(txt)}</span></li>`;
   }).join('')}</ul>`:(ent.open?`<div class="acct-rep-line muted">${esc(window.T('inbox.acct.rep_empty'))}</div>`:'');
   return `<div class="acct-rep-line"><span class="acct-rep-stat">${esc(stat)}</span>${warn}<button type="button" class="acct-rep-toggle" onclick="togglePcTimeline('${esc(aid)}')">${esc(ent.open?window.T('inbox.acct.rep_hide'):window.T('inbox.acct.rep_timeline'))}</button></div>
     <div class="acct-rep-line muted">${esc(last)}</div>${tl}`;
@@ -3570,7 +3588,7 @@ function _renderAcctPicker(){
     const avBg=meta.self_avatar?'var(--bg-soft)':_avatarGrad(platFilter+':'+aid);
     const ghost=!a.paired;
     const subBits=[];
-    if(meta.persona_name) subBits.push(uiIcon('mask',11)+' '+esc(meta.persona_name));
+    _acctIdentBits(a, meta).forEach(h=>subBits.push(h));
     if(_psToday[aid]>0) subBits.push(esc(window.Tf('inbox.acct.today_convs',{n:_psToday[aid]})));
     rows+=`<div class="ac-pick-row ${accountFilter===aid?'sel':''}${ghost?' ghost':''}" role="option" tabindex="0" aria-selected="${accountFilter===aid}" title="${esc(String(aid))}" onclick="_acPickChoose('${esc(aid)}')" onkeydown="_acPickKey(event,'${esc(aid)}')">
       <span class="apr-av" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
@@ -3616,7 +3634,7 @@ async function _acctBulkMode(ev,pl,aid,mode,btn){
       const pick=await _drBulkAutoConfirm(pl,aid,plan,{label:label});
       if(!pick) return;
       const res=await post(true,pick);
-      _toast(window.Tf('inbox.dr.done',{n:Number(res.changed||0),m:Number(res.skipped_unchecked||0)+Number(res.frozen||0)+Number(res.self_chat||0),d:(res.drafted||[]).length}),'#2563eb');
+      _toast(window.Tf('inbox.dr.done',{n:Number(res.changed||0),m:Number(res.skipped_unchecked||0)+Number(res.frozen||0)+Number(res.self_chat||0),d:(res.drafted||[]).length}),'var(--tk-brand,#1e8cf2)');
       try{ _uiBeacon('acct_bulk_auto_dr'); }catch(_){}
       closeAcctPicker();
       try{ await loadChats(); }catch(_){}
@@ -3636,7 +3654,7 @@ async function _acctBulkMode(ev,pl,aid,mode,btn){
     const yes=await _appConfirm(msg,{title:window.Tf('inbox.acct.bulk_title',{mode:label}),iconName:(mode==='auto_ai'?'zap':'shield'),tone:(mode==='auto_ai'?'danger':'default'),okText:window.T('inbox.acct.bulk_ok')});
     if(!yes) return;
     const res=await post(true);
-    _toast(window.Tf('inbox.acct.bulk_done',{mode:label,n:Number(res.changed||0),c:Number(res.cancelled_l2||0)}),mode==='auto_ai'?'#2563eb':'#64748b');
+    _toast(window.Tf('inbox.acct.bulk_done',{mode:label,n:Number(res.changed||0),c:Number(res.cancelled_l2||0)}),mode==='auto_ai'?'var(--tk-brand,#1e8cf2)':'#64748b');
     try{ _uiBeacon('acct_bulk_'+mode); }catch(_){}
     try{
       (typeof allChats!=='undefined'?allChats:[]).forEach(function(c){
@@ -3822,7 +3840,7 @@ async function _drAction(cid, action, btn){
     if(!r.ok||!d.ok){ _toast(window.T('inbox.acct.bulk_fail'),'#b91c1c'); if(btn) btn.disabled=false; return; }
     _drState.items=(_drState.items||[]).filter(x=>String(x.conversation_id)!==String(cid)); _drRenderBanner();
     if(action==='manual'){
-      _toast(window.T('inbox.dr.manual_ok'),'#2563eb');
+      _toast(window.T('inbox.dr.manual_ok'),'var(--tk-brand,#1e8cf2)');
       const c=(typeof allChats!=='undefined'?allChats:[]).find(x=>x&&x.conversation_id===cid);
       if(c){ c.automation_mode='manual'; try{ selectChat(convKey(c)); }catch(_){} }
     } else { _toast(window.T('inbox.dr.ignored'),'#64748b'); }
@@ -3844,7 +3862,7 @@ async function _drLoginCheck(reviews){
     const cr=await apiFetch('/api/unified-inbox/automation/account-bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({platform:pl,account_id:aid,mode:'auto_ai',confirm:true},pick))},{timeoutMs:120000});
     let res={}; try{ res=await cr.json(); }catch(_){}
     if(cr.ok&&res.ok!==false){
-      _toast(window.Tf('inbox.dr.done',{n:Number(res.changed||0)+Number(res.already||0)-Number(res.demoted||0),m:Number(res.skipped_unchecked||0)+Number(res.demoted||0)+Number(res.frozen||0)+Number(res.self_chat||0),d:(res.drafted||[]).length}),'#2563eb');
+      _toast(window.Tf('inbox.dr.done',{n:Number(res.changed||0)+Number(res.already||0)-Number(res.demoted||0),m:Number(res.skipped_unchecked||0)+Number(res.demoted||0)+Number(res.frozen||0)+Number(res.self_chat||0),d:(res.drafted||[]).length}),'var(--tk-brand,#1e8cf2)');
       try{ await loadChats(); }catch(_){}
     } else { await ack(); }
   }catch(_){ await ack(); }
@@ -3884,7 +3902,7 @@ function _renderAcctPickerDock(){
       const ghost=!a.paired;
       const sel=(platFilter===pl&&accountFilter===aid);
       const subBits=[];
-      if(meta.persona_name) subBits.push(uiIcon('mask',11)+' '+esc(meta.persona_name));
+      _acctIdentBits(a, meta).forEach(h=>subBits.push(h));
       if(_psToday[aid]>0) subBits.push(esc(window.Tf('inbox.acct.today_convs',{n:_psToday[aid]})));
       rows+=`<div class="ac-pick-row ${sel?'sel':''}${ghost?' ghost':''}" role="option" tabindex="0" aria-selected="${sel}" title="${esc(String(aid))}" onclick="_acPickChoose('${esc(aid)}','${esc(pl)}')" onkeydown="_acPickKey(event,'${esc(aid)}','${esc(pl)}')">
         <span class="apr-av" style="background:${avBg};">${avInner}<span class="ac-st ${a.running?'on':'off'}" aria-hidden="true"></span></span>
@@ -4108,7 +4126,7 @@ function buildAcctDock(){
   // 账号视角失效自愈（rail 同语义的 dock 版）：选中号已不在册 → 回落全部
   if(accountFilter!=='all' && platFilter!=='all'){
     const g=groups.find(x=>x.plat===platFilter);
-    if(!g || !g.accts.some(a=>String(a.account_id)===String(accountFilter))) accountFilter='all';
+    if(!g || !g.accts.some(a=>String(a.account_id)===String(accountFilter))) setAccountFilter('all');
   }
   const gridIc='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
   const allActive=(accountFilter==='all');
@@ -5864,6 +5882,37 @@ function _renderScopeNote(){
     el.style.display='';
   }catch(_){ el.style.display='none'; }
 }
+var _langUnknownOnly=false;
+var _sessionLangUnknownN=0;
+function _isUnknownSessionLang(c){
+  if(!c || !Object.prototype.hasOwnProperty.call(c,'session_language')) return false;
+  const s=String(c.session_language||'').trim().toLowerCase();
+  return !s || s==='unknown' || s==='auto';
+}
+function _renderLangUnknownHint(){
+  const el=document.getElementById('lang-unknown-hint');
+  if(!el) return;
+  const n=Math.max(0, Number(_sessionLangUnknownN)||0);
+  if(!n || _histView){
+    if(_histView) _langUnknownOnly=false;
+    el.style.display='none'; el.innerHTML=''; return;
+  }
+  const shown=(allChats||[]).filter(_isUnknownSessionLang).length;
+  let txt=window.Tf('inbox.langunk.banner',{n:n});
+  if(shown<n) txt+=' · '+window.Tf('inbox.langunk.window',{shown:shown,n:n});
+  const btn=window.T(_langUnknownOnly?'inbox.langunk.view_off':'inbox.langunk.view');
+  el.innerHTML='<span class="bh-txt">'+esc(txt)+'</span>'
+    +'<button type="button" class="bh-unarch" data-langunk="1">'+esc(btn)+'</button>';
+  el.title=window.T('inbox.langunk.banner_t');
+  el.style.display='';
+  const b=el.querySelector('[data-langunk]');
+  if(b) b.addEventListener('click', function(ev){
+    ev.preventDefault(); ev.stopPropagation();
+    _langUnknownOnly=!_langUnknownOnly;
+    try{ applyFilters(); }catch(_){}
+    _renderLangUnknownHint();
+  });
+}
 function _renderBuriedHint(st){
   _renderScopeNote();
   const el=document.getElementById('buried-hint');
@@ -6400,6 +6449,7 @@ function applyFilters(){
     // 账号历史只读视角（2026-08-17）：该账号全量历史直判（含已退出/已移除/归档），
     // 绕过下方所有隐藏规则——只读语义由行级 read_only 锁 + 顶部横幅承担；
     // 搜索仍可用（在历史里找人是本视角的高频动作）。
+    if(_langUnknownOnly && !_isUnknownSessionLang(c)) return false;
     if(_histView){
       if(c.platform!==_histView.pl) return false;
       if((c.account_id||'default')!==_histView.aid) return false;
@@ -6780,6 +6830,7 @@ var _HANDOFF_REASON_KEYS={high_risk:'inbox.handoff.r_high_risk',empty_reply:'inb
   dup_guard_blocked:'inbox.handoff.r_dup_guard_blocked',
   fact_gate_blocked:'inbox.handoff.r_fact_gate_blocked'};
 _HANDOFF_REASON_KEYS.media_lie_caught_repeat='inbox.handoff.r_media_lie_caught_repeat';   // Q-30 C #307：客户连说两次没收到图 → 转人工（此前红条晒原码 media_lie_caught_repeat）
+_HANDOFF_REASON_KEYS.outreach_stalled='inbox.handoff.r_outreach_stalled';
 /* Q-15 #271（ad-）：成人内容原因码 adult:<level>[:<hit>] → 「命中：成人内容（sex）· 露骨」；四级词条查表 */
 var _AD_LEVEL_KEYS={mention:'inbox.adult.lv_mention',flirt:'inbox.adult.lv_flirt',explicit:'inbox.adult.lv_explicit',pressure:'inbox.adult.lv_pressure'};
 function _adParseReason(raw){
@@ -6830,7 +6881,7 @@ function _ayRemain(){ return Math.max(0,Math.ceil((_ayUntilLocal-Date.now())/100
 function _ayByLabel(){ return window.T(_AY_BY_KEYS[String(_ayState&&_ayState.by||'')]||'inbox.ay.by_sent'); }
 function _ayChipHtml(c){
   if(!_ayState||!c||!selectedChat||c.conversation_id!==selectedChat.conversation_id||_ayRemain()<=0) return '';
-  return '<span class="hdr-tag-chip ay-chip" id="ay-chip" role="button" tabindex="0" style="background:color-mix(in srgb, #2563eb 14%, transparent);color:var(--text-main);cursor:pointer" onclick="_ayResume()" title="'
+  return '<span class="hdr-tag-chip ay-chip" id="ay-chip" role="button" tabindex="0" style="background:color-mix(in srgb, var(--tk-brand,#1e8cf2) 14%, transparent);color:var(--text-main);cursor:pointer" onclick="_ayResume()" title="'
     +esc(window.Tf('inbox.ay.chip_t',{by:_ayByLabel()}))+'">'+esc(window.Tf('inbox.ay.chip',{by:_ayByLabel(),n:_ayRemain()}))+'</span>'; }
 function _renderAyChip(){
   var _ayRow=document.getElementById('hdr-tags-row'); if(!_ayRow) return;
@@ -6849,7 +6900,7 @@ async function _ayResume(){
     var _ayD={}; try{ _ayD=await _ayR.json(); }catch(_){ _ayD={}; }
     if(!_ayR.ok||_ayD.ok===false) throw new Error('ay-resume failed');
     if(selectedChat&&selectedChat.conversation_id===_ayCid) _aySet(_ayD.agent_yield||null);
-    _toast(window.T('inbox.ay.resumed'),'#2563eb');
+    _toast(window.T('inbox.ay.resumed'),'var(--tk-brand,#1e8cf2)');
   }catch(_ayE){ try{ _toast(window.T('inbox.ay.resume_fail'),'#b91c1c'); }catch(_){} } }
 window._ayResume=_ayResume;
 /* Q-26 #301 #302（cs-）：会话头一条状态带「AI 会不会回」。状态源 = 服务端 conv_state.compute（六源只读聚合：
@@ -6860,7 +6911,9 @@ window._ayResume=_ayResume;
 var _csState=null, _csCid='', _csTimer=null, _csBusy=false;
 var _CS_ACT_KEYS={ack:'inbox.cs.act.ack',resume:'inbox.cs.act.resume',confirm_pin:'inbox.cs.act.confirm_pin',
   retranslate:'inbox.cs.act.retranslate',   // Q-39 B #326（cs-）：xlate_hold → 「重试翻译」
-  route_standard:'inbox.cs.act.route_standard'};   // R87 #330（cs-）：route_offline → 「切回标准」
+  route_standard:'inbox.cs.act.route_standard',   // R87 #330（cs-）：route_offline → 「切回标准」
+  mark_human:'inbox.cs.act.mark_human',   // 握手指纹：状态条上的「这是真人」'
+  restore_auto:'inbox.cs.act.restore_auto'};   // 扫描收成的拟稿人审：改回全自动
 function _csKeyOr(k,fb){ var t=window.T(k); return (t&&t!==k)?t:(fb||''); }
 function _csHeldWhy(p){
   p=p||{}; var reason=String(p.reason_code||p.reason||'');
@@ -7015,6 +7068,35 @@ async function _csAction(btn){
         if(_csR.ok&&_csD&&_csD.ok){ _toast(window.T('inbox.cs.retranslate_ok'),'#16a34a'); try{ loadThread(c,true); }catch(_){} }
         else { _toast(window.T('inbox.cs.retranslate_fail')+((_csD&&(_csD.detail||_csD.error))?(' · '+String(_csD.detail||_csD.error).slice(0,80)):''),'#b91c1c'); }
         if(_csD&&_csD.conv_state){ _csSet(_csD.conv_state,c); }
+      }
+    }
+    else if(a==='restore_auto'){
+      if(!window.confirm(window.T('inbox.cs.restore_auto_confirm'))){ /* 取消不改档 */ }
+      else {
+        var _csAr=await apiFetch('/api/unified-inbox/automation',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({platform:c.platform,account_id:c.account_id||'default',
+            chat_key:c.chat_key,mode:'auto_ai'})},{timeoutMs:30000});
+        var _csAd={}; try{ _csAd=await _csAr.json(); }catch(_){ _csAd={}; }
+        if(!_csAr.ok||_csAd.ok===false){ _toast(window.T('inbox.botflag.fail'),'#b91c1c'); }
+        else { try{ if(typeof loadModeState==='function') loadModeState(c); }catch(_){} }
+      }
+    }
+    else if(a==='mark_human'){
+      if(!window.confirm(window.T('inbox.botflag.confirm_human'))){ /* 取消不改判定 */ }
+      else {
+        var _csBr=await apiFetch('/api/unified-inbox/bot-flag',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({platform:c.platform,account_id:c.account_id||'default',
+            chat_key:c.chat_key,value:'human'})},{timeoutMs:30000});
+        var _csBd={}; try{ _csBd=await _csBr.json(); }catch(_){ _csBd={}; }
+        if(!_csBr.ok||_csBd.ok===false){ _toast(window.T('inbox.botflag.fail'),'#b91c1c'); }
+        else {
+          _botFlagState={cid:_csBd.conversation_id, flag:Number(_csBd.peer_is_bot)||0,
+                         score:Number(_csBd.bot_score)||0, evidence:String(_csBd.bot_evidence||'')};
+          try{ _renderBotBadge(); }catch(_){}
+          _toast(window.T('inbox.botflag.saved'),'#64748b');
+        }
       }
     }
     else if(a==='route_standard'){   // R87 #330（cs-）：无限制端点离线 → 本会话改回标准档（复用模式面板同一写口）
@@ -7944,7 +8026,7 @@ function _connDiagnose(){
     return new Promise(function(res, rej){
       let ctl=null; try{ ctl=new AbortController(); }catch(_){}
       const t=setTimeout(function(){ try{ if(ctl) ctl.abort(); }catch(_){} rej(new Error('timeout')); }, 4000);
-      fetch(url, {mode:'no-cors', cache:'no-store', signal:ctl?ctl.signal:undefined})
+      window.apiFetch(url, {mode:'no-cors', cache:'no-store', signal:ctl?ctl.signal:undefined})
         .then(function(){ clearTimeout(t); res(true); }, function(e){ clearTimeout(t); rej(e); });
     });
   };
@@ -7965,7 +8047,7 @@ let _wsAltEntrances=[];
   try{ _wsAltEntrances=JSON.parse(localStorage.getItem('ws_alt_entrances')||'[]')||[]; }catch(_){}
   setTimeout(function(){
     try{
-      fetch('/api/workspace/entrances',{cache:'no-store'})
+      window.apiFetch('/api/workspace/entrances',{cache:'no-store'})
         .then(function(r){ return r.ok?r.json():null; })
         .then(function(d){
           if(d&&Array.isArray(d.entrances)){
@@ -8114,6 +8196,10 @@ async function _loadChatsBody(){
     _dpMeta=d.deliver_paused_meta||null;
     try{ _renderDpGlobalBanner(); }catch(_){}
     allChats=(d.chats||[]).filter(c=>c.account_status!=='offline');
+    if(typeof d.session_lang_unknown==='number'){
+      _sessionLangUnknownN=d.session_lang_unknown;
+      try{ _renderLangUnknownHint(); }catch(_){}
+    }
     // 未读可信化 v2：**精确**本地保 0——只压「服务端快照不比本地已读标记新」的行
     // （行没新动静 last_ts<=mark.lastTs，或就是当前打开的会话）；真新入站
     // （last_ts 前进）立刻放行显示。替换旧「凡 unread===0 一律永久保 0」盲目集合：
@@ -9227,7 +9313,7 @@ function _renderReplyWindow(rw, c){
       el.style.background=bg; el.style.border='1px solid '+bd;
       el.style.color=tone==='muted'?'var(--text-muted,#6b7280)':'var(--text-main,#0f172a)';
       el.innerHTML='<span style="flex:none;width:8px;height:8px;border-radius:50%;background:'
-        +(tone==='warn'?'#f59e0b':(tone==='muted'?'#9ca3af':'var(--accent,#1e8cf2)'))+'"></span>'
+        +(tone==='warn'?'var(--th-bg-amber5,#f59e0b)':(tone==='muted'?'var(--th-ink-gray4,#5b6b85)':'var(--accent,#1e8cf2)'))+'"></span>'
         +'<span style="flex:1;min-width:0;">'+esc(text)+'</span>';
       el.style.display='flex';
     };
@@ -14798,6 +14884,9 @@ function _failReasonText(code){
   if(low.indexOf('mic_busy')>=0) return window.T('inbox.failr.voice_mic_busy');
   if(low.indexOf('voice_daily_cap')>=0) return window.T('inbox.failr.voice_daily_cap');
   if(low.indexOf('voice_per_peer')>=0) return window.T('inbox.failr.voice_per_peer');
+  /* 智安发送限速闸：须在 warmup_cap 通配之前（send_rate_gate:warmup_cap 含 warmup_cap） */
+  if(low.indexOf('send_rate_gate:warmup')>=0) return window.T('inbox.failr.rate_warmup');
+  if(low.indexOf('send_rate_gate:script')>=0) return window.T('inbox.failr.rate_script');
   if(low.indexOf('send_gate:daily_cap')>=0||low.indexOf('warmup_cap')>=0) return window.T('inbox.failr.daily_cap');
   if(low.indexOf('send_gate:health_red')>=0) return window.T('inbox.failr.health_red');
   if(low.indexOf('send_gate:banned')>=0) return window.T('inbox.failr.banned');
@@ -15501,6 +15590,9 @@ async function _doSendMedia(caption){
   if(bar) bar.classList.remove('sending');
   if(aborted) _toast(window.T('inbox.file.canceled'),'#64748b');
   if(sent>0){
+    // 待人工「今天清掉」：这一趟至少发出一件（服务端同一轮只算一次）
+    _ckNoteInboxReply({conversation_id:chat.conversation_id, platform:chat.platform,
+      account_id:chat.account_id||'default', chat_key:chat.chat_key});
     // 发送期间切了会话：输入框里已是新会话的草稿，不清；线程刷新只刷当前视图
     if(selectedChat===chat){ const ta=document.getElementById('reply-ta'); if(ta) ta.value=''; }
     _toast(sent===1?window.T('inbox.media.sent'):window.Tf('inbox.file.sent_n',{n:sent}),'#0f9d75');
@@ -15808,6 +15900,7 @@ async function sendMsg(){
     const d=await r.json();
     if(d.ok){
       _sentOk=true;   // composer P2：成功微反馈
+      _ckNoteInboxReply(body);   // 待人工「今天清掉」（只记成功的）
       // M-2 A1（#232）：✓ 只认平台/边车回执 delivered===true；RPA 入队 → 「已排队发送」；
       // 旧后端无字段 → 「已提交」。此前一律「✓ 已发送」＝乐观显示非边车回执。
       _sentReceipt=(d.delivered===true||(d.result&&d.result.delivered===true))?'delivered':((d.queued||(d.result&&d.result.queued))?'queued':'');
@@ -15898,7 +15991,7 @@ async function sendMsg(){
       const idx=threadMsgs.findIndex(m=>m.message_id===optId);
       if(idx>=0){ threadMsgs[idx]._optimistic=false; threadMsgs[idx]._failed=true; }
       renderMessages(selectedChat, threadMsgs, {silent:true});
-      showHint(window.Tf('inbox.toast.send_fail',{msg:((det&&det.message)||d.detail||d.error||window.T('dash.unknown'))}));
+      showHint(window.Tf('inbox.toast.send_fail',{msg:(errMsgOf(d)||window.T('dash.unknown'))}));
       }
     }
   }catch(e){
@@ -15908,6 +16001,7 @@ async function sendMsg(){
     try{ _recon=await _reconcileTextSend(optMsg&&optMsg._retryBody); }catch(_){}
     if(_recon==='sent'){
       _sentOk=true;
+      _ckNoteInboxReply(optMsg&&optMsg._retryBody);   // 慢发送对账确认已发出 = 成功
       threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
       try{ await loadThread(selectedChat,true); await loadChats(); }catch(_){}
       try{ _refreshConvStatus(selectedChat); }catch(_){}
@@ -15968,6 +16062,31 @@ async function sendMsg(){
   }
 }
 
+/* 待人工「今天清掉」：完整对话里发送成功的回复也记一笔，走待人工同一个记账口
+   （src=inbox：服务端判断发之前这位是不是在「客户在等」里，同一轮只算一次；
+   会话放 reply_conversation_id，没有这条判据的旧后端回 400、不会每句都记）。
+   只在发送成功后调；失败不调。顺手给「从待人工打开」的回程记录打上 sent，
+   回到待人工时这张先收起、落到下一张（cockpit.html 读同一键）。不等结果、不提示。 */
+function _ckNoteInboxReply(body){
+  try{
+    if(!body) return;
+    let cid=String(body.conversation_id||'');
+    const sc=selectedChat;
+    if(!cid && sc && String(sc.platform||'')===String(body.platform||'') && String(sc.chat_key||'')===String(body.chat_key||'')){
+      cid=String(sc.conversation_id||'');
+    }
+    if(!cid) cid=[body.platform||'', body.account_id||'default', body.chat_key||''].join(':');
+    if(!body.chat_key) return;
+    apiFetch('/api/cockpit/cleared',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reply_conversation_id:cid, how:'reply', src:'inbox'})}).catch(function(){});
+    try{
+      const rec=JSON.parse(localStorage.getItem('aitr.ck.ret.v1')||'null');
+      if(rec && rec.cid===cid){ rec.sent=Date.now(); localStorage.setItem('aitr.ck.ret.v1', JSON.stringify(rec)); }
+    }catch(_){}
+  }catch(_){}
+}
+window._ckNoteInboxReply=_ckNoteInboxReply;   // 门禁跨窗口演练直接调（本页脚本不挂全局）
+
 // P4-9：失败气泡一键重发——原样重放当初的发送 body（含引用/翻译参数），成功即并入真实线程。
 async function resendFailed(optId){
   const idx=threadMsgs.findIndex(m=>m.message_id===optId);
@@ -15993,6 +16112,7 @@ async function resendFailed(optId){
     const r=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
     const d=await r.json();
     if(d&&d.ok){
+      _ckNoteInboxReply(body);   // 重发成功（被压制＝原件其实已发出）也是这句回出去了
       threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
       // A1：服务端按原件 id 判「其实已发出/仍在途」→ 压制了本次重发。清掉假失败
       // 气泡之外还得说清楚，否则坐席只看到「点了重发但没多一条」会以为没生效。
@@ -16013,7 +16133,7 @@ async function resendFailed(optId){
         try{ _noteGateBlock(_det2); }catch(_){}
       }
       if(_isMs2){ try{ showHint(_msFailThreeParts(_det2).text); }catch(_){ showHint(String(_det2.message||'')); } }
-      else showHint(window.Tf('inbox.toast.send_fail',{msg:((_det2&&_det2.message)||d.detail||d.error||window.T('dash.unknown'))}));
+      else showHint(window.Tf('inbox.toast.send_fail',{msg:(errMsgOf(d)||window.T('dash.unknown'))}));
     }
   }catch(e){
     const i2=threadMsgs.findIndex(m=>m.message_id===optId);
@@ -16043,6 +16163,7 @@ async function resendStoreFailed(mid){
     const r=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
     const d=await r.json();
     if(d&&d.ok){
+      _ckNoteInboxReply(body);   // 自动投递失败那条由坐席重发成功：也是回了
       await loadThread(selectedChat,true);
       await loadChats();
     } else {
@@ -16052,7 +16173,7 @@ async function resendStoreFailed(mid){
       if(_det && typeof _det==='object' && _det.code==='send_blocked'){
         try{ _noteGateBlock(_det); }catch(_){}
       }
-      showHint(window.Tf('inbox.toast.send_fail',{msg:((_det&&_det.message)||d.detail||d.error||window.T('dash.unknown'))}));
+      showHint(window.Tf('inbox.toast.send_fail',{msg:(errMsgOf(d)||window.T('dash.unknown'))}));
     }
   }catch(_e){
     m._resending=false;
@@ -16062,6 +16183,7 @@ async function resendStoreFailed(mid){
 }
 
 function showHint(msg){ document.getElementById('reply-hint').textContent=msg; setTimeout(()=>document.getElementById('reply-hint').textContent='',4000); }
+function errMsgOf(d){ const pick=(v)=>{ if(v==null) return ''; if(typeof v==='string') return v; if(Array.isArray(v)) return v.map(pick).filter(Boolean).join('; '); if(typeof v==='object'){ const inner=v.message||v.msg||v.error||v.detail||v.reason||v.code; if(inner) return pick(inner); try{ return JSON.stringify(v); }catch(_){ return ''; } } return String(v); }; if(!d||typeof d!=='object') return pick(d); const det=d.detail; return pick(det&&typeof det==='object'?det.message:'')||pick(d.message)||pick(det)||pick(d.error)||pick(d.reason)||''; }
 
 /* ===== 打字状态（Phase 11）===== */
 let _typingTimer=null, _typingActive=false, _typingDisplayTimer=null;
@@ -16256,6 +16378,8 @@ function _gateMsg(g){
   else if(reason.indexOf('send_gate:health_red')===0) fam='health';
   else if(reason.indexOf('send_gate:banned')===0) fam='banned';
   else if(reason.indexOf('send_gate:')===0) fam='gate';
+  else if(reason.indexOf('send_rate_gate:warmup')===0) fam='rate_warmup';
+  else if(reason.indexOf('send_rate_gate:script')===0) fam='rate_script';
   else if(reason.indexOf('kill_switch')===0) fam='killswitch';
   else if(reason.indexOf('canary')===0) fam='canary';
   else if(reason.indexOf('license')===0) fam='license';
@@ -16267,6 +16391,16 @@ function _gateMsg(g){
       try{ frees=window.Tf('inbox.gate.quota_frees',{time:window.wsFmtTime(g.frees_at,{hour:'2-digit',minute:'2-digit'})}); }catch(_){ frees=''; }
     }
     return window.Tf('inbox.gate.quota',{used:q.used||0,cap:q.cap||0,frees:frees});
+  }
+  if(fam==='rate_warmup'||fam==='rate_script'){
+    // 智安发送限速闸：已发/上限 + 预计恢复时刻（服务端 send_rate_gate.frees_at，滚动 24h）
+    var rt=(g&&g.rate)||{};
+    var rfrees='';
+    if(g&&g.frees_at){
+      try{ rfrees=window.Tf('inbox.gate.rate_frees',{time:window.wsFmtTime(g.frees_at,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}); }catch(_){ rfrees=''; }
+    }
+    if(!rfrees) rfrees=window.T('inbox.gate.rate_frees_unknown');
+    return window.Tf('inbox.gate.'+fam,{used:rt.used||0,cap:rt.cap||0,frees:rfrees});
   }
   if(fam==='killswitch'){
     // P0 2026-08-23 归因三分化：快照带 kill（重启后新后端）→ 按来源分文案 +
@@ -16291,8 +16425,19 @@ function _renderGateBanner(){
   var g=_gateState;
   var btn=document.getElementById('send-btn');
   var q=(g&&g.quota)||null;
-  if(!g||(!g.blocked&&!(q&&q.auto_blocked))){
+  var degraded=(g&&g.rate_degraded&&Number(g.rate_degraded.count))||0;
+  if(!g||(!g.blocked&&!(q&&q.auto_blocked)&&!degraded)){
     el.style.display='none'; el.innerHTML='';
+    if(btn){ btn.style.filter=''; btn.removeAttribute('title'); }
+    return;
+  }
+  if(!g.blocked && degraded && !(q&&q.auto_blocked)){
+    el.style.background='var(--th-bg-amber100,#fef3c7)';
+    el.style.color='var(--th-ink-amber5,#92400e)';
+    el.style.borderBottom='1px solid var(--th-bd-amber2,#fde68a)';
+    el.innerHTML='<span style="flex:1;min-width:0;" title="'+esc(window.T('inbox.gate.rate_degraded_t'))+'">'
+      +esc(window.Tf('inbox.gate.rate_degraded',{n:degraded}))+'</span>';
+    el.style.display='flex';
     if(btn){ btn.style.filter=''; btn.removeAttribute('title'); }
     return;
   }
@@ -16396,6 +16541,7 @@ function _noteGateBlock(det){
     quota:{used:(det&&det.used)||0, cap:(det&&det.cap)||0},
     frees_at:(det&&det.frees_at)||null,
     kill:(det&&det.kill)||null,
+    rate:(det&&det.rate)||null,
     can_exempt:!!_prev.can_exempt, can_lift:!!_prev.can_lift};
   _renderGateBanner();
 }
@@ -17500,7 +17646,7 @@ async function setMode(mode, opts){
       if(_hfNote){ _handoffState={active:true,ts:Date.now()/1000,by:'manual',used:0,remaining:10,out_n:d.handoff.out_n|0,in_n:d.handoff.in_n|0,media_n:d.handoff.media_n|0,note:_hfNote}; try{ _renderTakeoverBanner(); }catch(_){} }
     }
     // 二期：有接力摘要 → 带「看 AI 记住了什么」按钮的预览条（展开即见原文，坐席能核对 AI 将带着什么接手）
-    if(_hfNote){ try{ _handoffToast(tip, _hfNote, !!d.handoff.condense_scheduled); }catch(_){ try{ _toast(tip, '#2563eb'); }catch(__){} } }
+    if(_hfNote){ try{ _handoffToast(tip, _hfNote, !!d.handoff.condense_scheduled); }catch(_){ try{ _toast(tip, 'var(--tk-brand,#1e8cf2)'); }catch(__){} } }
     else { try{ _toast(tip, mode==='auto_ai'?'#2563eb':'#64748b'); }catch(_){} }
     // 切到人审档：自动打开待审草稿面板，避免「停了自动却看不见草稿」
     if((mode==='review'||mode==='multi_choice') && typeof toggleAiDraft==='function'){
@@ -17724,11 +17870,15 @@ async function _loadDraftsBody(c){
         ? `<button class="btn-approve" disabled title="${esc(blockTip)}" style="opacity:.45;cursor:not-allowed;">${window.T('inbox.draft_mini.send')}</button>`
         : `<button class="btn-approve" onclick="approveDraft('${esc(dr.draft_id)}',this)">${window.T('inbox.draft_mini.send')}</button>`;
       const l1txt=_l1ReasonText(dr);   // M-2 E（#235）：L1 原因 chip
+      const kbdTxt=_kbDecisionText(dr);   // P0-5：知识库使用情况 chip
       return `<div class="draft-card-mini">
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
           <span class="risk ${riskClass}">${esc(dr.autopilot_level||'?')}</span>
           <span class="unsent-badge" title="${esc(window.T('inbox.draft_mini.unsent_t'))}">${esc(window.T('inbox.draft_mini.unsent'))}</span>
           ${l1txt?`<span class="draft-l1r-chip" title="${esc(window.T('inbox.l1r.chip_t'))}">${esc(l1txt)}</span>`:''}
+          ${kbdTxt?(_kbDecisionMiss(dr)
+            ?`<span class="draft-l1r-chip draft-kbd-chip is-miss">${esc(kbdTxt)} <button type="button" class="draft-kbd-health" title="${esc(window.T('inbox.kbd.miss_health_t'))}" onclick="event.stopPropagation();openKbEmbedHealth()">${esc(window.T('inbox.kbd.miss_health'))}</button> <button type="button" class="draft-kbd-add" title="${esc(window.T('inbox.kbd.miss_add_t'))}" onclick="event.stopPropagation();openKbMissAdd('${esc(dr.peer_last_text||dr.peer_text||'')}')">＋</button></span>`
+            :`<span class="draft-l1r-chip draft-kbd-chip" title="${esc(window.T('inbox.kbd.chip_t'))}">${esc(kbdTxt)}</span>`):''}
           ${ageTxt?`<span class="draft-age-chip${blocked?' is-stale':''}" title="${esc(window.T('inbox.draft_mini.age_t'))}">${esc(ageTxt)}</span>`:''}
           ${blocked?`<span class="draft-block-chip" title="${esc(blockTip)}">${esc(blocked==='replied'?window.T('inbox.draft_mini.chip_replied'):window.T('inbox.draft_mini.chip_stale'))}</span>`:''}
           <span style="font-size:11px;color:var(--text-sub);">${esc(dr.peer_name||dr.chat_name||'')}</span>
@@ -17986,6 +18136,48 @@ function _l1ReasonText(d){
   return k?window.T(k):(code?window.Tf('inbox.l1r.other',{code:code}):window.T('inbox.l1r.generic'));
 }
 window._l1ReasonText=_l1ReasonText;
+/* P0-5（2026-09-29 8E56）：草稿「知识库」chip——服务端 /api/drafts 行内 kb_decision（起草链按会话登记）：
+   must/optional 命中 → 「已引用 N 条」；未命中 → 「未命中（· 已按固定话术 / · 已标需人工）」；
+   skip → 「本轮未查知识库 · 原因」。无字段（重启 / 非 AI 稿）→ 空。 */
+var _KBD_REASON_KEYS={companion_chat:'inbox.kbd.r.companion_chat',persona_bound:'inbox.kbd.r.persona_bound',media_desc:'inbox.kbd.r.media_desc'};
+function _kbDecisionText(d){
+  const k=d&&d.kb_decision;
+  if(!k||typeof k!=='object') return '';
+  if(k.mode==='skip'){
+    const rk=_KBD_REASON_KEYS[String(k.reason||'')];
+    return window.Tf('inbox.kbd.skip',{reason:rk?window.T(rk):window.Tf('inbox.kbd.r.other',{code:String(k.reason||'')})});
+  }
+  if(k.hit===true) return window.Tf('inbox.kbd.cited',{n:Number(k.refs||0)||1});
+  if(k.hit===false){
+    if(k.handoff) return window.T('inbox.kbd.handoff');
+    if(k.mode==='must'&&Number(k.nohit_n||0)>=1) return window.T('inbox.kbd.miss_fixed');
+    // P1-1：客户这句不是在问事（谢谢 / 在吗 / 好的）→ 查无是正常态，不亮 chip 添噪
+    if(k.asked===false) return '';
+    return window.T('inbox.kbd.miss');
+  }
+  return '';
+}
+window._kbDecisionText=_kbDecisionText;
+/* P1-3：未命中 chip 可点——带客户原话跳知识库新建抽屉（/knowledge?new=1&q=…），标题 / 触发词预填，
+   保存后服务端自动向量化这一条。命中 / 未查的 chip 不可点。 */
+function _kbDecisionMiss(d){
+  const k=d&&d.kb_decision;
+  return !!(k&&typeof k==='object'&&k.mode!=='skip'&&k.hit===false&&k.asked!==false);
+}
+function _kbMissAddUrl(peerText){
+  const q=String(peerText||'').trim().slice(0,120);
+  return '/knowledge?new=1&q='+encodeURIComponent(q);
+}
+function openKbMissAdd(peerText){
+  _uiBeacon('kbd.miss_add');
+  window.open(_kbMissAddUrl(peerText),'_blank');
+}
+function openKbEmbedHealth(){
+  _uiBeacon('kbd.miss_health');
+  window.open('/knowledge?health=embed','_blank');
+}
+window.openKbMissAdd=openKbMissAdd;
+window.openKbEmbedHealth=openKbEmbedHealth;
 /* Q-21 B（#302 / Y82GWM）：会话语言计划 chip（lp-）。起草链每稿登记一份
    {reply_lang, decided_by, persona_lang, peer_known, fallback}；fallback=对方语言判不出、按人设 /
    账号默认语言起草 → 会话头 #lp-bar + 稿头 #lp-cdraft 同文案；对方语言有证据 → 两处都不显。
@@ -18045,6 +18237,18 @@ function _cdraftRender(){
   const typing=!!(ta && ta.value.trim());
   bar.classList.add('show');
   bar.classList.toggle('slim', typing);
+  var draftKey=String(d.draft_id||'');
+  if(bar.getAttribute('data-draft')!==draftKey){
+    bar.setAttribute('data-draft', draftKey);
+    bar.classList.remove('cdraft-open');
+  }
+  var sticky=document.getElementById('cdraft-sticky');
+  if(sticky){
+    var sk=String(d.sticky_alert||'');
+    var stxt=sk==='stop'?window.T('inbox.risk.cat_stop_contact'):(sk==='money'?window.T('inbox.risk.cat_money_request'):'');
+    if(stxt){ sticky.style.display=''; sticky.textContent=stxt; }
+    else { sticky.style.display='none'; sticky.textContent=''; }
+  }
   const body=document.getElementById('cdraft-body');
   if(body) body.textContent=(d.draft_text_display||d.draft_text||d.text||'')+(d.photo_directive?(' '+window.Tf('inbox.draft_mini.photo_directive',{kind:String(d.photo_directive.kind||'')})):'');   // R87 P1-3：[PHOTO …] 协议标记不进预览
   const risk=document.getElementById('cdraft-risk');
@@ -18058,6 +18262,20 @@ function _cdraftRender(){
   if(rs){
     const txt=_l1ReasonText(d);
     if(txt){ rs.style.display=''; rs.textContent=txt; } else rs.style.display='none';
+  }
+  // P0-5：草稿条「知识库」行——已引用 N 条 / 未命中 / 本轮未查（原因）
+  const kbd=document.getElementById('cdraft-kbd');
+  if(kbd){
+    const ktxt=_kbDecisionText(d);
+    if(ktxt){
+      const miss=_kbDecisionMiss(d);
+      kbd.style.display=''; kbd.textContent=ktxt;
+      kbd.title=window.T(miss?'inbox.kbd.miss_health_t':'inbox.kbd.chip_t');
+      kbd.classList.toggle('is-miss', miss); kbd.classList.toggle('is-link', miss);
+      // 未命中先打开知识库健康行（未配置 / 重试中 / 失败）。新建条目仍走草稿卡上的 ＋。
+      kbd.onclick=miss?function(ev){ ev.stopPropagation(); openKbEmbedHealth(); }:null;
+    }
+    else kbd.style.display='none';
   }
   try{ _lpCdraftRender(d); }catch(_){}   // Q-21 B：稿头「对方语言未知 · 按人设语言回」（lp-）
   const n=document.getElementById('cdraft-n');
@@ -18142,7 +18360,13 @@ function _cdraftHdClick(e){
 }
 function _cdraftExpand(){
   const bar=document.getElementById('cdraft-bar');
-  if(bar) bar.classList.remove('slim');
+  if(!bar) return;
+  if(bar.classList.contains('slim')){
+    bar.classList.remove('slim');
+    bar.classList.add('cdraft-open');
+    return;
+  }
+  bar.classList.toggle('cdraft-open');
 }
 // 采用的草稿在人工发送成功后 cancel（fire-and-forget；审计留痕 by=composer_adopt）
 // Q-10 A（#267，CV4E22）：send 成功路径已在服务端同步把会话在途稿置 consumed（响应
@@ -18524,8 +18748,42 @@ function _paintHeroGoal(el, mode, opts){
   el.onclick=null;
   if(mode==='hide'){ el.hidden=true; el.innerHTML=''; return; }
   if(mode==='cta'){
-    el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span>'+esc(_goalT('inbox.goal.hero.set','Set a work goal for them \u2192'))+'</span>';
-    el.onclick=function(){
+    var _heldHead='';
+    try{
+      var _cst=_csState;
+      if(_cst&&_cst.state==='held') _heldHead=String(_cst.reason_code||'').split(':')[0];
+    }catch(_){}
+    var _cta=_heldHead==='chatx_handshake'
+      ?_goalT('inbox.goal.hero.held_peer','Auto-send is off · set a goal, or confirm they are a real person')
+      :(_heldHead==='echo_loop'
+        ?_goalT('inbox.goal.hero.held_echo','Auto-send is off · set a goal, or switch this chat to manual')
+        :_goalT('inbox.goal.hero.set','No work goal yet — auto replies only continue the chat'));
+    var _setBtn=' <button type="button" class="hg-draft" data-hg-set="1">'+esc(_goalT('inbox.goal.hero.set_btn','Set one'))+'</button>';
+    var _sibHtml='';
+    if(opts&&opts.sibling){
+      var _sibLine=_goalTf('inbox.goal.hero.sibling',{title:String(opts.sibling||'')},'Another account already has “{title}”');
+      if(opts.siblingTemplate){
+        _sibLine+=' · '+_goalTf('inbox.goal.hero.sibling_tpl',{template:String(opts.siblingTemplate||'')},'template {template}');
+      }
+      if(opts.siblingAccount){
+        _sibLine+=' · '+_goalTf('inbox.goal.hero.sibling_on',{account:String(opts.siblingAccount||'')},'on {account}');
+      }
+      var _adoptBtn=opts.siblingId
+        ?(' <button type="button" class="hg-draft" data-hg-adopt="1">'+esc(_goalT('inbox.goal.hero.adopt','Use it here'))+'</button>')
+        :'';
+      _sibHtml='<div class="hg-sib">'+esc(_sibLine)+_adoptBtn+'</div>';
+    }
+    el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span>'+esc(_cta)+'</span>'+_setBtn+_sibHtml;
+    el.onclick=function(ev){
+      var t=ev&&ev.target;
+      if(t&&t.closest&&t.closest('[data-hg-adopt]')){
+        try{ ev.stopPropagation(); ev.preventDefault(); }catch(_){}
+        _adoptSiblingGoal(opts&&opts.siblingId, opts&&opts.sibling, opts&&opts.siblingAccount, opts&&opts.siblingTemplate, opts&&opts.salesOnSupport);
+        return;
+      }
+      var _open=t&&t.closest&&t.closest('[data-hg-set]');
+      if(opts&&opts.siblingId&&!_open) return;
+      if(_open){ try{ ev.stopPropagation(); ev.preventDefault(); }catch(_){} }
       _uiBeacon('goal_hero_click');
       _cpExpandAndScroll('goal','customer');
       try{
@@ -18584,6 +18842,29 @@ function _paintHeroGoal(el, mode, opts){
     _cpExpandAndScroll('goal','customer');
   };
 }
+async function _adoptSiblingGoal(goalId, title, account, templateName, salesOnSupport){
+  var cid=_wsCpCid;
+  if(!cid||!goalId) return;
+  var _ck=salesOnSupport?'inbox.goal.hero.adopt_confirm_sales':'inbox.goal.hero.adopt_confirm';
+  var _q=_goalTf(_ck,{
+    title:String(title||''), account:String(account||''), template:String(templateName||'')
+  },'Copy “{title}” ({template}, on {account}) into this chat? Direction only, not their progress.');
+  if(!window.confirm(_q)) return;
+  try{
+    var r=await apiFetch('/api/goals/adopt-sibling',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid,goal_id:String(goalId)})});
+    if(!r.ok){
+      var err=null; try{ err=await r.json(); }catch(_){}
+      if(window.CRMW&&CRMW.toast) CRMW.toast((err&&err.detail)||'failed');
+      return;
+    }
+    _renderHeroGoal();
+    try{ if(selectedChat && typeof _csRefresh==='function') _csRefresh(selectedChat); }catch(_){}
+    try{
+      var ge=document.getElementById('ws-cp-goal');
+      if(ge&&typeof ge.reload==='function') ge.reload();
+    }catch(_){}
+  }catch(_){}
+}
 async function _renderHeroGoal(fromData){
   var el=document.getElementById('cp-hero-goal'); if(!el) return;
   if(_cpCardCollapsed('hero')){ _paintHeroGoal(el,'hide'); return; }
@@ -18603,7 +18884,15 @@ async function _renderHeroGoal(fromData){
   var g=d&&d.goal;
   if(!g || (g.status&&g.status!=='active'&&g.status!=='paused')){
     _applyGoalTabSignal(null);
-    _paintHeroGoal(el,'cta');
+    var _sib=(d&&d.sibling_goals&&d.sibling_goals[0])||null;
+    var _pl=String(_cid||'').split(':')[0];
+    _paintHeroGoal(el,'cta',{
+      sibling:_sib?String(_sib.title||_sib.template||''):'',
+      siblingId:_sib?String(_sib.goal_id||''):'',
+      siblingAccount:_sib?String(_acctLabel(_pl, String(_sib.account_id||''))||''):'',
+      siblingTemplate:_sib?String(_sib.template_name||_sib.template||''):'',
+      salesOnSupport:!!(_sib&&_sib.sales_on_support)
+    });
     return;
   }
   _applyGoalTabSignal(g);
@@ -18662,6 +18951,7 @@ function _onGoalHostEvent(ev){
     }
     _renderHeroGoal();
     _refreshGoalAgenda(true);
+    try{ if(selectedChat && typeof _csRefresh==='function') _csRefresh(selectedChat); }catch(_){}
   }catch(_){}
 }
 async function _refreshGoalAgenda(force){
@@ -19633,7 +19923,7 @@ function renderInfoSidebarAI(ai){
       ${(ai.suggested_replies||[]).map((r,i)=>{
         const bg=r.recommended?'rgba(13,148,136,.14)':'var(--bg-soft)';
         const border=r.recommended?'#0d9488':'var(--border)';
-        const badge=r.recommended?'<span style="font-size:11px;background:#0d9488;color:var(--th-ink-inverse,#fff);border-radius:4px;padding:1px 5px;margin-left:4px;">'+window.T('inbox.ai.recommended')+'</span>':'';
+        const badge=r.recommended?'<span style="font-size:11px;background:var(--th-bg-teal6,#0d9488);color:var(--th-ink-inverse,#fff);border-radius:4px;padding:1px 5px;margin-left:4px;">'+window.T('inbox.ai.recommended')+'</span>':'';
         return `<div style="margin-top:4px;background:${bg};border-left:3px solid ${border};border-radius:0 5px 5px 0;padding:5px 7px;">
           <div style="font-size:11px;color:var(--text-sub);margin-bottom:2px;">${esc(r.rationale||'')}${badge}</div>
           <div style="font-size:11px;color:var(--text-main);line-height:1.45;">${esc(r.text||'')}</div>
@@ -20736,6 +21026,7 @@ function _dpickEtaText(){
 async function _dpickGenerate(c, msgs, opts){
   opts=opts||{};
   var cid=c.conversation_id||convKey(c);
+  _dpickKbTxt='';   // P0-5：新一轮生成前清上一轮的知识库状态，防串会话残留
   var lang=''; try{ lang=localStorage.getItem('cp_replylang:'+cid)||''; }catch(_){}
   if(!_dpickOpenLoading(c,opts)) _toast(window.T('inbox.rt.ai_reply_busy'),'#0f9d75');   // 容器缺失兜底：至少保留旧 toast
   _dpickAiBtn(true);
@@ -20760,6 +21051,7 @@ async function _dpickGenerate(c, msgs, opts){
     if(!selectedChat || convKey(selectedChat)!==convKey(c)){ draftPickCancel('switched'); return; }
     if(!d.ok || !d.reply){ _dpickShowError((d&&d.detail)||'',opts); return; }
     _noteGoalApplied(cid, d.goal_applied);          // #152 F2：目标注没注入亮到英雄行
+    try{ _dpickKbTxt=_kbDecisionText({kb_decision:d.kb_decision}); }catch(_){ _dpickKbTxt=''; }   // P0-5
     var text=d.translated||d.reply;               // 与右栏同口径：有译文用译文（客户可读文本）
     _dpickTextLang=d.translated?String(lang||''):String(d.reply_lang||'');
     // P2 证据链：这条草稿引用的 KB 条目 → 点亮「知识」chip（点开浮层可核验/引用），
@@ -20930,13 +21222,14 @@ function openDraftPick(text, persona){
   _dpickSetState('ready');
   return true;
 }
+var _dpickKbTxt='';   // P0-5：本轮 smart-reply 的知识库使用情况（副标题尾部一句）
 function _dpickApplyReadyChrome(){
   var ttl=document.getElementById('dpick-title');
   if(ttl) ttl.textContent=window.T('inbox.dpick.title');
   var sub=document.getElementById('dpick-sub');
-  if(sub) sub.textContent=_dpickPersona
+  if(sub) sub.textContent=(_dpickPersona
     ? window.Tf('inbox.dpick.sub_by',{name:_dpickPersona})
-    : window.T('inbox.dpick.sub');
+    : window.T('inbox.dpick.sub'))+(_dpickKbTxt?(' · '+_dpickKbTxt):'');
   var ava=document.getElementById('dpick-ava');
   if(ava) ava.textContent=_dpickPersona?String(_dpickPersona).charAt(0).toUpperCase():'✦';
 }
@@ -21559,6 +21852,9 @@ async function sendVoiceReply(){
     }
   },1000);
   const onSent=async(meta,reused)=>{
+    /* 待人工「今天清掉」：直发成功与对账确认已发出都走这里，失败不走 */
+    _ckNoteInboxReply({conversation_id:sendChat.conversation_id, platform:sendChat.platform,
+      account_id:sendChat.account_id||'default', chat_key:sendChat.chat_key});
     _voicePreviewReuse=null;   /* 试听产物已消费，防陈旧复用 */
     const m=meta||{};
     let hint=window.T('inbox.voice.sent')+(m.provider?`（${m.provider}${m.emotion?' / '+m.emotion:''}）`:'');
@@ -21610,7 +21906,7 @@ async function sendVoiceReply(){
         try{ _noteGateBlock(_gd); }catch(_){}
         onFail(String(_gd.message||''));
       } else {
-        onFail((_gd&&_gd.message)||_gd||d.message||d.reason||'');
+        onFail(errMsgOf(d));
       }
     }
   }catch(_e){
@@ -22996,7 +23292,7 @@ async function _vcmAuditionSys(){
     return;
   }
   box.innerHTML=
-    `<div style="color:#b45309;margin-bottom:4px">${window.T('inbox.vcm.audition_sys_note')}</div>`+
+    `<div style="color:var(--th-ink-amber7,#b45309);margin-bottom:4px">${window.T('inbox.vcm.audition_sys_note')}</div>`+
     `<audio controls src="${esc(url)}" style="width:100%;"></audio>`+
     `<div style="margin-top:6px"><button class="vcm-btn" data-act="vcm-audition-retry">${window.T('inbox.vcm.audition_retry')}</button></div>`;
 }
@@ -23340,7 +23636,8 @@ function _mvRender(){
   var flow=document.getElementById('mv-dataflow');
   if(flow){
     var ep=_mpActiveEp(), via=ep.via||(ep.private?'lan':'cloud'), hostTxt=ep.public_host||'';
-    if(via==='hosted') flow.textContent=window.T('inbox.mp.flow_hosted');
+    if(String(ep.model||'').toLowerCase()==='chatx') flow.textContent=hostTxt;
+    else if(via==='hosted') flow.textContent=window.T('inbox.mp.flow_hosted');
     else if(via==='lan'||ep.private) flow.textContent=window.Tf('inbox.mp.flow_private',{host:hostTxt||window.T('inbox.mp.tag_private')});
     else flow.textContent=hostTxt?window.Tf('inbox.mp.flow_cloud',{host:hostTxt}):'';
     flow.classList.toggle('priv', via==='lan'||via==='hosted');
@@ -24314,23 +24611,46 @@ async function _rememberConvEngine(engine){
   }catch(e){ /* 记住失败不影响填入，忽略 */ }
 }
 // C-1：切换目标语时提前查引擎能力矩阵，提示主引擎是否会被兜底（坐席对译文质量有预期）
-const _engineMatrixCache=new Map();   // target_lang -> matrix（引擎配置启动时固定，可缓存）
+// 缓存键含会话：免费档缺口只属于这一条会话的翻译档，不按目标语盖整箱。
+const _engineMatrixCache=new Map();
 async function _updateEngineHint(){
   const el=document.getElementById('xlate-engine');
   if(!el) return;
+  const conv=selectedChat;
+  if(!conv){
+    el.innerHTML='<span class="dot"></span>'+window.T('inbox.xl.eng_ai');
+    el.title='';
+    _syncEngineSel(null);
+    try{ _syncTopXlate(); }catch(_){}
+    return;
+  }
   let target=_xlateOut||_xlateIn||'';
   if(target==='auto'){
-    const _cl=String((selectedChat&&selectedChat.language)||'').trim();
+    const _cl=String((conv.language)||'').trim();
     target=(_cl&&_cl!=='unknown')?_cl:'';
   }
-  if(!target){ el.innerHTML='<span class="dot"></span>'+window.T('inbox.xl.eng_ai')+_prefEngineBadge(null); el.title=''; _syncEngineSel(null); return; }
+  if(!target){ el.innerHTML='<span class="dot"></span>'+window.T('inbox.xl.eng_ai')+_prefEngineBadge(null); el.title=''; _syncEngineSel(null); try{ _syncTopXlate(); }catch(_){} return; }
+  const cacheKey=[conv.platform||'', conv.account_id||'default', conv.chat_key||'', target].join('\u0001');
   try{
-    let m=_engineMatrixCache.get(target);
+    let m=_engineMatrixCache.get(cacheKey);
     if(!m){
-      const r=await apiFetch('/api/unified-inbox/translation-engines?target_lang='+encodeURIComponent(target));
+      const qs='target_lang='+encodeURIComponent(target)
+        +'&platform='+encodeURIComponent(conv.platform||'')
+        +'&account_id='+encodeURIComponent(conv.account_id||'default')
+        +'&chat_key='+encodeURIComponent(conv.chat_key||'');
+      const r=await apiFetch('/api/unified-inbox/translation-engines?'+qs);
       const d=await r.json();
+      if(selectedChat!==conv) return;
       if(!d||!d.ok||!d.matrix){ _syncEngineSel(null); return; }
-      m=d.matrix; _engineMatrixCache.set(target,m);
+      m=d.matrix; _engineMatrixCache.set(cacheKey,m);
+    }
+    if(selectedChat!==conv) return;
+    if(m.local_mt_gap){
+      el.innerHTML='<span class="dot" style="background:var(--th-bg-amber5,#f59e0b);"></span>'+window.T('inbox.xl.local_mt_gap')+_prefEngineBadge(m);
+      el.title=window.T('inbox.xl.local_mt_gap_t');
+      _syncEngineSel(m);
+      try{ _syncTopXlate(); }catch(_){}
+      return;
     }
     _syncEngineSel(m);   // P1：下拉值/灰显与徽标同步刷新
     const eff=m.effective, primary=m.primary;
@@ -24349,6 +24669,7 @@ async function _updateEngineHint(){
       el.innerHTML='<span class="dot"></span>'+esc(effLabel)+_prefEngineBadge(m);
       el.title=window.Tf('inbox.xl.eng_plain_t',{tgt:target,eff:effLabel});
     }
+    try{ _syncTopXlate(); }catch(_){}
   }catch(_){}
 }
 /* F+2：会话首选引擎徽标。在引擎提示后追加「📌 <引擎>」；该引擎对当前目标语不可用→红色离线警示。
@@ -25395,7 +25716,39 @@ function _acctIconLabel(key){
   // i18n label 里当图标用的前缀 emoji（🔄🔗✏️🚪🗑️⬇️等）已由 SVG 取代，剥掉避免重复
   return String(window.T(key)||'').replace(/^[\s\u2190-\u21FF\u2300-\u27BF\u2B00-\u2BFF\uFE0F\u{1F000}-\u{1FAFF}]+/u,'').trim();
 }
-/* P4 价值信息行：上次同步 / 今日会话数 / 建议同步（TG 从未同步过时）。 */
+function _acctIdentBits(a, meta){
+  /* P1-4：账号身份行——人设 · 工作类型 · 知识库 · 档位（账号菜单 / 抽屉卡共用）
+     i18n 键必须是 T() 字面量，禁止 T(前缀+变量)（扫描器会抽成缺译前缀键）。 */
+  const src=Object.assign({}, meta||{}, a||{});
+  const bits=[];
+  const kind=String(src.persona_kind||'');
+  const kLab=kind==='support'?window.T('inbox.acct.kind_support')
+    :kind==='sales'?window.T('inbox.acct.kind_sales')
+    :kind==='companion'?window.T('inbox.acct.kind_companion')
+    :kind==='other'?window.T('inbox.acct.kind_other'):'';
+  const kb=String(src.ident_kb||'');
+  const kbLab=kb==='must'?window.T('inbox.acct.kb_must')
+    :kb==='open'?window.T('inbox.acct.kb_open')
+    :kb==='skip'?window.T('inbox.acct.kb_skip')
+    :kb==='unselected'?window.T('inbox.acct.kb_unselected'):'';
+  const mode=String(src.ident_mode||'');
+  const mLab=mode==='pending'?window.T('inbox.acct.mode_pending')
+    :mode==='review'?window.T('inbox.acct.mode_review')
+    :mode==='auto_ai'?window.T('inbox.acct.mode_auto_ai')
+    :mode==='manual'?window.T('inbox.acct.mode_manual')
+    :mode==='multi_choice'?window.T('inbox.acct.mode_multi_choice')
+    :mode==='global'?window.T('inbox.acct.mode_global'):'';
+  if(src.persona_unselected || (!src.persona_id && !src.persona_name && kb==='unselected')){
+    bits.push(`<span class="acct-badge ident warn">${esc(window.T('inbox.acct.ident_unselected'))}</span>`);
+  }else{
+    const name=src.persona_name||src.persona_id||'';
+    if(name) bits.push(`<span class="acct-badge persona" title="${esc(window.Tf('inbox.acct.badge_persona_t',{id:name}))}">${uiIcon('mask',11)} ${esc(name)}</span>`);
+    if(kLab) bits.push(`<span class="acct-badge kind">${esc(kLab)}</span>`);
+    if(kbLab) bits.push(`<span class="acct-badge kb kb-${esc(kb)}">${esc(kbLab)}</span>`);
+  }
+  if(mLab) bits.push(`<span class="acct-badge mode">${esc(mLab)}</span>`);
+  return bits;
+}
 function _acctValueMetaHtml(pl,a,on){
   const bits=[];
   if(pl==='telegram'){
@@ -25409,10 +25762,7 @@ function _acctValueMetaHtml(pl,a,on){
   }
   const n=Number(a.today_conv_count||0);
   if(n>0) bits.push(esc(window.Tf('inbox.acct.today_convs',{n:n})));
-  // 绑定人设徽标（有 persona_id 即显示）
-  if(a.persona_id){
-    bits.push(`<span class="acct-badge persona" title="${esc(window.Tf('inbox.acct.badge_persona_t',{id:String(a.persona_id)}))}">${uiIcon('mask',11)} ${esc(window.T('inbox.acct.badge_persona'))}</span>`);
-  }
+  _acctIdentBits(a).forEach(h=>bits.push(h));
   // 近 7 天改资料热点徽标（≥3 黄色告警）
   const churn=Number(a.profile_churn_7d||0);
   if(churn>=3){
@@ -28223,7 +28573,7 @@ function _modeDesc(m){ return (m.desc_key&&window.T(m.desc_key,null))||m.desc||'
 function _showConnectModesFail(why){
   const box=document.getElementById('connect-modes');
   if(!box) return;
-  const hint=why?('<div style="margin-top:6px;color:var(--th-ink-slate4,#8b9bb4);font-weight:400;">'+esc(String(why).slice(0,160))+'</div>'):'';
+  const hint=why?('<div style="margin-top:6px;color:var(--th-ink-slate4,#5b6b85);font-weight:400;">'+esc(String(why).slice(0,160))+'</div>'):'';
   box.innerHTML='<div style="font-size:12px;color:var(--red);text-align:center;padding:16px;">'
     +window.T('inbox.connect.modes_fail')+hint
     +'<div class="connect-actions" style="justify-content:center;margin-top:12px;">'
@@ -28420,6 +28770,8 @@ const _OFFICIAL_CONSOLE={
   line:'https://developers.line.biz/console/',
   qqbot:'https://q.qq.com/',
   wechat_kf:'https://work.weixin.qq.com/wework_admin/frame#apps',
+  douyin:'https://developer.open-douyin.com/',
+  tiktok:'https://business-api.tiktok.com/',
 };
 // 准备清单：让用户点「去接入向导」之前就知道要带什么材料、去哪拿、大约多久。
 // 字段 chip 标必填/可选/已填；win_note_<platform> 键存在时附平台政策注释（如 7 天窗）。
@@ -30471,7 +30823,7 @@ async function init(){
     const _drawerRaw=String(_q.get('drawer')||'').toLowerCase().trim();
     const _wantDrawer=_drawerRaw==='1'||_drawerRaw==='true'||!!_connect;
     // Instagram/Zalo/QQ 机器人/微信客服无扫码态，openConnect → 模式选 → credentials → /workspace/setup
-    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger','instagram','zalo','qqbot','qq','wechat_kf']);
+    const _CONNECT_PLATS=new Set(['telegram','whatsapp','line','messenger','instagram','zalo','qqbot','qq','wechat_kf','douyin','tiktok']);
     if(_wantDrawer && typeof openDrawer==='function'){
       openDrawer();
       if(_connect && _CONNECT_PLATS.has(_connect) && typeof openConnect==='function'){
@@ -30514,7 +30866,8 @@ Object.assign(window, {
   loadMoreChats,   // 十期：列表游标分页「加载更早的会话」
   loadChats,       // 十期：CmdK @转派成功后即时刷新列表（assignment 富集）
   // P0 账号顶部状态栏 Account Dock（2026-08-16）：条内全部 innerHTML 生成 onclick/onkeydown
-  _adkPick, _adkAll, _adkKey, _adkNudge, buildAcctDock,
+  _adkPick, _adkAll, _adkKey, _adkNudge,   buildAcctDock,
+  focusPcWechat, loadConnectModes, startPcCopilot, togglePcTimeline,
   // Dock P5（2026-08-17）：「历史 N」治理面板（chip 内联 onclick；面板内部走事件委托零内联）
   toggleAdkHistPanel, closeAdkHistPanel,
   // 列表头 / 筛选 / 视图

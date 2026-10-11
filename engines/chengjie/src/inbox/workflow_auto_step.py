@@ -58,7 +58,7 @@ def resolve_auto_advance_cfg(cfg_root: Any) -> Dict[str, Any]:
         out["mutex_outbound_cooldown_sec"] = max(0.0, float(
             aa.get("mutex_outbound_cooldown_sec", 600)))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in resolve_auto_advance_cfg", exc_info=True)
     return out
 
 
@@ -383,7 +383,7 @@ async def _generate_and_stage(
         try:
             _publish_step_event(conv_id, ex, note, auto=False)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in _generate_and_stage", exc_info=True)
         return False
 
 

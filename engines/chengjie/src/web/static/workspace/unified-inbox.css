@@ -1075,12 +1075,19 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .lp-bar .lp-ic .rt-ic{width:12px;height:12px;}
 .lp-bar .lp-txt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .cdraft-reason.lp-cdraft{background:color-mix(in srgb,var(--tk-text-muted,#64748b) 14%,transparent);color:var(--tk-text-muted,var(--text-sub));max-width:260px;}
+/* P0-5（2026-09-29 8E56）：知识库使用情况 chip——命中 / 未查为中性信息（复用 lp 中性令牌）；
+   未命中（.is-miss）才用琥珀：这是「库里没这条」的可操作提示，坐席点开知识库补条目。 */
+.cdraft-reason.cdraft-kbd,.draft-l1r-chip.draft-kbd-chip{background:color-mix(in srgb,var(--tk-text-muted,#64748b) 14%,transparent);color:var(--tk-text-muted,var(--text-sub));max-width:260px;}
+.cdraft-reason.cdraft-kbd.is-miss,.draft-l1r-chip.draft-kbd-chip.is-miss{background:color-mix(in srgb,#f59e0b 16%,transparent);color:var(--th-ink-amber7,#b45309);}
+/* P1-3：未命中 chip 可点（跳知识库新建抽屉）——按钮化但保持 chip 形态 */
+.cdraft-reason.cdraft-kbd.is-link,.draft-l1r-chip.draft-kbd-chip.is-link{cursor:pointer;border:0;font:inherit;font-size:10px;line-height:16px;text-decoration:underline dotted;}
+.cdraft-reason.cdraft-kbd.is-link:hover,.draft-l1r-chip.draft-kbd-chip.is-link:hover{filter:brightness(.92);}
 /* M-2 B（D-M1 ②）：账号菜单行内「此账号全部会话 → 手动 / 半自动 / 全自动」+ 门禁提示 */
 .ac-pick-row .apr-modes{display:flex;align-items:center;gap:4px;margin-top:3px;flex-wrap:wrap;}
 .ac-pick-row .apr-modes-lbl{font-size:10px;color:var(--text-tiny);white-space:nowrap;}
 .ac-pick-row .apr-mode-btn{font-size:10px;line-height:16px;padding:0 6px;border-radius:999px;border:1px solid var(--border);background:var(--bg-panel);color:var(--text-sub);cursor:pointer;}
 .ac-pick-row .apr-mode-btn:hover{border-color:var(--accent);color:var(--accent);}
-.ac-pick-row .apr-mode-btn.m-auto_ai:hover{border-color:#2563eb;color:#2563eb;}
+.ac-pick-row .apr-mode-btn.m-auto_ai:hover{border-color:var(--bl-growth-600,#0d76d9);color:var(--bl-growth-600,#0d76d9);}
 .ac-pick-row .apr-mode-btn:disabled{opacity:.5;cursor:progress;}
 .ac-pick-row .apr-gate{font-size:10px;line-height:16px;padding:0 5px;border-radius:4px;background:color-mix(in srgb,#f59e0b 18%,transparent);color:var(--th-ink-amber7,#b45309);white-space:nowrap;}
 .ac-pick-row .apr-gate.warn{background:color-mix(in srgb,#dc2626 16%,transparent);color:var(--th-ink-red7,#b91c1c);}
@@ -1213,7 +1220,12 @@ details.xl-adv .xl-default-row{border-top:0;padding-top:0;}
 .cdraft-bar.slim .cdraft-hd{cursor:pointer;padding:4px 10px;font-weight:600;}
 .cdraft-bar.slim .cdraft-acts .cdraft-btn{display:none;}
 .cdraft-bar.slim .cdraft-acts .cdraft-btn.cd-expand{display:inline-flex;}
-.cdraft-btn.cd-expand{display:none;}
+.cdraft-btn.cd-expand{display:inline-flex;}
+.cdraft-more{display:none;}
+.cdraft-bar.cdraft-open .cdraft-more{display:block;}
+.cdraft-bar.slim .cdraft-more{display:none;}
+.cdraft-more-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 10px 6px;}
+.cdraft-reason.cdraft-sticky{background:rgba(225,29,72,.16);color:var(--tk-danger-ink);max-width:220px;}
 .cdraft-btn:focus-visible,.cdraft-body:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 /* 会话行「谁在处理」微标（右侧 meta 列，与未读点/SLA 同列） */
 .conv-handler{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 4px;border-radius:8px;font-size:10px;font-weight:800;line-height:1;border:1px solid transparent;}
@@ -1450,6 +1462,11 @@ details.cp-more .info-row:first-of-type{margin-top:6px;}
 .acct-meta-sep{opacity:.4;margin:0 4px;}
 .acct-badge{display:inline-flex;align-items:center;gap:2px;padding:0 6px;border-radius:8px;font-size:10px;line-height:16px;font-weight:600;}
 .acct-badge.persona{background:color-mix(in srgb,var(--xl-accent) 16%,transparent);color:var(--xl-accent);}
+.acct-badge.kind{background:color-mix(in srgb,var(--green,#10b981) 14%,transparent);color:var(--green,#10b981);}
+.acct-badge.kb-must{background:color-mix(in srgb,var(--green,#10b981) 14%,transparent);color:var(--green,#10b981);}
+.acct-badge.kb-open{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);}
+.acct-badge.kb-skip,.acct-badge.kb-unselected,.acct-badge.ident.warn{background:var(--bdg-warn-bg,color-mix(in srgb,var(--amber,#f59e0b) 16%,transparent));color:var(--bdg-warn-ink,var(--amber,#d97706));}
+.acct-badge.mode{background:var(--input,var(--bg-soft));color:var(--text-sub,var(--text-tiny));}
 .acct-badge.churn{background:var(--bdg-warn-bg);color:var(--bdg-warn-ink);}
 .acct-badge.churn.clickable{cursor:pointer;}
 .acct-badge.churn.clickable:hover{background:color-mix(in srgb,var(--bdg-warn-ink) 26%,transparent);}
@@ -2295,7 +2312,7 @@ button.fleet-cell:disabled{cursor:default;}
 /* 接力记忆二期：坐席手动发出的出站行「人工」角标（琥珀，与「手机发出」同形不同色，一眼分清 AI / 人） */
 .ms-ext-chip.agent-chip{background:rgba(245,166,35,.18);color:var(--warn,#b45309);}
 /* 四期：AI 自动链发出（编排器镜像行 sent_by=ai）——比「人工」更低调：坐席台上 AI 发的是常态 */
-.ms-ext-chip.ai-chip{background:rgba(59,130,246,.12);color:var(--th-ink-blue8,#1e40af);opacity:.75;}
+.ms-ext-chip.ai-chip{background:color-mix(in srgb, var(--accent,#1e8cf2) 12%, transparent);color:var(--th-ink-blue8,#1e40af);opacity:.75;}
 /* 接力记忆二期：切回全自动后的「AI 记住了什么」预览条（自带按钮，不改 _toast） */
 .hf-toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#232429;color:#fff;padding:8px 12px 8px 18px;border-radius:8px;font-size:13px;z-index:99999;opacity:0;transition:opacity .2s;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.28);max-width:min(560px,92vw);}
 .hf-toast .hf-row{display:flex;align-items:center;gap:12px;}
@@ -2782,14 +2799,14 @@ button.ftab-more-item{border:none;background:none;width:100%;text-align:left;fon
 .msg-spk-av{width:18px;height:18px;border-radius:50%;color:#fff;font-size:10px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex:none;line-height:18px;letter-spacing:0;}
 .msg-spk-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .msg-channel-card{border-left:3px solid color-mix(in srgb, var(--accent,#1e8cf2) 55%, transparent);padding-left:8px;}
-.slash-panel-hdr{padding:6px 12px;font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
+.slash-panel-hdr{padding:6px 12px;font-size:11px;font-weight:700;color:var(--text-sub);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
 /* P42 内联 AI 副驾补全浮层已下线（遮挡消息原文，2026-08-07）——样式一并移除 */
 .slash-item{padding:9px 14px;cursor:pointer;display:flex;align-items:flex-start;gap:10px;transition:background .1s;}
 .slash-item:hover,.slash-item.active{background:var(--bg-soft);}
 .slash-item-icon{width:28px;height:28px;border-radius:8px;background:#ede9fe;color:#7c3aed;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;}
 .slash-item-label{font-size:13px;font-weight:600;color:var(--text-main);margin-bottom:1px;}
 .slash-item-sub{font-size:11px;color:var(--text-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;}
-.slash-hint{padding:8px 14px;font-size:11px;color:#94a3b8;text-align:center;}
+.slash-hint{padding:8px 14px;font-size:11px;color:var(--text-sub);text-align:center;}
 
 /* ===== P0（2026-07-23）：切会话骨架屏 ===== */
 /* 会话形态占位（左右交替气泡，透明度脉冲）；prefers-reduced-motion 降级为静态。 */

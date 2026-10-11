@@ -91,7 +91,7 @@ def resolve_journey_cfg(cfg_root: Any) -> Dict[str, Any]:
             out["quote_keywords"] = [str(k).strip() for k in kw if str(k).strip()]
         out["scan_limit"] = max(10, min(500, int(j.get("scan_limit", 120))))
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in resolve_journey_cfg", exc_info=True)
     return out
 
 
@@ -234,6 +234,7 @@ def backfill_stages(store: Any, cfg_root: Any, *, limit: int = 300) -> int:
                 if _eval_conversation(store, cid, cfg, n):
                     updated += 1
             except Exception:
+                logging.getLogger(__name__).debug("swallowed in backfill_stages", exc_info=True)
                 continue
     except Exception:
         logger.debug("journey backfill 失败", exc_info=True)

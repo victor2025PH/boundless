@@ -93,7 +93,7 @@ export default function PricingPage() {
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
               </span>
-              {zh ? "2026 充值计费 · 不订阅 · 标准翻译永久免费" : "2026 top-up billing · no subscription · translation free forever"}
+              {zh ? "2026 充值计费 · 不订阅 · 标准翻译走本地模型" : "2026 top-up billing · no subscription · standard translation uses the local model"}
             </span>
           </div>
           <h1 className="mx-auto mt-5 max-w-3xl text-4xl font-black leading-[1.15] tracking-tight text-white md:text-6xl">
@@ -103,8 +103,8 @@ export default function PricingPage() {
           <RotatingPerk items={ORDER_HERO.tokens.rotating} zh={zh} />
           <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-slate-400 md:text-base">
             {zh
-              ? `没有月费、没有档位墙：坐席、账号、平台、AI 人设、克隆音色、API 全部开放。1U = ${fmt(RECHARGE_TOKENS_PER_USD)} Token，首笔充值最高加赠 +${MAX_PCT}%；标准翻译永久免费不限字符，Token 用尽自动降级免费引擎，永不断线。`
-              : `No monthly fee, no feature walls: seats, accounts, platforms, AI personas, cloned voices and API — all unlocked. 1U = ${fmt(RECHARGE_TOKENS_PER_USD)} tokens with up to +${MAX_PCT}% on your first top-up. Standard translation stays free and unlimited; exhausted wallets degrade gracefully, never offline.`}
+              ? `没有月费、没有档位墙：坐席、账号、平台、AI 人设、克隆音色、API 全部开放。1U = ${fmt(RECHARGE_TOKENS_PER_USD)} Token，首笔充值最高加赠 +${MAX_PCT}%。标准翻译走本部署的本地模型，不按字符扣 Token，也不调用付费翻译接口；本地模型没配好时这条翻译转人工。`
+              : `No monthly fee, no feature walls: seats, accounts, platforms, AI personas, cloned voices and API — all unlocked. 1U = ${fmt(RECHARGE_TOKENS_PER_USD)} tokens with up to +${MAX_PCT}% on your first top-up. Standard translation uses this deployment's local model, with no per-character token charge and no paid translation API. If that model is not set, the line waits for a person.`}
           </p>
         </Reveal>
 
@@ -124,7 +124,7 @@ export default function PricingPage() {
               </div>
             </div>
             <ul className="flex min-w-0 flex-1 flex-wrap gap-x-6 gap-y-1.5 text-xs text-slate-300">
-              <li className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 shrink-0 text-emerald-300" />{zh ? `标准翻译永久免费（公平使用 ${fmt(FREE_TRANSLATE_FAIR_USE_CHARS_PER_DAY)} 字符/日）` : `Standard translation free forever (fair use ${fmt(FREE_TRANSLATE_FAIR_USE_CHARS_PER_DAY)} chars/day)`}</li>
+              <li className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 shrink-0 text-emerald-300" />{zh ? `标准翻译走本地模型（公平使用 ${fmt(FREE_TRANSLATE_FAIR_USE_CHARS_PER_DAY)} 字符/日，超出仅提醒）` : `Standard translation on the local model (fair use ${fmt(FREE_TRANSLATE_FAIR_USE_CHARS_PER_DAY)} chars/day, overage is a reminder only)`}</li>
               <li className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 shrink-0 text-emerald-300" />{zh ? `每月 ${fmt(CHATX_FREE.tokensMonthly)} Token + 注册再送 ${fmt(SIGNUP_BONUS_TOKENS)}` : `${fmt(CHATX_FREE.tokensMonthly)} tokens/mo + ${fmt(SIGNUP_BONUS_TOKENS)} on signup`}</li>
               <li className="flex items-center gap-1.5"><Check className="h-3.5 w-3.5 shrink-0 text-emerald-300" />{zh ? "全功能开放（1 个聊天账号防滥用）" : "All features (1 chat account anti-abuse cap)"}</li>
             </ul>
@@ -220,7 +220,7 @@ export default function PricingPage() {
           <div className="mb-4 flex flex-wrap items-baseline gap-3">
             <h2 className="text-xl font-bold text-white md:text-2xl">{zh ? "翻译：免费与专业的边界" : "Translation: free vs. pro"}</h2>
             <span className="text-xs text-slate-500">
-              {zh ? "标准翻译白送，专业需求才计量——边界提前说清楚" : "Standard is free; only pro workflows meter — the line is published upfront"}
+              {zh ? "标准翻译走本地模型，专业需求才计量——边界提前说清楚" : "Standard translation uses the local model; only pro workflows meter"}
             </span>
           </div>
           <div className="grid gap-4 md:grid-cols-3">
@@ -228,10 +228,10 @@ export default function PricingPage() {
               [
                 {
                   icon: Gift,
-                  title: zh ? "标准翻译 · 永久免费" : "Standard · free forever",
+                  title: zh ? "标准翻译 · 本地模型" : "Standard · local model",
                   desc: zh
-                    ? `内置翻译引擎，多平台双向、不限字符（公平使用 ${fmt(FREE_TRANSLATE_FAIR_USE_CHARS_PER_DAY)} 字符/日/授权）；安装包提供可选离线翻译组件，弱网也能用。`
-                    : `Built-in engine, two-way across platforms, unlimited characters (fair use ${fmt(FREE_TRANSLATE_FAIR_USE_CHARS_PER_DAY)}/day). Optional offline component in the installer.`,
+                    ? `本部署的本地模型，多平台双向、不按字符扣 Token（公平使用 ${fmt(FREE_TRANSLATE_FAIR_USE_CHARS_PER_DAY)} 字符/日，超出仅提醒）。没配好时这条翻译转人工，不改用付费引擎。`
+                    : `This deployment's local model, two-way across platforms, no per-character token charge (fair use ${fmt(FREE_TRANSLATE_FAIR_USE_CHARS_PER_DAY)}/day, overage is a reminder). If it is not set, a person takes the line — it does not switch to a paid engine.`,
                   accent: "emerald" as const,
                 },
                 {
@@ -309,7 +309,7 @@ export default function PricingPage() {
                       name: zh ? "无界 智聊 ChatX（本站）" : "BOUNDLESS ChatX (this site)",
                       price: zh ? "免费开始 · 新人 6U · 充值 50U 起（无月费）" : "Free start · 6U newcomer pack · top up from 50U (no monthly fee)",
                       ai: zh ? "全功能开放 · 按 Token 透明计量" : "All features included · transparent token metering",
-                      xlate: zh ? "标准翻译免费不限量" : "Standard translation free & unlimited",
+                      xlate: zh ? "标准翻译走本地模型" : "Standard translation uses the local model",
                       self: true,
                     },
                     {
@@ -386,8 +386,8 @@ export default function PricingPage() {
               </div>
               <p className="mt-1 text-sm text-slate-400">
                 {zh
-                  ? `下载即用：全功能 + 翻译不限量 + 每月 ${fmt(CHATX_FREE.tokensMonthly)} Token，注册再送 ${fmt(SIGNUP_BONUS_TOKENS)}；新人 ${NEWBIE_PACK.price}U 大礼包 ${fmt(NEWBIE_PACK.tokens)} Token 随时接上。`
-                  : `Download & go: every feature + unlimited translation + ${fmt(CHATX_FREE.tokensMonthly)} tokens/mo, plus ${fmt(SIGNUP_BONUS_TOKENS)} on signup. The ${NEWBIE_PACK.price}U newcomer pack (${fmt(NEWBIE_PACK.tokens)} tokens) is one click away.`}
+                  ? `下载即用：全功能 + 标准翻译走本地模型 + 每月 ${fmt(CHATX_FREE.tokensMonthly)} Token，注册再送 ${fmt(SIGNUP_BONUS_TOKENS)}；新人 ${NEWBIE_PACK.price}U 大礼包 ${fmt(NEWBIE_PACK.tokens)} Token 随时接上。`
+                  : `Download and go: every feature, standard translation on the local model, ${fmt(CHATX_FREE.tokensMonthly)} tokens/mo, plus ${fmt(SIGNUP_BONUS_TOKENS)} on signup. The ${NEWBIE_PACK.price}U newcomer pack (${fmt(NEWBIE_PACK.tokens)} tokens) is one click away.`}
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap gap-3">

@@ -10,7 +10,7 @@ const LANGUAGES = { "zh-CN": "/order", en: "/en/order", "x-default": "/order" };
 export const metadata: Metadata = {
   title: "Plans & Ordering · BOUNDLESS",
   description:
-    "Self-serve checkout: STUDIO plans (free face swap to start, unlimited usage on your hardware); ChatX pays by top-up with no subscription (free start · top up from 50U · up to +40% on the first top-up · 6U newcomer pack; standard translation free forever), tokens shared across ChatX & LingoX. USDT or card, auto-activation.",
+    "Self-serve checkout: STUDIO plans (free face swap to start, unlimited usage on your hardware); ChatX pays by top-up with no subscription (free start · top up from 50U · up to +40% on the first top-up · 6U newcomer pack; standard translation uses the local model, and a person takes the line if it is not set), tokens shared across ChatX & LingoX. USDT or card, auto-activation.",
   alternates: { canonical: "/en/order", languages: LANGUAGES },
   openGraph: {
     title: "Plans & Ordering · BOUNDLESS",

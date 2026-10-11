@@ -373,7 +373,7 @@ def _http_error(code: int, body: bytes):
 
 
 def test_tts_retries_without_emo_text_when_engine_emotion_guidance_fails():
-    """IndexTTS2 QwenEmotion 吐非数值分数 → 502：同稿去掉 emo_text 重试一次成功；emotion 档保留。"""
+    """IndexTTS2 QwenEmotion 吐非数值分数 → 502：同稿去掉 emo_text 重试一次成功。"""
     from src.ai.avatar_voice import is_emo_text_infer_error
     c = _client(retries=0)
     seen: list = []
@@ -391,7 +391,7 @@ def test_tts_retries_without_emo_text_when_engine_emotion_guidance_fails():
         out = c.tts("你好呀", reference_audio_b64="QQ==", emotion="happy", emo_text="轻松愉快地说", emo_alpha=0.6)
     assert out == wav and len(seen) == 2
     assert seen[0].get("emo_text") == "轻松愉快地说" and seen[0].get("use_emo_text") is True
-    assert "emo_text" not in seen[1] and "use_emo_text" not in seen[1] and seen[1].get("emotion") == "happy"
+    assert "emo_text" not in seen[1] and "use_emo_text" not in seen[1] and seen[1].get("emotion") == "neutral"
     # 指纹判定：只认 5xx + QwenEmotion/emotion score/Please retry；4xx / 别的 5xx 不算
     assert is_emo_text_infer_error(_http_error(502, bad))
     assert not is_emo_text_infer_error(_http_error(400, bad))
@@ -692,15 +692,21 @@ async def test_pipeline_avatar_clone_instruct_channel(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_avatar_clone_unreachable_falls_back_to_edge(tmp_path):
-    """7852 不可达 → 回落 edge_tts（优雅降级不崩溃）。"""
+async def test_pipeline_avatar_clone_unreachable_degrades_unless_confirmed(tmp_path):
+    """Q-22：克隆不可达且未二次确认 → 不出系统音，改发文字。
+
+    confirm_system_voice=True 才回落 edge（对方将听到非人设声，必须坐席点过）。
+    自动链不传这个参数。
+    """
     ref = tmp_path / "ref.wav"
     ref.write_bytes(_wav_bytes(300))
     cfg = _pipeline_cfg(tmp_path, ref)
     cfg["fallback_on_error"] = True
     cfg["avatar_voice"]["cloud_fallback"] = True
+    called = {"n": 0}
 
     async def fake_edge(self, text, out, voice, spec=None):
+        called["n"] += 1
         Path(out).write_bytes(b"MP3FAKE")
 
     from src.ai.tts_pipeline import TTSPipeline
@@ -708,9 +714,18 @@ async def test_pipeline_avatar_clone_unreachable_falls_back_to_edge(tmp_path):
     with patch.object(AvatarVoiceClient, "health_ok", return_value=False), \
          patch.object(TTSPipeline, "_edge_tts", fake_edge):
         rv = await tts.synthesize("测试降级")
-    assert rv.ok
-    assert rv.provider == "edge_tts"
-    assert rv.extra.get("fallback_from") == "avatar_clone"
+        assert not rv.ok
+        assert called["n"] == 0
+        assert rv.extra.get("degrade_to_text") is True
+        assert rv.extra.get("fallback_blocked") == "clone_engine_offline"
+        assert rv.provider != "edge_tts"
+        assert rv.extra.get("system_voice")
+        rv2 = await tts.synthesize("测试降级", confirm_system_voice=True)
+    assert rv2.ok
+    assert called["n"] == 1
+    assert rv2.provider == "edge_tts"
+    assert rv2.extra.get("fallback_from") == "avatar_clone"
+    assert rv2.extra.get("system_voice_confirmed") is True
 
 
 @pytest.mark.asyncio
@@ -730,15 +745,17 @@ async def test_pipeline_avatar_clone_config_errors_not_masked(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_avatar_clone_synth_error_falls_back(tmp_path):
-    """健康但合成失败（重试后仍败）→ 回落 edge。"""
+async def test_pipeline_avatar_clone_synth_error_degrades_to_text(tmp_path):
+    """健康但合成失败（重试后仍败）、未二次确认 → 改发文字，不换系统声。"""
     ref = tmp_path / "ref.wav"
     ref.write_bytes(_wav_bytes(200))
     cfg = _pipeline_cfg(tmp_path, ref)
     cfg["fallback_on_error"] = True
     cfg["avatar_voice"]["cloud_fallback"] = True
+    called = {"n": 0}
 
     async def fake_edge(self, text, out, voice, spec=None):
+        called["n"] += 1
         Path(out).write_bytes(b"MP3FAKE")
 
     from src.ai.tts_pipeline import TTSPipeline
@@ -747,8 +764,11 @@ async def test_pipeline_avatar_clone_synth_error_falls_back(tmp_path):
          patch.object(AvatarVoiceClient, "_post", side_effect=OSError("boom")), \
          patch.object(TTSPipeline, "_edge_tts", fake_edge):
         rv = await tts.synthesize("测试合成失败降级")
-    assert rv.ok
-    assert rv.provider == "edge_tts"
+    assert not rv.ok
+    assert called["n"] == 0
+    assert rv.extra.get("degrade_to_text") is True
+    assert rv.extra.get("fallback_blocked") == "clone_engine_offline"
+    assert rv.extra.get("primary_error") == "avatar_clone_unreachable"
 
 
 # ── 幻声 hub Fish-Speech 高保真（Phase B, /api/tts_only）────────────────────────

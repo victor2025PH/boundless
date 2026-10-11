@@ -226,7 +226,7 @@ async def run_full_sync(
         try:
             progress(dict(stats))
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in run_full_sync", exc_info=True)
     for meta in cands:
         if cfg.get("max_chats") and stats["chats_done"] >= int(cfg["max_chats"]):
             stats["budget_exhausted"] = True
@@ -271,7 +271,7 @@ async def run_full_sync(
             try:
                 progress(dict(stats))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in run_full_sync", exc_info=True)
         pace = float(cfg.get("pace_sec") or 0)
         if pace > 0:
             await asyncio.sleep(pace)

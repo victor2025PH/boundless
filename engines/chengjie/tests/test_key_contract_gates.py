@@ -83,6 +83,12 @@ def _producer_keys() -> set:
         p = ENGINE / rel
         if p.is_file():
             keys.update(_yaml_voice_profile_keys(p))
+    # 人设包是这些键的写入方（human_feel / reply_trigger / text_voice_split /
+    # on_voice_fail 写在 config/persona_packs/*.yaml 的 voice_profile 里）。
+    pack_dir = ENGINE / "config" / "persona_packs"
+    if pack_dir.is_dir():
+        for p in sorted(pack_dir.glob("*.yaml")):
+            keys.update(_yaml_voice_profile_keys(p))
     # 合并层入口判定键（_merge_voice_profile 的占位过滤表）
     keys.update({"enabled", "backend", "voice", "speaker_id",
                  "reference_audio_path"})

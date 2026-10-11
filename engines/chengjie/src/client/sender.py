@@ -275,7 +275,7 @@ class TelegramSenderMixin:
     # ── 统一发送护栏/节流/记账（A 线文本回复 + 形象照直发共用一套，防图文混发绕过风控） ──
 
     def _presend_blocked(self, *, is_autoreply: bool = False,
-                         peer: Any = None) -> bool:
+                         peer: Any = None, rate_gate: bool = True) -> bool:
         """发送前统一护栏：G1 全局 Kill-Switch + N 线反封号闸门 + 账号限速/熔断 + 营业时段。
 
         返回 True=应跳过本次外发（冻结/被闸门拦）；任何异常一律静默放行（绝不因护栏自身报错阻断发送）。
@@ -290,6 +290,13 @@ class TelegramSenderMixin:
         （B 线/编排器早有），白名单客户的 A 线自动回复照样被 daily_cap 拦；
         ② 拦截日志带目标 peer（「拦的是白名单客户还是别人」从此可定性）。
         不传＝行为与旧版一致（无豁免、日志无 peer）。
+
+        ``rate_gate``（智安 2026-10-08）：最后一道接智安发送限速闸（``compliance.send_rate_gate``，
+        预热期号滚动 24h 超建议上限 → 拦 + 留痕 ``send_rate_audit``；放行即计一条）。A 线自有
+        外发（自动回复 / 主动触达 / 关怀 / 语音 / 形象照）此前不经 ``send_guard``，预热号照发。
+        ``False``＝调用方已在编排器 ``send_guard`` 判过并计数（``send_message_return_id`` 只给
+        ``TelegramCompanionWorker`` 用），这里不重复判、不重复计。白名单豁免（exempt_peers）只豁免
+        反封号闸门额度，**不**豁免限速闸（与 ``send_guard`` 第 4 道同口径）。
         """
         # License 到期硬阻断（Sprint2）：enforce 开且授权失效(只读) → 跳过 A 线外发。
         # 默认 enforce=false → 恒放行，零破坏；fail-open。
@@ -359,7 +366,8 @@ class TelegramSenderMixin:
                     self.logger.info(
                         "[send_gate] 白名单豁免命中 telegram:%s → peer=%s"
                         "（本次发送不受额度限制）", _acct, peer)
-                    return False
+                    return self._presend_rate_blocked(
+                        _gcfg, _acct, peer=peer, is_autoreply=is_autoreply, enabled=rate_gate)
                 # N3 修：A 线此前只传 limiter，缺 registry → age_days/banned/status 恒缺省，
                 # 使「号被封禁/移除」无法自动停发（反封号闸门形同虚设）。补传 registry，
                 # 让 banned=meta.banned or status==removed 真正生效（best-effort，取不到不阻断）。
@@ -387,7 +395,42 @@ class TelegramSenderMixin:
                     return True
         except Exception:
             pass
-        return False
+        return self._presend_rate_blocked(
+            _gcfg, _acct, peer=peer, is_autoreply=is_autoreply, enabled=rate_gate)
+
+    def _presend_rate_blocked(self, gcfg: Any, account_id: Any, *, peer: Any = None,
+                              is_autoreply: bool = False, enabled: bool = True) -> bool:
+        """智安发送限速闸（A 线最后一道）：True＝拦。放行即计一条；拦截写审计 + 运营告警。
+
+        来源：入站自动回复＝``ai``；其余 A 线外发＝``auto``（同样归 ``ai``；脚本号 / 脚本 peer /
+        脚本作用域由闸自己识别成 ``script``）。闸缺省开；``compliance.send_rate_gate.enabled: false``
+        或环境变量 ``ZHILIAO_SEND_RATE_GATE=off`` 关。绝不抛（闸异常 → 放行）。
+        """
+        if not enabled:
+            return False
+        try:
+            from src.compliance.send_rate_gate import check as _rate_check
+            _rd = _rate_check(
+                "telegram", str(account_id or "default"),
+                origin="ai" if is_autoreply else "auto",
+                chat_key="" if peer is None else str(peer),
+                config=gcfg, record=True)
+            if _rd.get("allowed", True):
+                return False
+            _reason = f"send_rate_gate:{_rd.get('reason') or 'blocked'}"
+            self.logger.warning(
+                "[send-rate-gate] 账号 %s A 线外发被限速闸拦截 → peer=%s: %s "
+                "(origin=%s used=%s cap=%s)",
+                account_id, peer if peer is not None else "?", _reason,
+                _rd.get("origin"), _rd.get("used"), _rd.get("cap"))
+            try:
+                from src.integrations.shared.send_guard import notify_send_blocked
+                notify_send_blocked("telegram", str(account_id or "default"), _reason)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
 
     async def _presend_pace(self) -> None:
         """发送间隔节流：距上次外发不足 ``reply.split_send.min_interval_seconds`` 则补足。
@@ -615,8 +658,12 @@ class TelegramSenderMixin:
                                     msg_id: Any = "",
                                     media_type: str = "",
                                     media_ref: str = "",
-                                    mirror_text: Optional[str] = None) -> None:
+                                    mirror_text: Optional[str] = None,
+                                    sent_by: str = "") -> None:
         """发送成功后：出站镜像到坐席台（N4b）+ 记入 contacts 的外发互动（Q3）。
+
+        ``sent_by``（P0-4，2026-10-08）：镜像行发送方（A 线自动回复传 ``ai``）；空＝不透传，
+        由收件箱落库缺省 phone / 编排器镜像 / 坐席打点认领决定。
 
         文本回复与富媒体（照片/语音）共用。两步各自 best-effort，绝不阻断发送；
         实现拆在 ``_mirror_out_row`` / ``_record_contact_out``（2026-08-02，分条语音
@@ -649,14 +696,15 @@ class TelegramSenderMixin:
                     _led.pop(_k, None)
         except Exception:
             pass
+        _mkw = {"sent_by": str(sent_by)} if sent_by else {}
         self._mirror_out_row(
             chat_id, preview if mirror_text is None else mirror_text,
-            msg_id=msg_id, media_type=media_type, media_ref=media_ref)
+            msg_id=msg_id, media_type=media_type, media_ref=media_ref, **_mkw)
         self._record_contact_out(chat_id, preview)
 
     def _mirror_out_row(self, chat_id: Any, text: str, *, msg_id: Any = "",
                         media_type: str = "", media_ref: str = "",
-                        sender_name: str = "") -> None:
+                        sender_name: str = "", sent_by: str = "") -> None:
         """出站镜像**单行**进收件箱（含「已发送」回执），不记 contacts；best-effort。
 
         分条语音（2026-08-02）逐条调用：客户收到 N 条独立语音，收件箱就该有 N 行
@@ -669,6 +717,8 @@ class TelegramSenderMixin:
             _emit = getattr(self, "_emit_inbox", None)
             if _emit is not None:
                 _kw = {"sender_name": str(sender_name)} if sender_name else {}
+                if sent_by:   # P0-4：非空才透传（emit 形状对旧调用方零变化）
+                    _kw["sent_by"] = str(sent_by)
                 _emit(chat_id=chat_id, text=text, direction="out",
                       msg_id=str(msg_id or ""),
                       media_type=media_type or "", media_ref=media_ref or "",
@@ -904,7 +954,7 @@ class TelegramSenderMixin:
             # 带回真实 message.id 作幂等键，乐观镜像行与回显共用主键 → 精确去重。
             self._postsend_mirror_and_record(
                 original_message.chat.id, _out_text,
-                msg_id=getattr(_sent, "id", "") or "")
+                msg_id=getattr(_sent, "id", "") or "", sent_by="ai")
             if getattr(original_message, 'from_user', None) and getattr(original_message.from_user, 'id', None):
                 self._record_session_reply(original_message.chat.id, original_message.from_user.id)
                 self._record_auto_reply(original_message.chat.id, original_message.from_user.id)
@@ -1107,7 +1157,7 @@ class TelegramSenderMixin:
         except Exception:
             return False, None
 
-    async def _send_text_guarded(self, chat_id: int, text: str):
+    async def _send_text_guarded(self, chat_id: int, text: str, *, rate_gate: bool = True):
         """A 线外发文本核心：过发送前护栏 + 节流 + 记账，返回 ``(ok, sent_message)``。
 
         - ``ok``：是否成功送出（过护栏且未抛；与旧 ``send_message`` 的 bool 语义一致）。
@@ -1126,7 +1176,7 @@ class TelegramSenderMixin:
             return False, None
         try:
             # 统一发送前护栏：G1 Kill-Switch + N 线反封号闸门（与 _send_reply/send_photo 共用）
-            if self._presend_blocked(peer=chat_id):
+            if self._presend_blocked(peer=chat_id, rate_gate=rate_gate):
                 return False, None
             await self._presend_pace()
             if not self.client:
@@ -1190,7 +1240,9 @@ class TelegramSenderMixin:
         对应出站消息行；旧 ``send_message`` 只回 bool、丢弃了 id，导致 companion 手动发送的
         消息无法显示双勾。best-effort：失败/被拦 → ``(False, "")``。
         """
-        ok, _sent = await self._send_text_guarded(chat_id, text)
+        # 唯一调用方＝编排器 TelegramCompanionWorker：编排器出站已过 send_guard（含限速闸第 4 道
+        # 且已计数）→ 这里不再判限速闸，防一条消息计两次 / 刚放行的那条被自己的计数拦下。
+        ok, _sent = await self._send_text_guarded(chat_id, text, rate_gate=False)
         return ok, (str(getattr(_sent, "id", "") or "") if ok else "")
 
     async def send_photo(self, chat_id: Any, photo_path: str,
@@ -1474,6 +1526,7 @@ class TelegramSenderMixin:
             except Exception:
                 pass
 
+            vr_cfg = self._voice_reply_persona_override(raw_cfg, vr_cfg, original_message)
             trigger = str(vr_cfg.get("trigger", "when_peer_voice")).strip().lower()
             if trigger == "never":
                 self.logger.debug("[voice_reply] skip: trigger=never")
@@ -1582,6 +1635,7 @@ class TelegramSenderMixin:
                     try:
                         fail_state["synth_failed"] = True
                         fail_state["reason"] = str(reason or "")
+                        fail_state["text_fallback"] = self.voice_fail_sends_text(vr_cfg)
                     except Exception:
                         pass
                 if not record:
@@ -1643,6 +1697,19 @@ class TelegramSenderMixin:
                 self.logger.info(
                     "[voice_reply] 命中生成层口语版（len=%d→%d）",
                     len(clean_text), len(_spoken))
+            # 文字/语音分说（text_voice_split）：前段念成语音、后段发文字，两条内容不重复。
+            # 只在语音真发出后补发后段；语音失败时待发队列里仍是整段原文。
+            _split_text = ""
+            _voice_mirror_text = reply_text
+            if vr_cfg.get("text_voice_split", False):
+                _sp = self.split_text_voice(clean_text)
+                if _sp:
+                    synth_source, _split_text = _sp
+                    _voice_mirror_text = synth_source
+                    _spoken = None
+                    self.logger.info(
+                        "[voice_reply] 文字/语音分说 voice=%d字 text=%d字",
+                        len(synth_source), len(_split_text))
 
             # P3：端用户身份（私聊 chat.id 即对端 user_id）→ 会员档分层路由 TTS 后端
             # （VIP→旗舰，免费→降级省成本）。monetization 未就绪 → tier=None → 不路由。
@@ -1770,7 +1837,9 @@ class TelegramSenderMixin:
                             on_part_sent=_note_voice_sent)
                         if split_sent:
                             _note_voice_ok()
-                            if vr_cfg.get("send_text_summary", False):
+                            if _split_text:
+                                await self._send_reply(original_message, _split_text)
+                            elif vr_cfg.get("send_text_summary", False):
                                 await self._send_reply(original_message, reply_text)
                             return True
                         self.logger.info("[voice_reply] 分条路径未完成 → 回落整段单条")
@@ -1895,29 +1964,29 @@ class TelegramSenderMixin:
                     # send_media(inbox_text=念稿) 同口径）；发布失败时 media_ref 为空，
                     # 前端按「无音频存档」转写行展示，media_type 仍如实标 voice。
                     # msg_id＝send_voice 返回的真实 id（回显主键去重，2026-08-02）。
-                    _vclean = " ".join(str(reply_text or "").split())
+                    _vclean = " ".join(str(_voice_mirror_text or "").split())
                     _vmid = getattr(sent, "id", "") or ""
                     # P1-3：语音行带「谁的音色」（人设显示名，best-effort 空串安全）
                     from src.ai.persona_voice import persona_display_name
                     _vwho = persona_display_name(voice_ctx.get("persona_id"))
-                    if vr_cfg.get("send_text_summary", False):
+                    if _split_text or vr_cfg.get("send_text_summary", False):
                         # 语音行本体也要可见/可回放（此前该分支只镜像文本摘要，语音
                         # 条在收件箱隐形）；contacts 由随后的 _send_reply 记一次，
                         # 这里只镜像不重复记账。
                         self._mirror_out_row(
                             original_message.chat.id, _vclean, msg_id=_vmid,
                             media_type=_vmt or "voice", media_ref=_vref,
-                            sender_name=_vwho)
+                            sender_name=_vwho, sent_by="ai")
                         # 文本摘要走 _send_reply→自带护栏/节流/计数/镜像/记账
                         # （语音+文本=确有 2 条外发，各记一次属正确口径）。
-                        await self._send_reply(original_message, reply_text)
+                        await self._send_reply(original_message, _split_text or reply_text)
                     else:
                         # 仅发语音时也要镜像/记账，否则坐席台/亲密度看不到这次外发。
                         # contacts 预览保留 [语音] 标记（纯文本时间线需要表意）。
                         self._mirror_out_row(
                             original_message.chat.id, _vclean, msg_id=_vmid,
                             media_type=_vmt or "voice", media_ref=_vref,
-                            sender_name=_vwho)
+                            sender_name=_vwho, sent_by="ai")
                         self._record_contact_out(
                             original_message.chat.id,
                             self._voice_mirror_preview(reply_text))
@@ -1975,6 +2044,14 @@ class TelegramSenderMixin:
                 # 自动改发文字——宁可不回消息，也不发替代品（旧「诚实回落改写+补发
                 # 完整文字」路径整体拆除）。处置＝回复原文转工作台待发队列（内容不丢，
                 # 修好后坐席一键放行）+ 主机弹窗「AI 不可用」+ ERROR 日志上报。
+                # 例外：on_voice_fail=text 的人设 → 补发完整文字（已有语音条送达则不补，防重复）。
+                if self.voice_fail_sends_text(vr_cfg):
+                    if _voice_progress["sent"]:
+                        return
+                    self.logger.warning(
+                        "[voice_reply] text-first 语音最终失败 → on_voice_fail=text 补发文字")
+                    await self._send_reply(original_message, reply_text)
+                    return
                 _chat_id = str(getattr(
                     getattr(original_message, "chat", None), "id", "") or "")
                 _acct = str(getattr(self, "account_id", "") or "default")
@@ -2035,6 +2112,101 @@ class TelegramSenderMixin:
         except Exception as ex:
             self.logger.error("[voice_reply] unexpected error: %s", ex)
             return False
+
+    def _voice_reply_persona_override(self, raw_cfg, vr_cfg, original_message):
+        """``telegram.voice_reply.persona_overrides.<persona_id>`` 浅合并到全局段。
+
+        例：``{wujie_sales: {trigger: always, send_text_summary: true}}`` → 只有该人设
+        每条都发语音并补发同句文字，其余账号沿用全局配置。人设按出站同口径解析
+        （会话覆写 → 账号绑定）；未配 / 解析失败 = 原样返回。
+        """
+        ov_map = vr_cfg.get("persona_overrides")
+        if not isinstance(ov_map, dict):
+            ov_map = {}
+        try:
+            from src.ai.persona_voice import resolve_effective_persona_id
+            pid = resolve_effective_persona_id(
+                raw_cfg, "telegram",
+                str(getattr(self, "account_id", "") or "default"),
+                str(getattr(getattr(original_message, "chat", None), "id", "") or ""))
+        except Exception:
+            pid = ""
+        if not pid and getattr(self, "account_persona_ids", None):
+            pid = str(self.account_persona_ids[0] or "")
+        if not pid:
+            return vr_cfg
+        ov = dict(self._persona_pack_voice_reply(pid))
+        cfg_ov = ov_map.get(pid)
+        if isinstance(cfg_ov, dict):
+            ov.update(cfg_ov)
+        if not ov:
+            return vr_cfg
+        merged = {k: v for k, v in vr_cfg.items() if k != "persona_overrides"}
+        merged.update(ov)
+        self.logger.debug("[voice_reply] persona_overrides 命中 persona=%s keys=%s",
+                          pid, sorted(ov))
+        return merged
+
+    _PACK_TRIGGERS = frozenset({"when_peer_voice", "always", "random", "smart", "never"})
+
+    def _persona_pack_voice_reply(self, pid: str) -> dict:
+        """人设自带的回复形态：``voice_profile.reply_trigger`` / ``text_voice_split``。
+
+        随人设包分发（所有客户导入即生效）；config 里的 ``persona_overrides`` 同键覆盖它。
+        """
+        try:
+            from src.utils.persona_manager import PersonaManager
+            persona = PersonaManager.get_instance().get_persona_by_id(pid) or {}
+        except Exception:
+            return {}
+        vp = persona.get("voice_profile") if isinstance(persona, dict) else None
+        if not isinstance(vp, dict):
+            return {}
+        out: dict = {}
+        trig = str(vp.get("reply_trigger") or "").strip().lower()
+        if trig in self._PACK_TRIGGERS:
+            out["trigger"] = trig
+        if isinstance(vp.get("text_voice_split"), bool):
+            out["text_voice_split"] = vp["text_voice_split"]
+        on_fail = str(vp.get("on_voice_fail") or "").strip().lower()
+        if on_fail in self._VOICE_FAIL_MODES:
+            out["on_voice_fail"] = on_fail
+        return out
+
+    _VOICE_FAIL_MODES = frozenset({"queue", "text"})
+
+    @classmethod
+    def voice_fail_sends_text(cls, vr_cfg: Any) -> bool:
+        """语音尝试失败后是否改发文字：仅 ``on_voice_fail: text`` 显式选择（人设包 /
+        persona_overrides）。缺省 queue＝无兜底纪律（转工作台待发，不替发文字）。"""
+        if not isinstance(vr_cfg, dict):
+            return False
+        return str(vr_cfg.get("on_voice_fail") or "").strip().lower() == "text"
+
+    @staticmethod
+    def split_text_voice(text: str, *, min_part_chars: int = 6):
+        """把一条回复拆成（语音段, 文字段）：前段念、后段发字，内容不重复。
+
+        按句末标点切句，语音段取前约一半句子（至少 1 句）。不足 2 句或任一段
+        短于 ``min_part_chars`` → ``None``（调用方按原逻辑整段处理）。
+        """
+        import re as _re
+        s = " ".join(str(text or "").split())
+        sents = [x.strip() for x in _re.split(
+            r"(?<=[。！？!?～~…])(?![。！？!?～~…])|(?<=\.)(?=\s)", s) if x.strip()]
+        if len(sents) < 2:
+            return None
+        def _join(xs):
+            out = ""
+            for x in xs:
+                out += (" " if out and out[-1].isascii() and out[-1] != "\n" else "") + x
+            return out.strip()
+
+        k = max(1, len(sents) // 2)
+        voice, rest = _join(sents[:k]), _join(sents[k:])
+        if len(voice) < min_part_chars or len(rest) < min_part_chars:
+            return None
+        return voice, rest
 
     # A1 text-first 后台看护任务引用（防 GC 取消；类级共享等价于进程级）
     _tf_bg_tasks: set = set()
@@ -2318,7 +2490,7 @@ class TelegramSenderMixin:
                 chat_id, " ".join(str(list(parts)[i]).split()),
                 msg_id=getattr(sent_msg, "id", "") or "",
                 media_type=_pmt or "voice", media_ref=_pref,
-                sender_name=_v_sender)
+                sender_name=_v_sender, sent_by="ai")
 
         if sent_n:
             self.logger.info(

@@ -134,7 +134,7 @@ def register_whatsapp_rpa_routes(
                 for k in ("daily_sent", "daily_cap"):
                     if k in es: st[k] = (st.get(k) or 0) + (es.get(k) or 0)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_whatsapp_rpa_routes.api_wa_status", exc_info=True)
         return st
 
     @app.get("/api/whatsapp-rpa/recent")
@@ -177,7 +177,7 @@ def register_whatsapp_rpa_routes(
                 p = pm.get_persona_by_id(global_pids[0])
                 _acct_persona["default"] = (p or {}).get("name", global_pids[0])
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_whatsapp_rpa_routes.api_wa_conversations", exc_info=True)
 
         # 拆解 chat_key "wa:account_id:peer_name" → 友好字段
         for conv in convs:
@@ -447,7 +447,7 @@ def register_whatsapp_rpa_routes(
                 actor = getattr(request.state, "user", {}).get("username", "web")
                 audit_store.log(actor, "wa_pending_cancel_all", f"cancelled={len(cancelled)}")
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in register_whatsapp_rpa_routes.api_wa_pending_cancel_all", exc_info=True)
         return {"ok": True, "cancelled": len(cancelled)}
 
     @app.post("/api/whatsapp-rpa/pending/{pending_id}/resolve")
@@ -495,7 +495,7 @@ def register_whatsapp_rpa_routes(
         try:
             body = await request.json()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_whatsapp_rpa_routes.api_wa_pause", exc_info=True)
         seconds = float(body.get("seconds", 300) or 300)
         for svc in svcs:
             svc.pause_for(seconds)
@@ -545,7 +545,7 @@ def register_whatsapp_rpa_routes(
         try:
             body = await request.json()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_whatsapp_rpa_routes.api_wa_reset_circuit_breaker", exc_info=True)
         serial = body.get("serial") or None
         platform = body.get("platform") or "whatsapp"
         reset = dc_svc.reset_circuit_breaker(serial=serial, platform_type=platform)
@@ -773,13 +773,13 @@ def register_whatsapp_rpa_routes(
             from src.web.routes.rpa_overview_routes import invalidate_lang_dist_cache
             invalidate_lang_dist_cache()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_whatsapp_rpa_routes.api_wa_chat_lang_lock", exc_info=True)
         # P13-E: 记录最近一次语言锁变更时间
         try:
             import time as _t
             svc._last_lang_lock_ts = _t.time()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in register_whatsapp_rpa_routes.api_wa_chat_lang_lock", exc_info=True)
         action = f"锁定为 {lang}" if lang else "解除锁定（恢复自动检测）"
         return {"ok": True, "chat_key": chat_key, "forced_lang": lang or None, "action": action}
 
@@ -944,7 +944,7 @@ def register_whatsapp_rpa_routes(
                                 "idx": detail.get("template_idx") or detail.get("idx"),
                             })
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("swallowed in register_whatsapp_rpa_routes.api_wa_template_analytics", exc_info=True)
 
             # 计算各类别回复率
             category_performance = {}

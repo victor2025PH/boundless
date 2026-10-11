@@ -24,6 +24,7 @@
 """
 from __future__ import annotations
 
+import logging
 import random
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -308,9 +309,10 @@ _MEDIA_REQ_RE = re.compile(
     r"(?:照片|相片|图片|圖片|视频|視頻|影片|自拍).{0,4}(?:有[吗嗎]|有[没沒])|"
     # 实施69 P3 实测补漏：「大腰子照片呢？」这类**光杆催讨**（名词+照片+呢，
     # 无看/发/拍动词）曾被 is_info_question 当成"问名词信息"→ 关键词池让路
-    # → 刚入册的库存发不出（试触发端到端实测抓到）。「X照片呢」语义上就是
-    # 在要图/催图，不是问「照片」是什么。
-    r"(?:照片|相片|图|圖|视频|視頻|影片|自拍)\s*[呢咧勒]|"
+    # → 刚入册的库存发不出（试触发端到端实测抓到）。只认句尾：句中
+    # 「我以为是抹茶拿铁的照片呢，这是哪里拍的呢」是在问拍摄地点（18:41），
+    # 不是催图。
+    r"(?:照片|相片|图|圖|视频|視頻|影片|自拍)\s*[呢咧勒]\s*[？?！!。.]?\s*$|"
     r"show\s+me|send\s+(?:me\s+)?(?:a\s+)?(?:pic|photo|video|selfie)|"
     r"can\s+i\s+see|got\s+any",
     re.IGNORECASE)
@@ -602,7 +604,7 @@ def select_media(
             if _soft_seed:
                 _soft_seed = expand_ids_by_phash(rows, _soft_seed)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in select_media", exc_info=True)
     _tr_cut("family",
             (len(_hard_seed) - _n_hard0) + (len(_soft_seed) - _n_soft0))
     # 重发冷却：硬排除，绝不逐层放宽（id 面 + 文件名面，两条链同一张图都算）。
@@ -656,7 +658,7 @@ def select_media(
                     _tr("refused", "place")
                     return None
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in select_media", exc_info=True)
     # 时段软过滤：白天照深夜不发（有标注才判；剔空放行——配文层兜底诚实）。
     if now_hour is not None:
         lit = [r for r in pool if not tod_conflicts_with_hour(row_tod(r), now_hour)]
@@ -813,6 +815,7 @@ def pick_media(
     try:
         rows = store.list(str(persona_id), enabled_only=True)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in pick_media", exc_info=True)
         return None
     ex_ids, ex_series = None, None
     hard_ids: Optional[set] = None
@@ -865,7 +868,7 @@ def pick_media(
         from src.companion.album_gate_stats import record as _gate_record
         _gate_record(_trace, row is not None)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in pick_media", exc_info=True)
     # 语义召回·影子（实施90，默认关）：泛化要图却 miss（触发词字面没接住）→
     # 后台线程记「如果按语义召回会中哪张」；配置读取/嵌入全在线程里，热路零成本。
     if row is None and generic_ok and str(_trace.get("refused") or "") == "no_pool":
@@ -873,7 +876,7 @@ def pick_media(
             from src.companion.album_semantic_recall import maybe_shadow
             maybe_shadow(store, persona_id, text)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in pick_media", exc_info=True)
     return row
 
 

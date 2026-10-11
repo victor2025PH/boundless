@@ -225,14 +225,14 @@ class TikTokHuokeStateStore:
             try:
                 os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in TikTokHuokeStateStore.__init__", exc_info=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TikTokHuokeStateStore.__init__", exc_info=True)
         self._conn.executescript(_DDL)
         for table, col, decl in _MIGRATIONS:
             try:
@@ -542,7 +542,7 @@ class TikTokHuokeStateStore:
         try:
             self._conn.close()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in TikTokHuokeStateStore.close", exc_info=True)
 
 
 _STORE: Optional[TikTokHuokeStateStore] = None
@@ -735,10 +735,22 @@ def ensure_ops_sweeper(app: Any, config_getter: Callable[[], Dict[str, Any]], *,
         asyncio.get_running_loop()
         _start()
     except RuntimeError:
-        try:
-            app.add_event_handler("startup", _start)
-        except Exception:
-            logger.debug("[tiktok-huoke] startup 钩子挂载失败", exc_info=True)
+        # 当前 FastAPI 没有 add_event_handler（调用会 AttributeError 被吞掉，
+        # 巡检标记已挂上但进程重启后任务不起）。有旧接口就用旧接口；
+        # 否则直接挂到 router.on_startup，Starlette 启动时仍会调用。
+        hooked = False
+        add = getattr(app, "add_event_handler", None)
+        if callable(add):
+            try:
+                add("startup", _start)
+                hooked = True
+            except Exception:
+                hooked = False
+        if not hooked:
+            try:
+                app.router.on_startup.append(_start)
+            except Exception:
+                logger.debug("[tiktok-huoke] startup 钩子挂载失败", exc_info=True)
     return True
 
 
@@ -1246,6 +1258,7 @@ def register_tiktok_huoke_routes(app: Any, config_manager: Any) -> bool:
         try:
             return await request.json()
         except Exception:
+            logging.getLogger(__name__).debug("swallowed in register_tiktok_huoke_routes._json", exc_info=True)
             return None
 
     @app.post(LEADS_ROUTE, dependencies=deps)

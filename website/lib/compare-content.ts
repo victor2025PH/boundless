@@ -65,8 +65,8 @@ const US_COMPLIANCE: CompareCell = {
 
 // 2026-08-19 Token 定价改版：口径与 lib/chatx-pricing.ts 同步（改价两处一起改）。
 const US_PRICING: CompareCell = {
-  zh: "免费开始（全功能 + 标准翻译不限量），充多少用多少、不订阅：充值 50U 起、1U = 1,500 Token，首充按档加赠最高 +40%，新人 6U 大礼包 18,000 Token 双倍到账。AI 用量按 Token 透明计价（无月费、无按月活联系人 MAU 加价），支持 USDT / 银行卡；企业年框与私有化部署面议。",
-  en: "Start free (all features + unlimited standard translation), then top up as you go — no subscription: from 50U at 1U = 1,500 tokens, first top-up earns up to +40%, newcomer 6U pack lands 18,000 tokens at double rate. AI usage meters in transparent tokens (no monthly fee, no per-MAU surcharges), USDT & cards accepted; enterprise frames and private deployment by quote.",
+  zh: "免费开始（全功能 + 标准翻译走本地模型，没配好转人工），充多少用多少、不订阅：充值 50U 起、1U = 1,500 Token，首充按档加赠最高 +40%，新人 6U 大礼包 18,000 Token 双倍到账。AI 用量按 Token 透明计价（无月费、无按月活联系人 MAU 加价），支持 USDT / 银行卡；企业年框与私有化部署面议。",
+  en: "Start free (all features + standard translation on the local model; a person takes the line if it is not set), then top up as you go — no subscription: from 50U at 1U = 1,500 tokens, first top-up earns up to +40%, newcomer 6U pack lands 18,000 tokens at double rate. AI usage meters in transparent tokens (no monthly fee, no per-MAU surcharges), USDT & cards accepted; enterprise frames and private deployment by quote.",
 };
 
 const THEM_SAAS_DATA: CompareCell = {
@@ -177,8 +177,8 @@ export const compareSpecs: Record<string, CompareSpec> = {
           en: "Is there a self-hostable respond.io alternative with first-class Chinese support?",
         },
         a: {
-          zh: "智聊 ChatX 是中文团队开发的私有化替代选项：Telegram / WhatsApp / LINE / Messenger 等多平台统一收件箱，内建拟人互译与 AI 主动跟进，免费开始（标准翻译不限量），按 Token 充值、无订阅。",
-          en: "ChatX is a self-hostable alternative built by a Chinese-speaking team: a unified inbox for Telegram / WhatsApp / LINE / Messenger with built-in human-like translation and proactive AI follow-ups; free to start (unlimited standard translation) with pay-as-you-go tokens, no subscription.",
+          zh: "智聊 ChatX 是中文团队开发的私有化替代选项：Telegram / WhatsApp / LINE / Messenger，以及抖音企业号、TikTok 官方客服，进同一收件箱。个人号获客是智拓，智控是另一套矩阵。内建拟人互译与 AI 主动跟进，免费开始（标准翻译走本地模型，没配好转人工），按 Token 充值、无订阅。",
+          en: "ChatX is a self-hostable alternative built by a Chinese-speaking team: one inbox for Telegram / WhatsApp / LINE / Messenger, plus Douyin enterprise and TikTok official customer service. Personal-account outreach is ReachX; MatrixX is a separate fleet. Built-in human-like translation and proactive AI follow-ups; free to start (standard translation on the local model; a person takes the line if it is not set) with pay-as-you-go tokens, no subscription.",
         },
       },
       {
@@ -320,8 +320,8 @@ export const compareSpecs: Record<string, CompareSpec> = {
           en: "Is there a self-hosted SaleSmartly alternative?",
         },
         a: {
-          zh: "智聊 ChatX 提供私有化部署（跑在你自己的服务器/桌面机，聊天与客户数据全留本地）与云端托管（一客户一实例）两种形态；免费开始，标准翻译不限量，AI 用量按 Token 充值。",
-          en: "ChatX offers both self-hosted deployment (runs on your own server or desktop; chats and customer data stay local) and a hosted option (one isolated instance per customer). Free to start, unlimited standard translation, AI usage on pay-as-you-go tokens.",
+          zh: "智聊 ChatX 提供私有化部署（跑在你自己的服务器/桌面机，聊天与客户数据全留本地）与云端托管（一客户一实例）两种形态；免费开始，标准翻译走本地模型，没配好转人工，AI 用量按 Token 充值。",
+          en: "ChatX offers both self-hosted deployment (runs on your own server or desktop; chats and customer data stay local) and a hosted option (one isolated instance per customer). Free to start, standard translation on the local model (a person takes the line if it is not set), AI usage on pay-as-you-go tokens.",
         },
       },
       {
@@ -330,8 +330,8 @@ export const compareSpecs: Record<string, CompareSpec> = {
           en: "How does translation compare?",
         },
         a: {
-          zh: "智聊内建双向实时翻译：入站显示原文加译文、出站自动译成客户语言，主打「拟人不像机翻」，标准翻译永久免费不限量（公平使用 200 万字符/日），还可切本地翻译引擎让译文也不出机房；SaleSmartly 的翻译能力与计费以其官网为准。",
-          en: "ChatX ships two-way live translation: inbound shows original plus translation, outbound auto-translates into the customer's language, tuned to read human rather than machine-translated; standard translation is free and unlimited (fair use 2M chars/day), with optional local MT engines so even translations stay on-prem. See SaleSmartly's site for its translation scope and pricing.",
+          zh: "智聊内建双向实时翻译：入站显示原文加译文、出站自动译成客户语言，主打「拟人不像机翻」。标准翻译走本部署的本地模型，不调用付费接口；没配好时转人工（公平使用 200 万字符/日，超出仅提醒）。SaleSmartly 的翻译能力与计费以其官网为准。",
+          en: "ChatX ships two-way live translation: inbound shows original plus translation, outbound auto-translates into the customer's language, tuned to read human rather than machine-translated. Standard translation uses this deployment's local model and does not call a paid API; if it is not set, a person takes the line (fair use 2M chars/day, overage is a reminder only). See SaleSmartly's site for its translation scope and pricing.",
         },
       },
       {
@@ -350,8 +350,8 @@ export const compareSpecs: Record<string, CompareSpec> = {
           en: "How does pricing differ?",
         },
         a: {
-          zh: "智聊免费开始（全功能 + 标准翻译不限量 + 每月 1,000 Token），付费只有按量充值一种：1U = 1,500 Token、首充最高 +40%、新人 6U 大礼包 18,000 Token，无订阅、无席位费；SaleSmartly 为订阅制 SaaS，价格以其官网为准。",
-          en: "ChatX starts free (all features + unlimited standard translation + 1,000 tokens/month) and charges only via top-ups: 1U = 1,500 tokens, first top-up bonus up to +40%, newcomer 6U pack lands 18,000 tokens — no subscription, no seat fees. SaleSmartly is subscription SaaS; see its pricing page.",
+          zh: "智聊免费开始（全功能 + 标准翻译走本地模型、没配好转人工 + 每月 1,000 Token），付费只有按量充值一种：1U = 1,500 Token、首充最高 +40%、新人 6U 大礼包 18,000 Token，无订阅、无席位费；SaleSmartly 为订阅制 SaaS，价格以其官网为准。",
+          en: "ChatX starts free (all features + standard translation on the local model, with a person taking the line if it is not set, + 1,000 tokens/month) and charges only via top-ups: 1U = 1,500 tokens, first top-up bonus up to +40%, newcomer 6U pack lands 18,000 tokens — no subscription, no seat fees. SaleSmartly is subscription SaaS; see its pricing page.",
         },
       },
     ],
@@ -493,8 +493,8 @@ export const compareSpecs: Record<string, CompareSpec> = {
           en: "Is migrating from SleekFlow to ChatX hard?",
         },
         a: {
-          zh: "渠道账号（WhatsApp/Telegram 等）本就属于你，重新接入即可；智聊免费开始（全功能 + 标准翻译不限量），可先并行试用再决定切换，不需要一次性迁移。",
-          en: "Your channel accounts (WhatsApp/Telegram etc.) already belong to you — just reconnect them. ChatX is free to start (all features + unlimited standard translation), so you can run it in parallel before deciding, no big-bang migration needed.",
+          zh: "渠道账号（WhatsApp/Telegram，以及抖音企业号、TikTok 官方客服）本就属于你，重新接入即可。个人抖音号和个人 TikTok 号不能在智聊里网页登录。智聊免费开始（全功能 + 标准翻译走本地模型），可先并行试用再决定切换，不需要一次性迁移。",
+          en: "Your channel accounts (WhatsApp/Telegram, plus Douyin enterprise and TikTok official customer service) already belong to you — just reconnect them. Personal Douyin and personal TikTok accounts cannot web-login inside ChatX. ChatX is free to start (all features + standard translation on the local model), so you can run it in parallel before deciding, no big-bang migration needed.",
         },
       },
     ],
@@ -564,8 +564,8 @@ export const compareSpecs: Record<string, CompareSpec> = {
       {
         dim: { zh: "翻译", en: "Translation" },
         us: {
-          zh: "内建双向实时拟人互译（入站原文+译文、出站自动按客户语言发出），标准翻译免费不限量。",
-          en: "Built-in two-way human-like translation (inbound original + translation, outbound auto-translated per customer), standard tier free and unlimited.",
+          zh: "内建双向实时拟人互译（入站原文+译文、出站自动按客户语言发出）。标准翻译走本地模型，不调用付费接口；没配好时转人工。",
+          en: "Built-in two-way human-like translation (inbound original + translation, outbound auto-translated per customer). Standard translation uses the local model and does not call a paid API; if it is not set, a person takes the line.",
         },
         them: {
           zh: "以其官网多语言能力说明为准。",
@@ -619,8 +619,8 @@ export const compareSpecs: Record<string, CompareSpec> = {
           en: "What about WhatsApp conversation fees — how does ChatX bill?",
         },
         a: {
-          zh: "官方 Business API 渠道由 Meta 按会话向使用方收费（各家工具通常转嫁该费用，以其价目为准）；智聊自身不收席位费与订阅费，AI 用量按 Token 充值（1U = 1,500 Token），标准翻译免费不限量。",
-          en: "On the official Business API, Meta charges per conversation (tools typically pass this through; check each pricing page). ChatX itself has no seat or subscription fees — AI usage is pay-as-you-go tokens (1U = 1,500 tokens), standard translation free and unlimited.",
+          zh: "官方 Business API 渠道由 Meta 按会话向使用方收费（各家工具通常转嫁该费用，以其价目为准）；智聊自身不收席位费与订阅费，AI 用量按 Token 充值（1U = 1,500 Token）。标准翻译走本地模型，不调用付费接口；没配好时转人工。",
+          en: "On the official Business API, Meta charges per conversation (tools typically pass this through; check each pricing page). ChatX itself has no seat or subscription fees — AI usage is pay-as-you-go tokens (1U = 1,500 tokens). Standard translation uses the local model and does not call a paid API; if it is not set, a person takes the line.",
         },
       },
       {
@@ -639,8 +639,8 @@ export const compareSpecs: Record<string, CompareSpec> = {
           en: "What does ChatX cost to start for a small team?",
         },
         a: {
-          zh: "0 元起步：下载即用，全功能开放，标准翻译不限量，每月送 1,000 Token，注册再送 10,000 体验 Token；用顺后按需充值（新人 6U 大礼包 = 18,000 Token 双倍到账），无订阅无席位费。",
-          en: "Zero to start: download and go with all features, unlimited standard translation, 1,000 tokens monthly plus 10,000 bonus tokens on signup; top up as needed later (newcomer 6U pack = 18,000 tokens at double rate), no subscription, no seat fees.",
+          zh: "0 元起步：下载即用，全功能开放，标准翻译走本地模型（没配好转人工），每月送 1,000 Token，注册再送 10,000 体验 Token；用顺后按需充值（新人 6U 大礼包 = 18,000 Token 双倍到账），无订阅无席位费。",
+          en: "Zero to start: download and go with all features, standard translation on the local model (a person takes the line if it is not set), 1,000 tokens monthly plus 10,000 bonus tokens on signup; top up as needed later (newcomer 6U pack = 18,000 tokens at double rate), no subscription, no seat fees.",
         },
       },
     ],
@@ -802,8 +802,8 @@ export const compareHub = {
         en: "Is there a free multi-platform AI customer-chat tool?",
       },
       a: {
-        zh: "智聊 ChatX 提供永久免费档：下载即用、全功能开放、标准翻译不限量（公平使用 200 万字符/日）、每月 1,000 Token、注册再送 10,000 体验 Token，唯一限制是 1 个聊天账号。其他工具的免费档以各家官网为准。",
-        en: "ChatX has a free-forever tier: download and go, all features, unlimited standard translation (fair use 2M chars/day), 1,000 tokens monthly plus 10,000 bonus on signup — the only cap is one chat account. For other tools, check each vendor's site.",
+        zh: "智聊 ChatX 免费开始：下载即用、全功能开放。标准翻译走本部署的本地模型，不调用付费接口；没配好时转人工（公平使用 200 万字符/日，超出仅提醒）。每月 1,000 Token、注册再送 10,000 体验 Token，唯一限制是 1 个聊天账号。其他工具的免费档以各家官网为准。",
+        en: "ChatX is free to start: download and go, all features. Standard translation uses this deployment's local model and does not call a paid API; if it is not set, a person takes the line (fair use 2M chars/day, overage is a reminder only). 1,000 tokens monthly plus 10,000 bonus on signup — the only cap is one chat account. For other tools, check each vendor's site.",
       },
     },
     {
@@ -832,7 +832,7 @@ export const compareHub = {
         en: "Cloud SaaS or self-hosted — how to decide?",
       },
       a: {
-        zh: "看两点：数据资产敏感度与运维意愿。要零维护快速起步选云端（智聊也提供云端托管：一客户一实例、独立子域）；客户数据是核心资产、或有合规/防封号考量的团队选私有化——数据不出机，服务商变化不影响资产。",
+        zh: "看两点：数据资产敏感度与运维意愿。要零维护快速起步选云端（智聊也提供云端托管：一客户一实例、独立子域）；客户数据是核心资产、或有合规要求的团队选私有化——数据不出机，服务商变化不影响资产。",
         en: "Two factors: data sensitivity and ops appetite. For zero-ops quick starts choose cloud (ChatX also offers hosting: one isolated instance per customer, own subdomain); teams whose customer data is a core asset — or with compliance/ban-risk concerns — should self-host, keeping assets independent of any vendor.",
       },
     },

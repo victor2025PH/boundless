@@ -173,6 +173,23 @@
 .vmode-status.ok{color:var(--th-ink-green7,#15803d)}
 .vmode-status.warn{color:var(--th-ink-amber7,#b45309)}
 .vmode-status.err{color:var(--th-ink-red7,#b91c1c);background:var(--th-bg-red1,#fee2e2)}
+/* 语气表达（expressiveness）：四档分段 + 基线情绪 + 对比试听 */
+.vexpr-box{border-top:1px dashed var(--bd);margin-top:.6rem;padding-top:.5rem}
+.vexpr-hd{display:flex;align-items:center;justify-content:space-between;gap:.5rem;font-size:.78rem;font-weight:600}
+.vexpr-hd small{font-weight:400;color:var(--t3);font-size:.7rem}
+.vexpr-seg{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.3rem;margin-top:.4rem}
+.vexpr-seg label{display:flex;flex-direction:column;align-items:center;gap:.1rem;padding:.4rem .2rem;border:1px solid var(--bd);border-radius:8px;cursor:pointer;font-size:.74rem;text-align:center;line-height:1.3;position:relative}
+.vexpr-seg label input{position:absolute;opacity:0;pointer-events:none}
+.vexpr-seg label b{font-weight:600}
+.vexpr-seg label small{color:var(--t3);font-size:.64rem}
+.vexpr-seg label:hover{border-color:var(--th-ink-blue5,#1d4ed8)}
+.vexpr-seg label:has(input:checked){border-color:var(--th-ink-blue5,#1d4ed8);background:var(--th-bg-slate1,#f1f5f9)}
+.vexpr-seg label[data-lv="restrained"]:has(input:checked){border-color:var(--th-ink-slate6,#475569)}
+.vexpr-seg label[data-lv="vivid"]:has(input:checked){border-color:var(--th-ink-amber7,#b45309)}
+.vexpr-seg label[data-lv="dramatic"]:has(input:checked){border-color:var(--th-ink-red7,#b91c1c)}
+.vexpr-foot{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-top:.4rem;flex-wrap:wrap}
+.vexpr-foot .vexpr-desc{font-size:.72rem;color:var(--t2);line-height:1.45;flex:1 1 12rem}
+.vexpr-foot .vexpr-btns{display:flex;gap:.3rem;flex:none}
 .pe-dev-voice{border-top:1px dashed var(--bd);margin-top:.6rem;padding-top:.5rem}
 .pe-dev-voice summary{font-size:.72rem;color:var(--t3);cursor:pointer;user-select:none}
 .json-import-wrap{border-top:1px solid var(--bd);margin-top:.7rem;padding-top:.65rem}
@@ -1101,6 +1118,18 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div class="field-row"><label>{{ (i18n or {}).get('psn_th_name','名称') }}</label><input id="pe-name" type="text" placeholder="{{ (i18n or {}).get('psn_name_ph','小灵') }}"></div>
       <div class="field-row"><label>{{ (i18n or {}).get('psn_th_role','角色') }}</label><input id="pe-role" type="text" placeholder="{{ (i18n or {}).get('psn_role_ph','亲密的私聊对象') }}"></div>
     </div>
+    <!-- P0-1（2026-09-29）：工作类型——知识库该不该查、查无怎么办的单一开关（SSOT persona_kind.py）。
+         留空＝按角色 / 标签自动推断，提示行显示当前生效值与来源。 -->
+    <div class="field-row"><label>{{ (i18n or {}).get('psn_kind','工作类型') }}</label>
+      <select id="pe-kind" onchange="_peKindHint()">
+        <option value="">{{ (i18n or {}).get('psn_kind_auto','自动（按角色推断）') }}</option>
+        <option value="support">{{ (i18n or {}).get('psn_kind_support','客服') }}</option>
+        <option value="sales">{{ (i18n or {}).get('psn_kind_sales','销售') }}</option>
+        <option value="companion">{{ (i18n or {}).get('psn_kind_companion','陪聊') }}</option>
+      </select>
+      <span id="pe-kind-eff" style="font-size:.72rem;color:var(--t2);margin-top:.2rem"></span>
+      <span id="pe-kind-hint" style="font-size:.72rem;color:var(--t2)"></span>
+    </div>
     <div class="field-row"><label>{{ (i18n or {}).get('psn_personality_style','性格 / 风格') }}</label><textarea id="pe-personality" rows="5" placeholder="{{ (i18n or {}).get('psn_personality_ph','温柔体贴，喜欢用撒娇语气…') }}"></textarea><span id="pe-pers-notice" class="pers-notice">✓ {{ (i18n or {}).get('psn_pers_structured','结构化人设：此处仅编辑说话风格 style，特质等字段随保存原样保留') }}</span><div id="pe-personality-extras"></div></div>
     <div class="field-row"><label>{{ (i18n or {}).get('psn_tag','标签') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-tags" type="text" placeholder="holiday, vip, companion"></div>
     {% if not ui_client_hide|default(false) %}
@@ -1227,7 +1256,7 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
     <div class="field-row" id="ad-row">
       <label>{{ (i18n or {}).get('psn_pf_adult','成人话题') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_pf_adult_hint','开黄腔一句不转人工；露骨/施压才拦。拦下后怎么办由这里决定') }}</span>
         <!-- 2026-09-19：机器级 adult_grader.default_policy 已配置时亮出来——否则运营以为「跟随域默认」还有人工闸 -->
-        <span id="ad-machine-badge" style="display:none;margin-left:.4rem;font-size:.68rem;padding:.05rem .4rem;border-radius:.6rem;background:rgba(255,120,60,.14);color:#e0783c;vertical-align:middle"></span>
+        <span id="ad-machine-badge" style="display:none;margin-left:.4rem;font-size:.68rem;padding:.05rem .4rem;border-radius:.6rem;background:var(--th-bg-orange14,rgba(255,120,60,.14));color:var(--th-ink-orange,#e0783c);vertical-align:middle"></span>
       </label>
       <div class="opt-cards" id="ad-cards">
         <div class="opt-card" data-val="" onclick="_selAdultPolicy(this)"><span class="oc-ico">🧭</span><span class="oc-lbl">{{ (i18n or {}).get('psn_pf_ad_default','跟随域默认') }}</span></div>
@@ -1324,6 +1353,23 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
       <div style="font-size:.72rem;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.65rem">{{ (i18n or {}).get('psn_identity','身份设定') }}</div>
       <div class="tgl-row"><label class="tgl"><input type="checkbox" id="pe-deny-ai"><span class="tgl-sl"></span></label><span class="tgl-lbl">{{ (i18n or {}).get('psn_deny_ai','被问及时否认是 AI') }}</span></div>
       <div class="tgl-row"><label class="tgl"><input type="checkbox" id="pe-claim-human"><span class="tgl-sl"></span></label><span class="tgl-lbl">{{ (i18n or {}).get('psn_claim_human','主动声称自己是真人') }}</span></div>
+      <div class="tgl-row" title="{{ (i18n or {}).get('psn_public_ai_tip','开：群成员开口可以大方说自己是 AI，并多一种「坦白是 AI」的开场方式参与对比；与上面两项互斥') }}"><label class="tgl"><input type="checkbox" id="pe-public-ai"><span class="tgl-sl"></span></label><span class="tgl-lbl">{{ (i18n or {}).get('psn_public_ai','公开 AI 身份（开口可直说是 AI）') }}</span></div>
+    </div>
+    <div style="border-top:1px solid var(--bd);padding-top:.78rem;margin-top:.6rem">
+      <div style="font-size:.72rem;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.35rem">{{ (i18n or {}).get('psn_sales_title','目标客户（群成员获客）') }}</div>
+      <div style="font-size:.74rem;color:var(--t2);margin-bottom:.55rem">{{ (i18n or {}).get('psn_sales_hint','群里说过这些词的人优先开口、优先在群里接话；说过排除词的人不碰。不填 = 不按意向排序，「群里先接话」也不会列人。') }}</div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_preset','按行业套用') }}</label>
+        <select id="pe-sales-preset" onchange="_salesApplyPreset(this)">
+          <option value="">{{ (i18n or {}).get('psn_sales_preset_pick','选一个行业，词会追加到下面') }}</option>
+          <option value="crossborder" data-words="{{ (i18n or {}).get('psn_sales_w_crossborder','跨境,亚马逊,shopify,独立站,选品,物流,清关,出单,引流,投广告,tiktok shop,amazon,dropshipping') }}">{{ (i18n or {}).get('psn_sales_p_crossborder','跨境电商') }}</option>
+          <option value="b2b" data-words="{{ (i18n or {}).get('psn_sales_w_b2b','外贸,询盘,客户开发,开发信,报价,展会,阿里国际,工厂,跟单,buyer,inquiry,sourcing') }}">{{ (i18n or {}).get('psn_sales_p_b2b','外贸 B2B') }}</option>
+          <option value="service" data-words="{{ (i18n or {}).get('psn_sales_w_service','客服,自动回复,回不过来,回复慢,消息太多,私域,社群运营,翻译,多语言,机器人,customer service,auto reply') }}">{{ (i18n or {}).get('psn_sales_p_service','客服 / 私域运营') }}</option>
+          <option value="edu" data-words="{{ (i18n or {}).get('psn_sales_w_edu','课程,培训,报名,考试,留学,辅导,学费,招生,course,tutor') }}">{{ (i18n or {}).get('psn_sales_p_edu','教育培训') }}</option>
+          <option value="local" data-words="{{ (i18n or {}).get('psn_sales_w_local','门店,到店,团购,预约,会员,复购,外卖,客流,同城') }}">{{ (i18n or {}).get('psn_sales_p_local','本地生活 / 门店') }}</option>
+        </select>
+      </div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_kw','意向关键词') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-sales-kw" type="text" placeholder="{{ (i18n or {}).get('psn_sales_kw_ph','客服，自动回复，翻译，获客') }}"></div>
+      <div class="field-row"><label>{{ (i18n or {}).get('psn_sales_neg','排除词') }} <span style="font-size:.7rem;color:var(--t2)">{{ (i18n or {}).get('psn_comma_sep','（逗号分隔）') }}</span></label><input id="pe-sales-neg" type="text" data-default="{{ (i18n or {}).get('psn_sales_neg_default','博彩,菠菜,裸聊,代收,洗钱,跑分') }}" placeholder="{{ (i18n or {}).get('psn_sales_neg_ph','博彩，裸聊，洗钱') }}"></div>
     </div>
   </div>
   <!-- Pane: Voice -->
@@ -1353,6 +1399,81 @@ mark.sh{background:rgba(245,158,11,.28);border-radius:2px;padding:0 1px;color:in
         </div>
         <div class="field-row"><label>{{ (i18n or {}).get('psn_vm_voice','音色') }}</label><select id="pe-preset-voice" onchange="_presetVoiceChanged()"></select></div>
         <div class="field-row" style="justify-content:flex-end"><label>&nbsp;</label><button type="button" class="btn btn-sm" id="pe-preset-preview" onclick="_presetPreview()">▶ {{ (i18n or {}).get('psn_vm_preview','试听') }}</button></div>
+      </div>
+      <!-- 语气表达：voice_profile.expressiveness（四档，空=继承全局 emotion.expressiveness）+
+           voice_profile.emotion（基线情绪，无线索时的底色）。不发语音态隐藏。对比试听走
+           /api/voice/tts-test 的 expressiveness/emotion 覆写（与发送同一条缩放链，不登记复用）。 -->
+      <div class="vexpr-box" id="pe-vexpr-box">
+        <div class="vexpr-hd"><span>🎚 {{ (i18n or {}).get('psn_vx_h','语气表达') }}</span><small>{{ (i18n or {}).get('psn_vx_sub','控制情绪强度、笑声/换气、口语化的总幅度') }}</small></div>
+        <div class="vexpr-seg" id="pe-vexpr-seg" role="radiogroup">
+          <label data-lv=""><input type="radio" name="pe-vexpr" value="" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_inherit','跟随全局') }}</b><small id="pe-vexpr-inherit-sub">{{ (i18n or {}).get('psn_vx_inherit_sub','用语音页默认') }}</small></label>
+          <label data-lv="restrained"><input type="radio" name="pe-vexpr" value="restrained" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_restrained','克制') }}</b><small>{{ (i18n or {}).get('psn_vx_restrained_sub','近乎平述') }}</small></label>
+          <label data-lv="natural"><input type="radio" name="pe-vexpr" value="natural" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_natural','自然') }}</b><small>{{ (i18n or {}).get('psn_vx_natural_sub','推荐') }}</small></label>
+          <label data-lv="vivid"><input type="radio" name="pe-vexpr" value="vivid" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_vivid','生动') }}</b><small>{{ (i18n or {}).get('psn_vx_vivid_sub','情绪更明显') }}</small></label>
+          <label data-lv="dramatic"><input type="radio" name="pe-vexpr" value="dramatic" onchange="_vxOnChange()"><b>{{ (i18n or {}).get('psn_vx_dramatic','戏剧') }}</b><small>{{ (i18n or {}).get('psn_vx_dramatic_sub','表演感强') }}</small></label>
+        </div>
+        <div class="ps-row" style="margin-top:.4rem">
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_vx_emotion','基线情绪') }}</label>
+            <select id="pe-vexpr-emotion" onchange="_vxOnChange()">
+              <option value="">{{ (i18n or {}).get('psn_vx_emo_inherit','跟随全局（默认温和）') }}</option>
+              <option value="neutral">{{ (i18n or {}).get('psn_vx_emo_neutral','中性（保真，不加情绪）') }}</option>
+              <option value="warm">{{ (i18n or {}).get('psn_vx_emo_warm','温和') }}</option>
+              <option value="calm">{{ (i18n or {}).get('psn_vx_emo_calm','平静') }}</option>
+              <option value="happy">{{ (i18n or {}).get('psn_vx_emo_happy','开心') }}</option>
+              <option value="playful">{{ (i18n or {}).get('psn_vx_emo_playful','俏皮') }}</option>
+              <option value="empathetic">{{ (i18n or {}).get('psn_vx_emo_empathetic','共情') }}</option>
+              <option value="serious">{{ (i18n or {}).get('psn_vx_emo_serious','严肃') }}</option>
+            </select>
+          </div>
+        </div>
+        <!-- 回复形态（随人设分发）：voice_profile.human_feel / reply_trigger / text_voice_split / on_voice_fail。
+             空＝跟随全局；运营 config 的 telegram.voice_reply.persona_overrides 同键优先。 -->
+        <div class="ps-row" style="margin-top:.4rem">
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_rf_human','真人感') }}</label>
+            <select id="pe-rf-human" onchange="_vxOnChange()">
+              <option value="">{{ (i18n or {}).get('psn_rf_inherit','跟随全局') }}</option>
+              <option value="lively">{{ (i18n or {}).get('psn_rf_human_lively','活泼（思考声、轻笑、偶尔口误）') }}</option>
+              <option value="natural">{{ (i18n or {}).get('psn_rf_human_natural','自然（口语化，不加小动作）') }}</option>
+              <option value="off">{{ (i18n or {}).get('psn_rf_human_off','关闭（照稿念）') }}</option>
+            </select>
+          </div>
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_rf_trigger','何时发语音') }}</label>
+            <select id="pe-rf-trigger" onchange="_vxOnChange()">
+              <option value="">{{ (i18n or {}).get('psn_rf_inherit','跟随全局') }}</option>
+              <option value="always">{{ (i18n or {}).get('psn_rf_trigger_always','每条回复都发') }}</option>
+              <option value="when_peer_voice">{{ (i18n or {}).get('psn_rf_trigger_peer','对方发语音时才发') }}</option>
+              <option value="smart">{{ (i18n or {}).get('psn_rf_trigger_smart','智能判断') }}</option>
+              <option value="never">{{ (i18n or {}).get('psn_rf_trigger_never','不发语音') }}</option>
+            </select>
+          </div>
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_rf_split','语音文字分开说') }}</label>
+            <select id="pe-rf-split" onchange="_vxOnChange()" title="{{ (i18n or {}).get('psn_rf_split_tip','开：一条回复前半句用语音说、后半句发文字，内容不重复') }}">
+              <option value="">{{ (i18n or {}).get('psn_rf_inherit','跟随全局') }}</option>
+              <option value="on">{{ (i18n or {}).get('psn_rf_on','开') }}</option>
+              <option value="off">{{ (i18n or {}).get('psn_rf_off','关') }}</option>
+            </select>
+          </div>
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_vp_dialect','方言口音') }}</label>
+            <select id="pe-vp-dialect" onchange="_vxOnChange()" title="{{ (i18n or {}).get('psn_vp_dialect_yue_hint','面向粤语客户的人设才选粤语。没有独立语言模型的方言不会出现在此列表。') }}">
+              <option value="">{{ (i18n or {}).get('psn_vp_dialect_none','无（标准普通话）') }}</option>
+              <option value="cantonese">{{ (i18n or {}).get('psn_vp_dialect_yue','粤语（人设全程粤语）') }}</option>
+            </select>
+          </div>
+          <div class="field-row"><label>{{ (i18n or {}).get('psn_rf_vfail','语音失败时') }}</label>
+            <select id="pe-rf-vfail" onchange="_vxOnChange()" title="{{ (i18n or {}).get('psn_rf_vfail_tip','语音合成失败时怎么办：改发文字＝客户照样收到整段回复；转待发＝不发，回复进工作台等人放行') }}">
+              <option value="">{{ (i18n or {}).get('psn_rf_inherit','跟随全局') }}</option>
+              <option value="text">{{ (i18n or {}).get('psn_rf_vfail_text','改发文字') }}</option>
+              <option value="queue">{{ (i18n or {}).get('psn_rf_vfail_queue','转待发（不发）') }}</option>
+            </select>
+          </div>
+        </div>
+        <div class="vexpr-foot">
+          <div class="vexpr-desc" id="pe-vexpr-desc"></div>
+          <div class="vexpr-btns">
+            <button type="button" class="btn btn-sm" id="pe-vexpr-preview" onclick="_vxPreview('')" title="{{ (i18n or {}).get('psn_vx_preview_tip','用当前档位试听（未保存也能听）') }}">▶ {{ (i18n or {}).get('psn_vx_preview','试听这个语气') }}</button>
+            <button type="button" class="btn btn-sm" id="pe-vexpr-preview-lo" onclick="_vxPreview('down')" title="{{ (i18n or {}).get('psn_vx_preview_lo_tip','低一档对比') }}">▼ {{ (i18n or {}).get('psn_vx_preview_lo','对比低一档') }}</button>
+          </div>
+        </div>
       </div>
       <!-- 开发者区：原 backend / Voice ID 手填（含「声音克隆(命令)」通道）。client 形态且未开
            开发者模式（ui_client_hide）→ 隐藏但保留元素（三态 JS 仍把结果同步进来）。 -->
@@ -2197,6 +2318,7 @@ async function _cloneProfile(pid) {
     if (idEl) { idEl.value = ''; idEl.readOnly = false; }
     document.getElementById('pe-name').value = (p.name || '') + window.T('psn_js_041');
     document.getElementById('pe-role').value = p.role || '';
+    _peKindView = null; _peKindLoad(p);   // P0-1：复制人设随源人设的显式 kind
     document.getElementById('pe-personality').value = typeof p.personality === 'object' ? (p.personality.style || JSON.stringify(p.personality)) : (p.personality || '');
     document.getElementById('pe-tags').value = (p.tags || []).join(', ');
     const spk = p.speaking || {};
@@ -3915,7 +4037,7 @@ function _pmaCard(raw) {
     + '</select>';
   const checked = _alSel[String(raw.id)] ? ' checked' : '';
   return '<div class="pma-card' + (it.enabled ? '' : ' pma-off') + (dirty ? ' pma-dirty' : '') + (needTrg ? ' pma-need-trg' : '') + '" data-mid="' + mid + '" oninput="_pmaOnEdit(this)" onchange="_pmaOnEdit(this)">'
-    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:rgba(255,255,255,.85);border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><div class="pma-th-link" role="button" tabindex="0" data-url="' + url + '" onclick="_pmaLightbox(' + midArg + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_pmaLightbox(' + midArg + ');}">' + thumb + '</div>' + badge
+    + '<div class="pma-thwrap"><label class="al-chk-wrap" style="position:absolute;right:.3rem;top:.3rem;z-index:2;background:var(--th-bg-glass85,rgba(255,255,255,.85));border-radius:4px;padding:0 .1rem"><input type="checkbox" class="al-chk" ' + checked + ' onchange="event.stopPropagation();_alToggle(' + midArg + ',this.checked)"></label><div class="pma-th-link" role="button" tabindex="0" data-url="' + url + '" onclick="_pmaLightbox(' + midArg + ')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_pmaLightbox(' + midArg + ');}">' + thumb + '</div>' + badge
     + (sts.length ? '<div class="pma-st">' + sts.join('') + '</div>' : '') + '</div>'
     + '<input type="text" class="pma-in pma-trg" value="' + _pmaEsc(trg) + '" placeholder="' + window.T(needTrg ? 'pma_need_trg_ph' : 'pma_triggers_ph') + '" title="' + window.T('pma_triggers_label') + '">'
     + chips
@@ -4891,6 +5013,28 @@ function _deepMergePersona(base, patch) {
   return out;
 }
 
+// 目标客户（persona.sales）：意向词 / 排除词，逗号分隔；行业预设词在 option 的 data-words（i18n 包），只追加不覆盖
+function _salesTerms(raw) {
+  var arr = Array.isArray(raw) ? raw : String(raw == null ? '' : raw).replace(/\uFF0C/g, ',').split(',');
+  var seen = {}, out = [];
+  arr.forEach(function (t) {
+    var s = String(t == null ? '' : t).trim();
+    var k = s.toLowerCase();
+    if (s && !seen[k]) { seen[k] = 1; out.push(s); }
+  });
+  return out;
+}
+function _salesApplyPreset(sel) {
+  var opt = sel.options[sel.selectedIndex];
+  var words = _salesTerms(opt ? opt.getAttribute('data-words') : '');
+  if (!words.length) return;
+  var kw = document.getElementById('pe-sales-kw');
+  kw.value = _salesTerms(_salesTerms(kw.value).concat(words)).join(', ');
+  var neg = document.getElementById('pe-sales-neg');
+  if (neg && !neg.value.trim()) neg.value = _salesTerms(neg.getAttribute('data-default')).join(', ');
+  sel.value = '';
+}
+
 // ── C 线：结构化 personality 只读区（traits chips + quirks/humor/temperament 行）
 function _renderPersonalityExtras(persObj) {
   var box = document.getElementById('pe-personality-extras');
@@ -4915,12 +5059,13 @@ function _renderPersonalityExtras(persObj) {
 // ── C 线：高级字段只读面板 — _loadedProfile 里「表单未管理」的字段可见化 ─────────
 // L-2 #203（5EFS2A）：voice_profile 整棵子树由语音 tab 三态表单接管、capabilities 由相册 tab
 // 「可发照片」开关接管——两者不再以原始 JSON 直出；其余未知字段后台静默保留（保存时原样回传）。
-var _ADV_MANAGED_TOP = ['id','name','role','tags','personality','speaking','identity','voice_profile',
-  'age','gender','names','context','tastes','boundaries','appearance','selfie_scenes','capabilities'];
+var _ADV_MANAGED_TOP = ['id','name','role','kind','tags','personality','speaking','identity','voice_profile',
+  'age','gender','names','context','tastes','boundaries','appearance','selfie_scenes','capabilities','sales'];
 var _ADV_MANAGED_SUB = {
   personality: ['style','quirks','humor','temperament'],
   speaking: ['reply_length','emoji_level','forbidden_phrases','openers'],
-  identity: ['deny_ai','claim_human'],
+  identity: ['deny_ai','claim_human','public_ai'],
+  sales: ['intent_keywords','intent_negative'],
   names: ['full_western','english','nickname','usage_notes'],
   context: ['hobbies','specific_memories','emotional_triggers'],
   tastes: ['likes','dislikes','opinions'],
@@ -5559,6 +5704,12 @@ function _presetVoiceChanged() {
   _vmRenderStatus();
   try { _markDrawerDirty({target: document.getElementById('pe-preset-voice')}); } catch (_e) {}
 }
+// 预置声试听稿按音色语种取（目录 preview_samples）：界面语言的默认稿念给外语音色会被语种一致性闸拦下。
+function _vmPreviewText(voiceMeta, key, nm) {
+  var lg = String((voiceMeta || {}).lang || '');
+  var samples = (_vmCatalog && _vmCatalog.preview_samples) || {};
+  return (lg && samples[lg]) ? samples[lg] : window.Tf(key, {name: nm});
+}
 var _presetAudio = null;
 async function _presetPreview() {
   var v = (document.getElementById('pe-preset-voice') || {}).value || '';
@@ -5567,7 +5718,7 @@ async function _presetPreview() {
   if (_presetAudio) { try { _presetAudio.pause(); } catch (_e) {} _presetAudio = null; }
   var meta = _vmVoiceMeta(v) || {};
   var nm = (document.getElementById('pe-name') || {}).value || _editingProfileId || '';
-  var text = window.Tf('psn_voice_preview_text', {name: nm});
+  var text = _vmPreviewText(meta, 'psn_voice_preview_text', nm);
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
     // 试听只认「这把预置声」：voice_cfg_override 显式覆盖 backend/voice、压掉全局克隆档，
@@ -5585,6 +5736,119 @@ async function _presetPreview() {
     _toast(window.Tf('psn_voice_preview_fail', {err: (e && e.message) || e}), 'err');
   } finally { if (btn) { btn.disabled = false; btn.textContent = '▶ ' + window.T('psn_vm_preview'); } }
 }
+// ── 语气表达（voice_profile.expressiveness / emotion）：装载→改动→补丁→对比试听 ──
+var _VX_LEVELS = ['restrained', 'natural', 'vivid', 'dramatic'];
+var _vxTouched = false;
+function _vxNorm(v) {
+  v = String(v == null ? '' : v).trim().toLowerCase();
+  var alias = {low: 'restrained', subtle: 'restrained', 'default': 'natural', normal: 'natural', medium: 'natural',
+               high: 'vivid', lively: 'vivid', max: 'dramatic', theatrical: 'dramatic'};
+  if (_VX_LEVELS.indexOf(v) >= 0) return v;
+  return alias[v] || '';
+}
+function _vxLevel() {
+  var el = document.querySelector('input[name="pe-vexpr"]:checked');
+  return el ? el.value : '';
+}
+function _vxEmotion() { return String((document.getElementById('pe-vexpr-emotion') || {}).value || ''); }
+function _vxSetLevel(lv) {
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="pe-vexpr"]'), function (r) { r.checked = (r.value === lv); });
+}
+function _vxLoad(vp) {
+  vp = (vp && typeof vp === 'object') ? vp : {};
+  _vxTouched = false;
+  _vxSetLevel(_vxNorm(vp.expressiveness));
+  var sel = document.getElementById('pe-vexpr-emotion');
+  if (sel) {
+    var emo = String(vp.emotion || '').trim().toLowerCase();
+    if (emo && !Array.prototype.some.call(sel.options, function (o) { return o.value === emo; })) {
+      var o = document.createElement('option'); o.value = emo; o.textContent = emo; sel.appendChild(o);
+    }
+    sel.value = emo;
+  }
+  var hf = document.getElementById('pe-rf-human');
+  if (hf) hf.value = ['lively', 'natural', 'off'].indexOf(String(vp.human_feel || '').toLowerCase()) >= 0 ? String(vp.human_feel).toLowerCase() : '';
+  var tg = document.getElementById('pe-rf-trigger');
+  if (tg) tg.value = ['always', 'when_peer_voice', 'smart', 'never'].indexOf(String(vp.reply_trigger || '').toLowerCase()) >= 0 ? String(vp.reply_trigger).toLowerCase() : '';
+  var sp = document.getElementById('pe-rf-split');
+  if (sp) sp.value = vp.text_voice_split === true ? 'on' : (vp.text_voice_split === false ? 'off' : '');
+  var vf = document.getElementById('pe-rf-vfail');
+  if (vf) vf.value = ['text', 'queue'].indexOf(String(vp.on_voice_fail || '').toLowerCase()) >= 0 ? String(vp.on_voice_fail).toLowerCase() : '';
+  var df = document.getElementById('pe-vp-dialect');
+  if (df) df.value = String(vp.dialect_flavor || '').toLowerCase() === 'cantonese' ? 'cantonese' : '';
+  _vxRenderDesc();
+}
+function _vxRenderDesc() {
+  var d = document.getElementById('pe-vexpr-desc'); if (!d) return;
+  var lv = _vxLevel();
+  var key = lv ? ('psn_vx_desc_' + lv) : 'psn_vx_desc_inherit';
+  var txt = window.T(key);
+  var emo = _vxEmotion();
+  if (emo === 'neutral') txt += ' ' + window.T('psn_vx_desc_neutral_note');
+  d.textContent = txt;
+  var lo = document.getElementById('pe-vexpr-preview-lo');
+  if (lo) lo.disabled = (lv === 'restrained');
+}
+function _vxOnChange() {
+  _vxTouched = true;
+  _vxRenderDesc();
+  try { _markDrawerDirty({target: document.getElementById('pe-vexpr-seg')}); } catch (_e) {}
+}
+// 保存补丁：没动过 → 不碰（深合并保留原值）；动过 → 显式写入（空串 = 清掉人设级覆写，回到跟随全局）
+function _vxCollectPatch(into) {
+  into = into || {};
+  if (!_vxTouched) return into;
+  into.expressiveness = _vxLevel();
+  into.emotion = _vxEmotion();
+  into.human_feel = String((document.getElementById('pe-rf-human') || {}).value || '');
+  into.reply_trigger = String((document.getElementById('pe-rf-trigger') || {}).value || '');
+  var sp = String((document.getElementById('pe-rf-split') || {}).value || '');
+  into.text_voice_split = sp === 'on' ? true : (sp === 'off' ? false : null);
+  into.on_voice_fail = String((document.getElementById('pe-rf-vfail') || {}).value || '');
+  var df = String((document.getElementById('pe-vp-dialect') || {}).value || '');
+  into.dialect_flavor = df === 'cantonese' ? 'cantonese' : '';
+  return into;
+}
+var _vxAudio = null;
+// 对比试听：dir='' 用当前档；dir='down' 低一档（“跟随全局”按 natural 算）。音色跟随三态：
+// 预置声 → 同 _presetPreview 的 backend/voice 覆写；克隆声且已保存 → 带 persona_id 走真克隆链；否则 fast Edge。
+async function _vxPreview(dir) {
+  var lv = _vxLevel() || 'natural';
+  if (dir === 'down') { var i = _VX_LEVELS.indexOf(lv); lv = _VX_LEVELS[Math.max(0, i - 1)]; }
+  var btn = document.getElementById(dir === 'down' ? 'pe-vexpr-preview-lo' : 'pe-vexpr-preview');
+  var label = btn ? btn.textContent : '';
+  if (_vxAudio) { try { _vxAudio.pause(); } catch (_e) {} _vxAudio = null; }
+  if (_presetAudio) { try { _presetAudio.pause(); } catch (_e) {} _presetAudio = null; }
+  var nm = (document.getElementById('pe-name') || {}).value || _editingProfileId || '';
+  var body = {text: window.Tf('psn_vx_preview_text', {name: nm}), format: 'mp3', expressiveness: lv};
+  var emo = _vxEmotion(); if (emo) body.emotion = emo;
+  var mode = _vmMode();
+  var v = (document.getElementById('pe-preset-voice') || {}).value || '';
+  var meta = _vmVoiceMeta(v) || {};
+  if (mode === 'preset' && v) {
+    var isOpenai = meta.backend === 'openai';
+    body.text = _vmPreviewText(meta, 'psn_vx_preview_text', nm);
+    body.fast = !isOpenai;
+    body.voice_cfg_override = {backend: isOpenai ? 'openai' : 'edge_tts', voice: v, voice_profile: {enabled: false}};
+  } else if (mode === 'clone' && _editingProfileId) {
+    body.fast = false; body.persona_id = _editingProfileId;
+  } else { body.fast = true; }
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    var r = await apiFetch('/api/voice/tts-test', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    var d = await r.json().catch(function () { return {}; });
+    if (!r.ok || !d.ok || !(d.url || d.audio_url)) throw new Error(d.message || d.error || d.detail || ('HTTP ' + r.status));
+    _vxAudio = new Audio(d.url || d.audio_url);
+    _vxAudio.onended = _vxAudio.onerror = function () { _vxAudio = null; };
+    _vxAudio.play().catch(function () {});
+    var vm = d.voice_meta || {};
+    var _vxKey = {restrained: 'psn_vx_restrained', natural: 'psn_vx_natural', vivid: 'psn_vx_vivid', dramatic: 'psn_vx_dramatic'};
+    var _lvEff = _vxNorm(vm.expressiveness || lv);
+    _toast(window.Tf('psn_vx_preview_playing', {level: _lvEff ? window.T(_vxKey[_lvEff]) : window.T('psn_vx_inherit'), emotion: vm.emotion || '-'}), 'ok');
+  } catch (e) {
+    _toast(window.Tf('psn_voice_preview_fail', {err: (e && e.message) || e}), 'err');
+  } finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+}
 function _vmRefName(vp) { var r = String((vp || {}).reference_audio_path || ''); return r ? r.split(/[\\/]/).pop() : ''; }
 // 状态行：按实际类型给绑定文案（「已绑定克隆声：<录音文件名>」/「预置声：日语 · 女 · 七海」），
 // 非法组合红字「配置需修正」——Mizuki（avatar_clone + ja-JP-NanamiNeural，无录音）在此现形。
@@ -5593,6 +5857,8 @@ function _vmRenderStatus() {
   var picker = document.getElementById('pe-preset-picker');
   var mode = _vmMode(), vp = _vmLoaded.vp || {}, txt = '', cls = '';
   if (picker) picker.style.display = (mode === 'preset') ? '' : 'none';
+  var vx = document.getElementById('pe-vexpr-box');
+  if (vx) vx.style.display = (mode === 'off') ? 'none' : '';
   if (mode === 'clone') {
     var hasId = _vmHasIdentity(vp) && !!_vmInferCloneBackend(vp);
     var vName = String(vp.voice || '').trim();
@@ -5623,6 +5889,7 @@ function _vmLoad(vp, isNew) {
   _vmSetMode(d.mode);
   _vpSyncBackendUi(vp.backend || '');
   var inp = document.getElementById('pe-vp-voice'); if (inp) inp.value = vp.voice || '';
+  _vxLoad(vp);
   _vmLoadCatalog().then(function () {
     _presetRender(d.mode === 'preset' ? (vp.voice || '') : '');
     _vmRenderStatus();
@@ -5666,7 +5933,8 @@ function _vmValidate() {
   return '';
 }
 // 保存补丁：没动过 → 原样回传装载值（不静默迁移存量）；动过 → 按三态产出
-function _vmCollectPatch() {
+function _vmCollectPatch() { return _vxCollectPatch(_vmCollectModePatch()); }
+function _vmCollectModePatch() {
   var vp = _vmLoaded.vp || {};
   var devB = String((document.getElementById('pe-vp-backend') || {}).value || '');
   var devV = String((document.getElementById('pe-vp-voice') || {}).value || '').trim();
@@ -5691,6 +5959,36 @@ function _vmCollectPatch() {
   return {voice_mode: 'preset', backend: (meta && meta.backend === 'openai') ? 'openai' : 'edge_tts', voice: v};
 }
 
+/* P0-1（2026-09-29）：工作类型选择器。选择器值＝显式 kind（空＝自动）；提示行显示服务端
+   解析的生效值与来源（editProfile 带回的 kind_view；新建 / 复制态无视图 → 只按选择器显示）。 */
+var _peKindView = null;
+var _PE_KIND_LABEL = { companion: 'psn_kind_companion', support: 'psn_kind_support', sales: 'psn_kind_sales' };
+function _peKindLoad(p) {
+  var sel = document.getElementById('pe-kind');
+  if (!sel) return;
+  var k = String((p && p.kind) || '').toLowerCase();
+  sel.value = _PE_KIND_LABEL[k] ? k : '';
+  _peKindHint();
+}
+function _peKindHint() {
+  var sel = document.getElementById('pe-kind');
+  var eff = document.getElementById('pe-kind-eff');
+  var hint = document.getElementById('pe-kind-hint');
+  if (!sel || !eff || !hint) return;
+  var chosen = sel.value || '';
+  var view = _peKindView || {};
+  var kind = chosen || String(view.kind || '');
+  var src = chosen ? 'explicit' : String(view.source || '');
+  if (kind && _PE_KIND_LABEL[kind]) {
+    var srcKey = { explicit: 'psn_kind_src_explicit', tag: 'psn_kind_src_tag', keyword: 'psn_kind_src_keyword', default: 'psn_kind_src_default' }[src];
+    eff.textContent = window.Tf('psn_kind_eff', { label: window.T(_PE_KIND_LABEL[kind]), src: srcKey ? window.T(srcKey) : '—' });
+    hint.textContent = window.T(kind === 'companion' ? 'psn_kind_hint_companion' : 'psn_kind_hint_support');
+  } else {
+    eff.textContent = '';
+    hint.textContent = '';
+  }
+}
+
 function _fillDrawerFields(p) {
   // 换档案装载：清掉上一个人设的删除提示横幅与排查残余（防串味）
   try { _showRemovedBanner([]); } catch (e) {}
@@ -5699,6 +5997,7 @@ function _fillDrawerFields(p) {
   var vp = p.voice_profile || {};
   document.getElementById('pe-name').value = p.name || '';
   document.getElementById('pe-role').value = p.role || '';
+  _peKindLoad(p);   // P0-1：工作类型选择器 + 「当前生效」提示行
   var _persObj = (p.personality && typeof p.personality === 'object' && !Array.isArray(p.personality)) ? p.personality : null;
   document.getElementById('pe-personality').value = _persObj
     ? String(_persObj.style || '') : _normalizePersonality(p.personality || '');
@@ -5713,6 +6012,11 @@ function _fillDrawerFields(p) {
   document.getElementById('pe-openers').value = (spk.openers || []).join(', ');
   document.getElementById('pe-deny-ai').checked = !!(ident.deny_ai || p.deny_ai);
   document.getElementById('pe-claim-human').checked = !!(ident.claim_human || p.claim_human);
+  var paiEl = document.getElementById('pe-public-ai'); if (paiEl) paiEl.checked = !!ident.public_ai;
+  var sales = (p.sales && typeof p.sales === 'object' && !Array.isArray(p.sales)) ? p.sales : {};
+  var skw = document.getElementById('pe-sales-kw'); if (skw) skw.value = _salesTerms(sales.intent_keywords).join(', ');
+  var sng = document.getElementById('pe-sales-neg'); if (sng) sng.value = _salesTerms(sales.intent_negative).join(', ');
+  var spr = document.getElementById('pe-sales-preset'); if (spr) spr.value = '';
   // L-2 #205：语音三态装载（新建态 = 空对象 → 默认「不发语音」，D-L4）
   _vmLoad(vp, !p || !Object.keys(p).length);
   _fillProfileTabFields(p, _persObj);
@@ -5995,6 +6299,7 @@ function openNewProfile() {
   _editingProfileId = null;
   var idEl = document.getElementById('pe-id');
   if (idEl) { idEl.value = ''; idEl.readOnly = false; }
+  _peKindView = null;   // P0-1：新建态无服务端视图，选择器回「自动」
   _fillDrawerFields({});
   _loadedProfile = null;
   _loadedRev = '';
@@ -6026,6 +6331,7 @@ async function editProfile(pid) {
     _editingProfileId = pid;
     var idEl = document.getElementById('pe-id');
     if (idEl) { idEl.value = pid; idEl.readOnly = true; }
+    _peKindView = d.kind_view || null;   // P0-1：服务端解析的生效 kind（显式 / 推断 / 缺省）
     _fillDrawerFields(p);
     _loadedProfile = JSON.parse(JSON.stringify(p));
     _loadedRev = d.rev || '';   // P2 乐观锁：记住加载时指纹（老后端无 rev → 空=不启用校验）
@@ -6145,6 +6451,8 @@ async function saveProfile() {
   var patch = {
     name: nameVal.trim(),
     role: document.getElementById('pe-role').value.trim(),
+    // P0-1：空串＝「自动推断」显式落库（merge 语义下不带键会保留旧值，清不掉手动指定）
+    kind: (document.getElementById('pe-kind') || {}).value || '',
     personality: (_loadedProfile && _loadedProfile.personality && typeof _loadedProfile.personality === 'object' && !Array.isArray(_loadedProfile.personality))
       ? { style: _persVal } : _persVal,
     tags: tags,
@@ -6157,9 +6465,16 @@ async function saveProfile() {
     identity: {
       deny_ai: document.getElementById('pe-deny-ai').checked,
       claim_human: document.getElementById('pe-claim-human').checked,
+      public_ai: !!(document.getElementById('pe-public-ai') || {}).checked,
     },
     voice_profile: _vpPatch,
   };
+  if (document.getElementById('pe-sales-kw')) {
+    patch.sales = {
+      intent_keywords: _salesTerms(document.getElementById('pe-sales-kw').value),
+      intent_negative: _salesTerms((document.getElementById('pe-sales-neg') || {}).value),
+    };
+  }
   // C2 线：「档案」页签全字段并入 patch；personality 三补充做形态特殊融合——
   // 对象形态直接并子键；字符串形态且三补充有值时升级为 {style: 原字符串, ...}。
   var pfPatch = _collectProfileTabPatch();
@@ -6396,6 +6711,7 @@ var _loadedProfile = null;  // last-loaded profile data for diff
 var _loadedRev = '';        // P2 乐观锁：加载时的服务端内容指纹（保存带 expected_rev）
 var _pendingHashProfile = null;  // hash deep-link: #profile=xxx
 var _pendingHashTab = '';        // #250: optional &tab=<dtab> (voice) to land on after the editor opens
+var _pendingHashFocus = '';      // optional &focus=pe-sales-kw|ad-row|mp-row
 function _draftKey() {
   return _editingProfileId ? 'persona_draft_' + _editingProfileId : 'persona_draft__new';
 }
@@ -8135,6 +8451,7 @@ function _getCurrentFormValues() {
   return {
     name:       v('pe-name'),
     role:       v('pe-role'),
+    kind:       v('pe-kind'),
     personality: v('pe-personality'),
     tags:       v('pe-tags').split(',').map(function(t){ return t.trim(); }).filter(Boolean),
     language:   v('pe-language'),
@@ -8274,15 +8591,23 @@ function _processHashProfile() {
   if (!_pendingHashProfile) return;
   var pid = _pendingHashProfile;
   var tab = _pendingHashTab;
+  var focus = _pendingHashFocus;
   _pendingHashProfile = null;
   _pendingHashTab = '';
+  _pendingHashFocus = '';
   // Switch to profiles tab so the card is visible in background
   switchTab('profiles');
   var p = editProfile(pid);
-  // #250: land on the requested drawer tab (voice) once the editor has loaded the profile
-  if (tab && p && typeof p.then === 'function') {
-    p.then(function () { try { switchDTab(tab); } catch (_e) {} });
+  function land() {
+    if (tab) { try { switchDTab(tab); } catch (_e) {} }
+    if (focus === 'pe-sales-kw' || focus === 'ad-row' || focus === 'mp-row') {
+      var el = document.getElementById(focus);
+      if (el) { try { el.scrollIntoView({ block: 'center' }); if (el.focus) el.focus(); } catch (_e2) {} }
+    }
   }
+  // #250: land on the requested drawer tab (voice) once the editor has loaded the profile
+  if (p && typeof p.then === 'function') p.then(land);
+  else land();
 }
 // ── P9-1: Diff count badge on Preview tab ────────────────────────────────────
 function _scheduleDiffUpdate() {
@@ -9388,8 +9713,12 @@ document.addEventListener('DOMContentLoaded', function() {
   // Load DnD card order from localStorage
   try { var _storedOrd = localStorage.getItem('persona_card_order'); if (_storedOrd) _customOrder = JSON.parse(_storedOrd); } catch(e) {}
   // #250 (N-4 D): #profile=<id>&tab=voice — the inbox voice panel's "fix on the Voice tab" link
-  var _hashM = window.location.hash.match(/^#profile=([^&]+)(?:&tab=(\w+))?$/);
-  if (_hashM) { _pendingHashProfile = decodeURIComponent(_hashM[1]); _pendingHashTab = _hashM[2] || ''; }
+  var _hashM = window.location.hash.match(/^#profile=([^&]+)(?:&tab=(\w+))?(?:&focus=([\w-]+))?$/);
+  if (_hashM) {
+    _pendingHashProfile = decodeURIComponent(_hashM[1]);
+    _pendingHashTab = _hashM[2] || '';
+    _pendingHashFocus = _hashM[3] || '';
+  }
   // Q-35 #306（pma-deeplink）：/personas?pid=<id>&pma=1&filter=notrg —— 收件箱状态带「去相册补标签」落点：
   // 打开该人设 → 相册页签 → 预置「缺触发词」筛选（filter 只认相册筛选枚举，其余按 all）。
   try {
@@ -10120,7 +10449,7 @@ function openCreateFlow() {
 </script>
 {# ── P1/P2 功能模块(独立静态文件,personas.html 拆分的起点)─────────────────── #}
 <script src="/static/js/persona_studio_core.js?v=20260918a"></script>
-<script src="/static/js/persona_apply_modal.js?v=p3"></script>
+<script src="/static/js/persona_apply_modal.js?v=p5"></script>
 <script src="/static/js/persona_create_wizard.js?v=20260916a"></script>
 <script src="/static/js/persona_chat_test.js?v=20260731b"></script>
 <script src="/static/js/persona_health_panel.js?v=p2"></script>
@@ -10129,12 +10458,12 @@ function openCreateFlow() {
      as unified_inbox). sidebar-chrome deliberately not loaded: cp-voice icons
      degrade to text gracefully. -->
 <script>window.CP_LANG = document.documentElement.getAttribute('lang') || 'zh';</script>
-<script src="/copilot/i18n/cp-i18n.js?v=20260919a"></script>
+<script src="/copilot/i18n/cp-i18n.js?v=20261008a"></script>
 {% if ui_lang|default('zh') in ('zh_hant', 'vi', 'th', 'id') %}
-<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20260912b"></script>
+<script src="/copilot/i18n/cp-i18n-ext.{{ ui_lang }}.js?v=20261008a"></script>
 {% endif %}
-<script src="/copilot/client/copilot-client.js?v=20260830y"></script>
-<script src="/copilot/components/cp-voice.js?v=20260919a"></script>
+<script src="/copilot/client/copilot-client.js?v=20260922a"></script>
+<script src="/copilot/components/cp-voice.js?v=20260922a"></script>
 <script>
 /* B25-1 glue (ASCII only per page gate): status line + unbind + component mount.
    Hook = _fillDrawerFields wrapper (single funnel: editor-open + JSON-import). */

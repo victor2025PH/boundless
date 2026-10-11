@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.companion.group_show.capacity import observed_mix, plan_capacity
@@ -441,11 +441,109 @@ def read_show_context(
 # ── 演出效果：与五条风险轴同规矩，读账只此一处 ────────────────────────────────
 
 
+def _member_rows(members: Any, group_id: str,
+                 degraded: Optional[List[str]]) -> Optional[List[Any]]:
+    """本群成员。没传库 → ``None``（调用方决定要不要标降级）。读挂 → ``None`` + 降级。"""
+    fn = getattr(members, "list_members", None)
+    if not callable(fn):
+        return None
+    try:
+        return list(fn(str(group_id), limit=500) or [])
+    except Exception:  # noqa: BLE001
+        _note(degraded, "members")
+        logger.debug("[group_show.ledgers] 群成员读取失败（已忽略）", exc_info=True)
+        return None
+
+
+def _attach_guide_funnel(outcome: Any, session: Mapping[str, Any],
+                         inbound: Sequence[Mapping[str, Any]], *,
+                         members: Any, inbox: Any, guide_account: str,
+                         window_hours: float, now: float,
+                         degraded: Optional[List[str]],
+                         guide_feature: str = "",
+                         features: Optional[Mapping[str, str]] = None) -> Any:
+    """把向导漏斗的三个数贴上效果读数。没配向导号则原样返回，旧判词不动。"""
+    from src.companion.group_show.funnel import (
+        attribute_inbound,
+        fallback_peers,
+        speakers_answered_by_guide,
+    )
+    from src.companion.group_show.outcome import window_bounds
+
+    guide = str(guide_account or "").strip()
+    if not guide:
+        return outcome
+    gid = str(session.get("group_key") or "")
+    member_rows = _member_rows(members, gid, degraded)
+    if member_rows is None:
+        _note(degraded, "members")
+        return outcome
+    w_start, w_end, complete = window_bounds(session, window_hours, now)
+    after = float(session.get("started_at") or w_start)
+    ids = []
+    for row in member_rows:
+        if not isinstance(row, Mapping):
+            continue
+        uid = str(row.get("user_id") or "").strip()
+        if uid:
+            ids.append(uid)
+    dm_fn = getattr(inbox, "guide_private_messages", None)
+    if not callable(dm_fn):
+        _note(degraded, "guide_dm")
+        return outcome
+    dms = _call(
+        inbox, "guide_private_messages", degraded, "guide_dm",
+        account_id=guide, chat_keys=ids,
+        platform=str(session.get("platform") or ""),
+    )
+    if dms is None:
+        return outcome
+    pid = str(session.get("playbook_id") or "")
+    feat = str(guide_feature or "").strip() or str((features or {}).get(pid) or "")
+    attr = attribute_inbound(
+        member_rows, dms, guide_account_id=guide, after=after, group_key=gid,
+        feature=feat)
+    in_window: List[Mapping[str, Any]] = []
+    for raw in inbound or ():
+        if not isinstance(raw, Mapping):
+            continue
+        try:
+            ts = float(raw.get("ts") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if w_start <= ts <= w_end and str(raw.get("sender_id") or "").strip():
+            in_window.append(raw)
+    reply_fn = getattr(inbox, "group_account_outbound_since", None)
+    if not callable(reply_fn):
+        _note(degraded, "guide_reply")
+        answered: Tuple[str, ...] = ()
+    else:
+        guide_lines = _call(
+            inbox, "group_account_outbound_since", degraded, "guide_reply",
+            account_id=guide, chat_key=gid, since_ts=after, until_ts=w_end,
+            platform=str(session.get("platform") or ""),
+        )
+        answered = (speakers_answered_by_guide(in_window, guide_lines or [])
+                    if guide_lines is not None else ())
+    fallback = fallback_peers(
+        ids, answered, attr["added"], window_complete=complete)
+    return replace(
+        outcome,
+        guide_added=len(attr["added"]),
+        guide_tested=len(attr["tested"]),
+        guide_fallback=len(fallback),
+    )
+
+
 def read_show_outcomes(shows: Any = None, inbox: Any = None, *,
                        window_hours: float = 0.0, limit: int = 10,
                        platform: str = "",
                        now: Optional[float] = None,
-                       degraded: Optional[List[str]] = None) -> List[Any]:
+                       degraded: Optional[List[str]] = None,
+                       members: Any = None,
+                       guide_account: str = "",
+                       guide_feature: str = "",
+                       features: Optional[Mapping[str, str]] = None) -> List[Any]:
     """最近若干**真发**场次的效果读数（排练一律剔除）。
 
     ``platform`` 非空则只看该平台的真发场次（P0 多平台：效果卡与风险轴同口径按平台
@@ -498,8 +596,13 @@ def read_show_outcomes(shows: Any = None, inbox: Any = None, *,
                 inbox, "first_private_inbound_ts", degraded, "dm",
                 chat_keys=senders, platform=str(s.get("platform") or ""),
             )
-        out.append(build_outcome(s, inbound, first_dm,
-                                 window_hours=win, now=t_now))
+        outcome = build_outcome(s, inbound, first_dm,
+                                window_hours=win, now=t_now)
+        outcome = _attach_guide_funnel(
+            outcome, s, inbound, members=members, inbox=inbox,
+            guide_account=guide_account, window_hours=win, now=t_now,
+            degraded=degraded, guide_feature=guide_feature, features=features)
+        out.append(outcome)
     return out
 
 

@@ -104,13 +104,10 @@ _SOFT_LAUGHS: Dict[str, Tuple[str, ...]] = {
     # warm 不加笑——温柔态硬插笑更假
 }
 _LAUGH_SKIP_RE = re.compile(r"^\s*[「『\"']?\s*(哈{2,}|嘿+|呵{2,}|嘻{2,})")
-# 不宜作思考重复锚点的虚词/连接（重复会像故障而非思考）
-_THINK_SKIP = frozenset({
-    "其实", "话说", "然后", "所以", "不过", "因为", "如果", "要是", "这个",
-    "那个", "就是", "可以", "已经", "还是", "或者", "虽然", "但是", "而且",
-    "还有", "我们", "你们", "他们", "什么", "怎么", "一下", "一点", "一些",
-})
-_THINK_WORD_RE = re.compile(r"[\u4e00-\u9fff]{2}")
+# 思考停顿只落在意群边界（逗号后）；已有思考词则不叠
+_THINK_PAUSE = "嗯……"
+_THINK_PRESENT_RE = re.compile(r"嗯……|我想想|让我想想|([\u4e00-\u9fff]{2})……\1")
+_CLAUSE_BOUNDARY_RE = re.compile(r"[，,]")
 
 
 # ── 语言门控（关键护栏）────────────────────────────────────────────────────
@@ -418,31 +415,31 @@ def _soft_laugh(
 def _thinking_repeat(
     text: str, seed: int, *, prob: float = 0.22, min_chars: int = 16,
 ) -> Tuple[str, bool]:
-    """思考时重复一词：「我觉得可以」→「我觉得……我觉得可以」。
+    """思考停顿：在句中意群边界（逗号后）插「嗯……」——「价格的话，嗯……一个月 199」。
 
-    只挑句中实义双字，避开虚词/连接；已含「X……X」形态则跳过（防叠加）。
+    不重复词：旧版「我觉得……我觉得可以」听感是结巴，且停顿常落在词组中间
+    （老板 2026-10-02 点名）。没有合适的逗号就不加；已有思考词则跳过（防叠加）。
     """
     core = str(text or "").strip()
     if len(core) < max(1, int(min_chars)):
         return text, False
-    if "……" in core and re.search(r"([\u4e00-\u9fff]{2})……\1", core):
+    if _THINK_PRESENT_RE.search(core):
         return text, False
     if ((seed >> 11) % 100) >= int(min(0.95, max(0.0, prob)) * 100):
         return text, False
-    cands: List[Tuple[int, str]] = []
-    for m in _THINK_WORD_RE.finditer(core):
-        w = m.group(0)
-        if w in _THINK_SKIP:
+    cands: List[int] = []
+    for m in _CLAUSE_BOUNDARY_RE.finditer(core):
+        pos = m.end()
+        # 句首 4 字内 / 句末 4 字内的逗号不用（太靠边像卡壳）
+        if pos < 4 or pos > len(core) - 4:
             continue
-        # 避开句首 0-1 字位置（太靠前像口吃开场）与句末 2 字
-        if m.start() < 2 or m.end() > len(core) - 2:
+        if core[pos:pos + 1] in "…，,。！？!?":
             continue
-        cands.append((m.start(), w))
+        cands.append(pos)
     if not cands:
         return text, False
-    pos, word = cands[(seed >> 21) % len(cands)]
-    # 在该词首次出现处扩成「词……词」
-    out = core[:pos] + f"{word}……{word}" + core[pos + len(word):]
+    pos = cands[(seed >> 21) % len(cands)]
+    out = core[:pos] + _THINK_PAUSE + core[pos:]
     # 保留原文首尾空白形态（通常无）
     if text[:1].isspace() or text[-1:].isspace():
         return text.replace(core, out, 1) if core in text else out, True

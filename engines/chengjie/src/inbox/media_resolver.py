@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote, urlparse
@@ -73,6 +74,7 @@ def resolve_media_path(
         if os.path.isfile(ref):
             return os.path.abspath(ref)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in resolve_media_path", exc_info=True)
         return None
     return None
 

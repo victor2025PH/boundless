@@ -95,6 +95,7 @@ def _default_store() -> Any:
         from src.integrations.protocol_bridge import get_inbox_store
         return get_inbox_store()
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _default_store", exc_info=True)
         return None
 
 

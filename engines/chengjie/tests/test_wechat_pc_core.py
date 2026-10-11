@@ -1983,6 +1983,11 @@ def test_cross_session_blindness_is_not_reported_as_wechat_not_running(monkeypat
 
 def test_driver_is_not_ready_across_sessions(monkeypatch):
     """跨会话起驱动只会得到一个瞎子；start/restart 该在门口 409，而不是拉起来再 blind。"""
+    pytest.importorskip(
+        "uiautomation",
+        reason="uiautomation 是 requirements.txt 的 win32 extra，Linux CI 不装；"
+               "本测把 os.name 打成 nt 后断言「包是装了的」，没装就无法表达这个前提",
+    )
     from src.integrations.wechat_pc import env_check as E
 
     monkeypatch.setattr(E.os, "name", "nt")

@@ -182,7 +182,7 @@ class CrisisEscalationBridge:
                 from src.utils.crisis_event_store import remove_crisis_event_listener
                 remove_crisis_event_listener(self.on_event)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("swallowed in CrisisEscalationBridge.uninstall", exc_info=True)
             self._installed = False
 
     def on_event(self, event: Dict[str, Any]) -> Dict[str, Any]:

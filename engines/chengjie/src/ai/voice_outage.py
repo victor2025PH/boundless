@@ -17,6 +17,7 @@ streak 新鲜度（默认 20min）」，对「低流量下几天里零星请求�
 """
 from __future__ import annotations
 
+import logging
 import json
 import os
 import threading
@@ -39,6 +40,7 @@ def _ledger_path() -> Optional[Path]:
         root = Path(base) if base else Path(".")
         return root / "logs" / "voice_outage_ledger.json"
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in _ledger_path", exc_info=True)
         return None
 
 
@@ -102,6 +104,7 @@ class VoiceOutageLedger:
                     self._events.append(
                         (float(ts), bool(ok), str(src), str(rsn)))
                 except Exception:
+                    logging.getLogger(__name__).debug("swallowed in VoiceOutageLedger._load", exc_info=True)
                     continue
             self._last_ok_ts = float(data.get("last_ok_ts") or 0.0)
             self._last_fail_ts = float(data.get("last_fail_ts") or 0.0)
@@ -131,7 +134,7 @@ class VoiceOutageLedger:
             tmp.write_text(payload, encoding="utf-8")
             os.replace(tmp, p)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in VoiceOutageLedger._save_locked", exc_info=True)
 
     def record_voice_attempt(self, ok: bool, source: str,
                              reason: str = "") -> None:
@@ -319,7 +322,7 @@ def note_voice_attempt(ok: bool, source: str, reason: str = "") -> None:
     try:
         get_voice_outage().record_voice_attempt(bool(ok), source, reason)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in note_voice_attempt", exc_info=True)
 
 
 def reset_for_test() -> None:
@@ -338,7 +341,7 @@ def reset_for_test() -> None:
         if p is not None and p.is_file():
             p.unlink()
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in reset_for_test", exc_info=True)
 
 
 __all__ = [

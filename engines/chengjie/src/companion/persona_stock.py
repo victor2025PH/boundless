@@ -80,6 +80,7 @@ def speech_prints_file() -> Optional[Path]:
         f = Path(pdir) / "spoken_style" / "data" / "speech_prints.json"
         return f if f.is_file() else None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in speech_prints_file", exc_info=True)
         return None
 
 
@@ -148,7 +149,7 @@ def _cfg_account_pids(cfg: Dict[str, Any], section: str) -> Dict[str, Set[str]]:
         if flat:
             out.setdefault("default", set()).update(flat)
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in _cfg_account_pids", exc_info=True)
     return out
 
 
@@ -202,7 +203,7 @@ def collect_binding_usage_map(pm: Any = None,
                 if ref:
                     chats[ref] = chats.get(ref, 0) + 1
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in collect_binding_usage_map", exc_info=True)
         try:
             dom = getattr(pm, "_domain_persona", None)
             if isinstance(dom, dict) and str(dom.get("id") or ""):
@@ -212,7 +213,7 @@ def collect_binding_usage_map(pm: Any = None,
                 if isinstance(dflt, dict):
                     default_pid = str(dflt.get("id") or "")
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in collect_binding_usage_map", exc_info=True)
     out: Dict[str, Dict[str, Any]] = {}
     for pid in set(seen) | set(chats) | ({default_pid} if default_pid else set()):
         accounts = sorted(seen.get(pid, set()))

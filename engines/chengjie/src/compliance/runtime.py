@@ -62,7 +62,7 @@ def platform_scope(platform: Any) -> Iterator[None]:
         try:
             _PLATFORM.reset(token)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in platform_scope", exc_info=True)
 
 
 def current_platform() -> str:

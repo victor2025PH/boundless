@@ -65,6 +65,7 @@ def extract_audio_wav(video_path: str, out_wav: str) -> Optional[str]:
             return str(out_wav)
         return None
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in extract_audio_wav", exc_info=True)
         return None
 
 
@@ -136,6 +137,7 @@ def extract_frames_list(
     try:
         out.mkdir(parents=True, exist_ok=True)
     except Exception:
+        logging.getLogger(__name__).debug("swallowed in extract_frames_list", exc_info=True)
         return None
     paths: List[str] = []
     for i, ts in enumerate(_frame_points(dur, frames)):

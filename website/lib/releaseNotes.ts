@@ -29,9 +29,117 @@ export interface ReleaseNote {
 /** 按版本号从新到旧排列 */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "1.5.5",
+    date: "2026-09-30",
+    title: {
+      zh: "安装目录与卸载 · 系统「应用」里可以卸干净",
+      en: "Install folder and uninstall · removable from Windows Settings",
+    },
+    tags: ["fix"],
+    highlights: {
+      zh: [
+        "安装包版本升到 1.5.5。默认目录仍是 D:\\AvatarHub（D 盘空间不够才改到用户目录），不再记回上一次手选的文件夹。",
+        "装完后出现在「设置 → 应用」里，显示名是「无界幻境 BOUNDLESS Studio」，可以从系统里卸载。",
+        "卸载会连同已下载的模型、运行环境和换盘数据一起删掉，不再只删启动台、留下几十 GB。",
+      ],
+      en: [
+        "Installer is now 1.5.5. The default folder stays D:\\AvatarHub (or your user folder when D: is short on space) and no longer reuses a folder picked last time.",
+        "After install it shows in Settings → Apps as “无界幻境 BOUNDLESS Studio”, so you can uninstall it from Windows.",
+        "Uninstall also removes downloaded models, runtimes, and any moved-disk data, instead of leaving tens of gigabytes behind.",
+      ],
+    },
+  },
+  {
+    version: "1.5.4",
+    date: "2026-09-29",
+    title: {
+      zh: "按需安装 · 8GB 显卡也能出片",
+      en: "On-demand install · 8GB GPUs can now ship clips",
+    },
+    tags: ["feature", "improve"],
+    highlights: {
+      zh: [
+        "8GB 显卡默认装「幻颜·出片工厂」（约 13.5GB）：照片/视频换脸 + 口播出片；Lite 极简档瘦到约 5.8GB。",
+        "首启向导改问「我想用它来」：换脸出片 / 配音克隆 / 直播数字人，按显存自动挑档；直播用途显存够就上高清旗舰。",
+        "下载页「我的显卡能干什么」：选显存和用途立刻看到能跑什么、建议装哪一档。",
+        "8GB 开机只预热换脸，口型/配音用到再加载并自动腾显存；装完后设置页可按需加装未带的功能。",
+      ],
+      en: [
+        "8GB GPUs now default to the FaceX clip-factory edition (~13.5GB): photo/video swaps plus presenter clips. The Lite edition is down to ~5.8GB.",
+        "The first-run wizard asks what you want to do — clips, voice, or live avatar — and picks a tier from your VRAM. Live intent on a 24GB card goes straight to HD flagship.",
+        "The download page now shows what your GPU can run: pick VRAM and intent, see a recommended edition.",
+        "On 8GB machines only face-swap is warmed at boot; lip-sync and TTS load on demand and idle engines yield VRAM. Missing features install later from Settings.",
+      ],
+    },
+  },
+  {
+    version: "1.5.3",
+    date: "2026-08-19",
+    title: { zh: "四产品拆分销售 · 单品授权与幻颜出片档", en: "Four-product split: per-line licensing & the FaceX clip tier" },
+    tags: ["feature", "improve"],
+    highlights: {
+      zh: [
+        "产品拆开卖：幻声（声音 19 起）/ 幻颜（出片 29 起）/ 幻影（直播 99 起，专业档=全家桶）按需单买；授权按产品线签发，控制台只见你买的工作台，其余显示升级卡（先看看界面不拦）。",
+        "新增「幻颜·换脸与出片工厂」装机档：8GB 显存即可跑照片 / 视频换脸与数字人口播出片（离线排队出活），口播配音走可商用引擎。",
+        "设置页新增「可选组件」：唱歌与人声工房（AI 翻唱 + 人声分离 + 降噪超分，约 7.5GB）与原创成曲（ACE-Step，约 6.4GB）点一下即装，不占首装体积；装完素材提取自动升级出干净人声。",
+        "试用与免费版政策不变：所有产品 3 天全功能试用（从首次成功产出起算），到期转永久免费版不停摆；存量客户与旧授权完全无缝。",
+      ],
+      en: [
+        "Products now sell separately: VoiceX (from 19) / FaceX (from 29) / LiveX (from 99, Pro = full bundle). Licenses are issued per product line — the console shows the workspaces you bought and honest upgrade cards for the rest.",
+        "New FaceX clip-factory edition: photo/video face swaps and avatar presenter clips on an 8GB GPU (offline render queue), with dubbing on commercially licensed engines.",
+        "New optional add-ons in Settings: the singing & vocal workshop (covers + separation + denoise, ~7.5GB) and ACE-Step original songs (~6.4GB) install with one click — keeping the base install light; source extraction upgrades automatically.",
+        "Trial and free-tier policy unchanged: 3-day full trial on every product (clock starts at your first successful output), then the free-forever tier. Existing customers and licenses carry over seamlessly.",
+      ],
+    },
+  },
+  {
+    version: "1.5.2",
+    date: "2026-08-13",
+    title: { zh: "装完即用 · 出镜组件随装机自动装好", en: "Ready on first launch — streaming devices auto-installed" },
+    tags: ["feature", "improve"],
+    highlights: {
+      zh: [
+        "安装收尾自动装好虚拟摄像头（OBS）与虚拟声卡（VB-CABLE）：首启后微信 / 抖音 / 会议软件的设备列表里直接能选到，无需再按向导手动补装。",
+        "两个组件合并为一次系统权限确认，静默安装官方原包，下载全程 SHA-256 校验；已装过的机器自动跳过，纯声音档只装声卡。",
+        "自动安装失败或被拒绝也不影响装机完成——完成页如实亮灯提示，控制台「开播」页保留一键补装兜底。",
+        "出镜组件均为第三方官方原包：OBS Studio 来自 obsproject.com（GPL-2.0）；VB-CABLE 来自 vb-audio.com（捐赠软件，欢迎支持原作者）。",
+      ],
+      en: [
+        "Setup now finishes by auto-installing the virtual camera (OBS) and virtual audio cable (VB-CABLE): WeChat / TikTok / meeting apps can pick the devices right after first launch.",
+        "Both components install silently from official packages behind a single Windows permission prompt, with SHA-256 verified downloads; machines that already have them are skipped, and the voice-only edition installs the audio cable only.",
+        "A failed or declined auto-install never blocks setup — the finish page reports honestly, and one-click install remains available on the Go-Live page.",
+        "Both are unmodified third-party official packages: OBS Studio from obsproject.com (GPL-2.0); VB-CABLE from vb-audio.com (donationware).",
+      ],
+    },
+  },
+  {
+    version: "1.5.1",
+    date: "2026-08-12",
+    title: { zh: "1.1–1.5 累积更新 · 下载提速与安装体验大版本", en: "Cumulative 1.1–1.5 update: faster downloads, better setup" },
+    tags: ["improve", "feature"],
+    highlights: {
+      zh: [
+        "下载与安装大提速：全球镜像加速、多源自动择优、断点续传、边下边装、慢源自动熔断换路——组件下载实测提速数倍，弱网更稳。",
+        "首启安装向导全面改版：功能域点亮「先装完先能用」、实时进度与预计剩余时间、暂停 / 后台下载 / 先去体验。",
+        "新增「幻声·纯声音工作台」档位：只装声音相关组件（克隆配音 / 变声 / 情感 TTS），15GB 级轻量安装。",
+        "素材提取上线：粘贴视频链接一键提取干净人声用于克隆（多平台解析、说话人拆分、手机扫码直传）。",
+        "界面双主题（夜 / 白）与英文界面；授权中心、免费模式与试用延期体系改版。",
+        "大量稳定性修复与安全加固：发布清单 Ed25519 签名、更新防降级、自更新失败自动回退。",
+      ],
+      en: [
+        "Much faster downloads and installs: global mirrors, automatic source selection, resumable transfers, download-while-installing, and automatic failover away from slow sources.",
+        "Redesigned first-run wizard: capability domains light up as they become usable, live progress with ETA, pause / background / try-early.",
+        "New voice-only edition: installs just the voice stack (cloning, dubbing, voice change, emotional TTS) at ~15 GB.",
+        "Media extraction: paste a video link to pull clean vocals for cloning (multi-platform parsing, speaker separation, phone upload via QR).",
+        "Dual UI themes (dark / light) and an English interface; revamped licensing center, free mode and trial extensions.",
+        "Many stability and security hardening fixes: Ed25519-signed release manifests, anti-downgrade updates, self-update auto-rollback.",
+      ],
+    },
+  },
+  {
     version: "1.0.11",
     date: "2026-07-13",
-    title: { zh: "当前最新版 · 安装与更新体验打磨", en: "Latest · polished install & update experience" },
+    title: { zh: "安装与更新体验打磨", en: "Polished install & update experience" },
     tags: ["improve", "fix"],
     highlights: {
       zh: [

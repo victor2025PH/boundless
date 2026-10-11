@@ -576,11 +576,13 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
     # 豁免口清单（每条都要能回答「为什么 CSRF 威胁模型不适用」）：
     # - /login /logout /setup：未认证引导入口，无 ambient 会话权限可被借用（S3）；
     # - /api/goals/order-hook：外部服务器回流 webhook，路由自带共享 token 恒时比较（2026-07-27 实锤）；
+    # - /api/cta/convert：官网服务器回流，路由自带 X-CTA-Secret 恒时比较，不借用会话；
     # - /api/telemetry/*：navigator.sendBeacon 无法自定义头，端点只累计**消毒后的计数**
     #   （page/fn/type 白名单化、distinct 封顶），无状态权限可借用；鉴权仍在路由层
     #   ——不豁免则「Referer 被隐私设置剥掉」的环境里观测通道先于业务瞎掉（2026-07-31）。
     _CSRF_EXEMPT_PATHS = {
         "/login", "/logout", "/setup", "/api/goals/order-hook",
+        "/api/cta/convert",
         "/api/telemetry/frontend-error", "/api/telemetry/ui-event",
     }
 
@@ -894,6 +896,9 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
                                            resolve_ui_mode)
     cfg_dir = config_manager.config_path.parent
     user_store = WebUserStore(cfg_dir / "web_users.db")
+    if audit_store is not None:
+        # 会话过期清扫（智安 P1-6）结果写审计日志（动作 session_expire_sweep）
+        user_store.audit_fn = audit_store.log
     if user_store.user_count() == 0:
         if token:
             user_store._ensure_master("admin", token)
@@ -1022,6 +1027,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/reply-settings": "reply_settings",
         "/model-keys": "model_keys",
         "/personal-settings": "personal_settings",
+        "/tools/tg-members": "tg_members",
         # 账号资产中心（账号资产保全 P1，2026-08-19）
         "/workspace/assets": "asset_center",
     }
@@ -1343,12 +1349,27 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
             pass
         return resp
 
+    # 新版 Starlette 仅在 session 被修改时才重发 cookie：有效请求按节流写入续签时间戳，
+    # 使 session_max_age 成为「空闲超时」而非「登录后固定时长」。
+    _SESSION_RENEW_SEC = 300
+
+    def _renew_session_cookie(request: Request) -> None:
+        now = int(time.time())
+        try:
+            last = int(request.session.get("_rn") or 0)
+        except (TypeError, ValueError):
+            last = 0
+        if now - last >= _SESSION_RENEW_SEC:
+            request.session["_rn"] = now
+
     def _check_session_valid(request: Request) -> bool:
-        """检查 session jti 是否有效（未被撤销）"""
+        """检查 session jti 是否有效（未被撤销）；有效则按节流续签 cookie"""
         jti = request.session.get("jti")
-        if not jti:
-            return True  # 老式 session（无 jti），兼容过渡期
-        return user_store.touch_session(jti)
+        # 无 jti = 老式 session，兼容过渡期
+        valid = user_store.touch_session(jti) if jti else True
+        if valid:
+            _renew_session_cookie(request)
+        return valid
 
     # 坐席（agent）角色作用域：仅限聊天工作台，进不去任何后台设置/页面。
     # 在 _require_auth / _api_auth 两个鉴权 choke point 内强制（避免 middleware 顺序问题）。
@@ -2015,6 +2036,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         register_group_members_routes(
             app, auth_dep=_api_auth, audit_store=audit_store,
             config_manager=config_manager, page_auth=_page_auth,
+            templates=templates,
         )
     except Exception:
         import logging as _log_gm
@@ -3056,17 +3078,35 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         }
 
     def _get_ai_stats(tc):
-        if not tc:
-            return {}
-        ai = getattr(tc, "ai_client", None)
+        ai = getattr(tc, "ai_client", None) if tc else None
+        if not ai:
+            # replybus-only / 协议号实例常无 telegram_client：退到 app.state.ai_client
+            # （bootstrap/web_app 注入的同一实例），否则 /health 看不到备用链状态。
+            # 只认真 AIClient（有 backup_status 且计数是数字），替身对象不冒充。
+            _st_ai = getattr(app.state, "ai_client", None)
+            if (_st_ai is not None and callable(getattr(_st_ai, "backup_status", None))
+                    and isinstance(getattr(_st_ai, "total_calls", None), int)):
+                ai = _st_ai
         if not ai:
             return {}
         tracker = getattr(ai, "_quality_tracker", None)
-        return {
+        out = {
             "total_calls": getattr(ai, "total_calls", 0),
             "total_tokens": getattr(ai, "total_tokens", 0),
             "quality": tracker.get_summary() if tracker else {},
         }
+        # P1-2：主备切换可观测——备用链顺序、各 lane 是否配置/可达、冗余结论。
+        # 只含 lane 名/布尔/计数（/health 免鉴权，绝不带端点地址、模型 key）。
+        # 只收 dict（测试替身/旧对象返回别的类型时不带，免得 /health 序列化 500）。
+        _bs = getattr(ai, "backup_status", None)
+        if callable(_bs):
+            try:
+                _b = _bs()
+                if isinstance(_b, dict):
+                    out["backup"] = _b
+            except Exception:
+                out["backup"] = {"redundancy": "error"}
+        return out
 
     # ── 配置导入导出 ──────────────────────────────────────────
 
@@ -3872,6 +3912,18 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
 
         _log_wac.getLogger("admin").debug(
             "WhatsApp Cloud Webhook 注册跳过", exc_info=True
+        )
+
+    # ── Telegram Bot API（官方 bot 轨，与个人号协议轨并列；2026-10-08 智聊） ──
+    try:
+        from src.integrations.telegram_bot_official import register_telegram_bot_routes
+
+        register_telegram_bot_routes(app, config_manager, telegram_client)
+    except Exception:
+        import logging as _log_tgb
+
+        _log_tgb.getLogger("admin").debug(
+            "Telegram Bot Webhook 注册跳过", exc_info=True
         )
 
     # ── Instagram Messaging（官方，Graph API）Webhook（Phase H） ──

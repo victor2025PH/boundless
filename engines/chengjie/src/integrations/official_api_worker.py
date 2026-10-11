@@ -26,12 +26,16 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # 编排器接管的官方平台（platform 与 RPA/Kill-Switch 作用域命名保持一致）
-OFFICIAL_PLATFORMS = ("line", "messenger", "whatsapp", "instagram", "zalo", "qqbot", "wechat_kf")
+OFFICIAL_PLATFORMS = ("line", "messenger", "whatsapp", "instagram", "zalo", "qqbot", "wechat_kf",
+                      "telegram", "douyin", "tiktok")
 #: 有**专属有状态 worker** 的官方平台（不由本模块的无状态 OfficialApiWorker 服务）：
 #: 微信客服（实施97）要 sync_msg 游标轮询 + token 自管 → src/integrations/wechat_kf_worker.py 自行
 #: register_worker。列在 OFFICIAL_PLATFORMS 里是为了渠道向导/一致性门禁把它当官方通道对待，
 #: register_official_workers 对这些平台跳过，免得抢注一个 start() 必抛的空壳。
-DEDICATED_WORKER_PLATFORMS = frozenset({"wechat_kf"})
+#: Telegram Bot API（2026-10-08）：专属 ``telegram_bot_official.TelegramBotWorker``，Webhook 挂载时自行注册。
+#: 抖音 / TikTok（2026-10-09）：专属 ``douyin_official`` / ``tiktok_official``（令牌续期 + 回复窗），
+#: 无状态 OfficialApiWorker 发不了这两家的消息。
+DEDICATED_WORKER_PLATFORMS = frozenset({"wechat_kf", "telegram", "douyin", "tiktok"})
 
 
 def _meta(account: Dict[str, Any]) -> Dict[str, Any]:
@@ -165,7 +169,8 @@ class OfficialApiWorker:
             return self._result(
                 out, str(((out.get("data") or {}).get("message_id")) or ""))
         if self.platform == "whatsapp":
-            from src.integrations.whatsapp_cloud import wa_send_text
+            from src.integrations.whatsapp_cloud import ensure_runtime, wa_send_text
+            ensure_runtime(_cfg_block(self.config, "whatsapp_cloud"))
             out = await wa_send_text(dest, text, c["phone_number_id"], c["access_token"])
             data = out.get("data") or {}
             mid = ""
@@ -173,7 +178,10 @@ class OfficialApiWorker:
                 mid = str(((data.get("messages") or [{}])[0]).get("id") or "")
             except Exception:
                 mid = ""
-            return self._result(out, mid)
+            res = self._result(out, mid)
+            if out.get("blocked"):
+                res["blocked"] = str(out["blocked"])
+            return res
         if self.platform == "instagram":
             from src.integrations.instagram_webhook import (
                 ig_send_text, ig_send_with_window_fallback,
@@ -233,7 +241,8 @@ class OfficialApiWorker:
         dest = dest_from_chat_key(chat_key)
         mt = str(media_type or "").lower()
         if self.platform == "whatsapp":
-            from src.integrations.whatsapp_cloud import wa_send_media
+            from src.integrations.whatsapp_cloud import ensure_runtime, wa_send_media
+            ensure_runtime(_cfg_block(self.config, "whatsapp_cloud"))
             out = await wa_send_media(
                 dest, media_path, c["phone_number_id"], c["access_token"],
                 media_type=mt, caption=caption)
@@ -242,7 +251,10 @@ class OfficialApiWorker:
                 mid = str((((out.get("data") or {}).get("messages") or [{}])[0]).get("id") or "")
             except Exception:
                 mid = ""
-            return self._result(out, mid)
+            res = self._result(out, mid)
+            if out.get("blocked"):
+                res["blocked"] = str(out["blocked"])
+            return res
         if self.platform == "line":
             pub = self._public_media_url(media_url)
             if not pub:
@@ -349,6 +361,10 @@ def official_send_caps(platform: str, config: Dict[str, Any]) -> Dict[str, Any]:
         if not base:
             return {"can_media": False, "can_voice": False, "reason": "needs_public_url"}
         return {"can_media": True, "can_voice": False, "reason": "qqbot_media_pending"}
+    if p in ("douyin", "tiktok"):
+        # 专属 worker 只收图片（抖音视频只能按 item_id 分享自己的作品；TikTok 语音没有接口，
+        # 图片还受注册地限制，发送时由 worker 再拦）。这里不能沿用下面的「图和语音都能发」。
+        return {"can_media": True, "can_voice": False, "reason": ""}
     if p in OFFICIAL_MEDIA_URL_PLATFORMS:
         base = str(
             (((config or {}).get("official_media") or {}).get("public_base_url")) or ""
@@ -356,7 +372,8 @@ def official_send_caps(platform: str, config: Dict[str, Any]) -> Dict[str, Any]:
         ok = bool(base)
         return {"can_media": ok, "can_voice": ok,
                 "reason": "" if ok else "needs_public_url"}
-    # WhatsApp Cloud（media_id 直传）/ Messenger（URL 或 multipart 直传）无前置依赖
+    # WhatsApp Cloud（media_id 直传）/ Messenger（URL 或 multipart 直传）/ Telegram Bot
+    # （multipart 直传，TelegramBotWorker.send_media）无前置依赖
     return {"can_media": True, "can_voice": True, "reason": ""}
 
 
@@ -380,7 +397,8 @@ def official_enabled(config: Dict[str, Any], platform: str) -> bool:
     # 回退：对应官方通道块自身 enabled 也视为开
     key = {"line": "line", "messenger": "facebook_messenger",
            "whatsapp": "whatsapp_cloud", "instagram": "instagram",
-           "zalo": "zalo", "qqbot": "qqbot"}.get(p)
+           "zalo": "zalo", "qqbot": "qqbot", "telegram": "telegram_bot",
+           "douyin": "douyin", "tiktok": "tiktok"}.get(p)
     if key and ((config or {}).get(key) or {}).get("enabled"):
         return True
     return False

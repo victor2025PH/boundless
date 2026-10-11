@@ -119,7 +119,11 @@ def load_platform_defaults(root: Path) -> Dict[str, str]:
 def local_hour_for(
     ts: float, place: Optional[PersonaPlace],
 ) -> Tuple[int, str]:
-    """消息发送时刻 → (判定用小时, 时钟来源标签)。无居住地＝服务器钟。"""
+    """消息发送时刻 → (判定用小时, 时钟来源标签)。无居住地＝服务器钟（UTC+8）。
+
+    服务器钟钉在 Asia/Shanghai，不跟进程 TZ 走。生产机本身就是 UTC+8，
+    结果与以前的 ``time.localtime`` 相同；CI 容器是 UTC 时不再把凌晨判成傍晚。
+    """
     if place is not None:
         try:
             dt_local = persona_now(
@@ -127,7 +131,12 @@ def local_hour_for(
             return int(dt_local.hour), f"persona:{place.slug}"
         except Exception:
             pass
-    return int(time.localtime(float(ts)).tm_hour), "server"
+    try:
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromtimestamp(float(ts), tz=ZoneInfo("Asia/Shanghai"))
+        return int(dt.hour), "server"
+    except Exception:
+        return int(time.localtime(float(ts)).tm_hour), "server"
 
 
 def judge_rows(

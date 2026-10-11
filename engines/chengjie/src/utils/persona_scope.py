@@ -18,6 +18,7 @@ AI 却一点没变——因为**账号级绑定优先于域级默认人设**，�
 ——任何一环取不到都退化成「说不出覆盖情况」而不是让保存链路报错。
 """
 
+import logging
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
 __all__ = [
@@ -148,7 +149,7 @@ def collect_default_persona_scope(
                 else:
                     legacy_n += 1
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("swallowed in collect_default_persona_scope", exc_info=True)
 
         def _name(pid: str) -> str:
             try:

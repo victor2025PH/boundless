@@ -392,6 +392,72 @@
     });
   }
 
+  /* 原生 prompt 的统一替身（Promise<string|null>，取消 / Esc / 外点 = null）。
+     调用方传本地化按钮文案。渲染失败回落 window.prompt，空串仍交给调用方判断。 */
+  function uxPrompt(text, opts){
+    opts = opts || {};
+    return new Promise(function(resolve){
+      var mask, onKey;
+      function done(v){
+        try{ document.removeEventListener('keydown', onKey, true); }catch(_e){}
+        try{ if(mask) mask.remove(); }catch(_e){}
+        resolve(v);
+      }
+      try{
+        mask = document.createElement('div');
+        mask.setAttribute('data-ntf-prompt', '1');
+        mask.style.cssText = 'position:fixed;inset:0;z-index:10060;background:rgba(15,23,42,.5);'
+          + 'display:flex;align-items:center;justify-content:center;padding:16px;';
+        var card = document.createElement('div');
+        card.setAttribute('role', 'alertdialog');
+        card.style.cssText = 'background:var(--tk-surface,#fff);color:var(--tk-text,#0f172a);'
+          + 'border:1px solid var(--tk-border,#e2e8f0);border-radius:14px;max-width:420px;width:100%;'
+          + 'padding:18px 20px;box-shadow:0 20px 50px rgba(2,6,23,.35);font-size:14px;line-height:1.6;';
+        var msg = document.createElement('div');
+        msg.style.cssText = 'white-space:pre-wrap;word-break:break-word;margin-bottom:10px;';
+        msg.textContent = String(text == null ? '' : text);
+        card.appendChild(msg);
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.value = String(opts.defaultValue == null ? '' : opts.defaultValue);
+        input.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid var(--tk-border,#e2e8f0);'
+          + 'border-radius:8px;padding:6px 10px;font-size:13px;background:var(--tk-surface,#fff);'
+          + 'color:var(--tk-text,#0f172a);';
+        card.appendChild(input);
+        var bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:14px;';
+        var cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = String(opts.cancelText || 'Cancel');
+        cancel.style.cssText = 'border:1px solid var(--tk-border,#e2e8f0);background:transparent;'
+          + 'color:var(--tk-text-muted,#64748b);border-radius:8px;padding:6px 14px;font-size:13px;cursor:pointer;';
+        cancel.addEventListener('click', function(){ done(null); });
+        var okb = document.createElement('button');
+        okb.type = 'button';
+        okb.textContent = String(opts.okText || 'OK');
+        okb.style.cssText = 'border:none;border-radius:8px;padding:6px 16px;font-size:13px;'
+          + 'font-weight:600;cursor:pointer;color:#fff;background:var(--tk-brand,#1e8cf2);';
+        okb.addEventListener('click', function(){ done(input.value); });
+        bar.appendChild(cancel);
+        bar.appendChild(okb);
+        card.appendChild(bar);
+        mask.appendChild(card);
+        mask.addEventListener('click', function(e){ if(e.target === mask) done(null); });
+        onKey = function(e){
+          if(e.key === 'Escape'){ e.preventDefault(); done(null); }
+          else if(e.key === 'Enter'){ e.preventDefault(); done(input.value); }
+        };
+        document.addEventListener('keydown', onKey, true);
+        document.body.appendChild(mask);
+        try{ input.focus(); input.select(); }catch(_e){}
+      }catch(_e){
+        var v = null;
+        try{ v = window.prompt(String(text == null ? '' : text), String(opts.defaultValue || '')); }catch(__e){}
+        resolve(v);
+      }
+    });
+  }
+
   /* ── 系统状态胶囊（横幅「常驻性」的新家）─────────────────────────────
      2026-08-28：胶囊此前只有文本 + 「点开通知中心」，**持续状态却没有持续动作**——
      配套卡片 20s 就自动消失，之后坐席只剩一句被截断的话（桌面壳还没有浏览器刷新
@@ -543,6 +609,7 @@
     setSummaryText: setSummaryText,
     alert: uxAlert,
     confirm: uxConfirm,
+    prompt: uxPrompt,
     ongoing: {
       /* o.action = {label, onClick, title}：胶囊右侧常驻按钮。持续状态必须持续可
          执行——只给文本会让坐席在卡片过期后无路可走（2026-08-28 「刷新页面」事故）。

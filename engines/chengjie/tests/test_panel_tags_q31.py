@@ -327,7 +327,8 @@ def test_stop_contact_confirm_moves_tag_to_meta_guard_still_blocks(store):
     store.set_automation_mode(cid, "auto_ai", source="human")
     _push(store, ck, "please stop", time.time() - 60, "s1")
     d1 = svc.auto_generate_draft(conv, "please stop", automation_mode="auto_ai", enrich=True)
-    assert d1 and sc.is_farewell_draft(store.get_draft(d1))
+    # 锁定硬停（智安 P0-2 起 stop_contact 缺省由 STOP 硬闸隐含锁定）：不回客户、零草稿，只冻结 + 提醒坐席
+    assert d1 is None
     assert sc.frozen_reason(store, cid) == "stop_contact"
     tags = store.get_conv_tags(cid)
     assert HANDOFF_TAG in tags and sc.STOP_CONTACT_TAG in tags
@@ -347,7 +348,7 @@ def test_stop_contact_confirm_moves_tag_to_meta_guard_still_blocks(store):
     assert d2 is None
     pend = [d for d in store.list_drafts(conversation_id=cid, limit=20)
             if d.get("status") in ("pending", "enriching")]
-    assert [d["draft_id"] for d in pend] == [d1]
+    assert pend == []
     # 幂等：再确认不覆盖首次时刻
     out2 = sc.confirm_stop_contact(store, cid, actor="agent_ack:zl", now=1_900_000_000.0)
     assert out2["ok"] and out2["meta_set"] is False and store.get_stop_contact_at(cid) == 1_800_000_000.0

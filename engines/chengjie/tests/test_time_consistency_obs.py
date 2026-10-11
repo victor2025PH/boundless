@@ -6,7 +6,7 @@
 读数口径与拦截口径同源（都走 world_clock_guard 纯函数）——报表与守卫
 永远说同一套话。
 """
-import time
+import calendar
 
 from src.companion.persona_location import resolve_persona_place
 from tools.time_consistency_obs import judge_rows, local_hour_for
@@ -16,7 +16,8 @@ TPE = resolve_persona_place({"location": "taipei"})
 
 
 def _ts(y, mo, d, h, mi=0):
-    return time.mktime((y, mo, d, h, mi, 0, 0, 0, -1))
+    """墙钟按服务器钟 UTC+8 解释，不跟跑测试的容器时区走。"""
+    return calendar.timegm((y, mo, d, h, mi, 0, 0, 0, -1)) - 8 * 3600
 
 
 def test_local_hour_persona_clock_and_server_fallback():

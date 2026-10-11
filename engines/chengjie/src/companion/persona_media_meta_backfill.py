@@ -22,6 +22,7 @@ _pick_from_album`` 的 ``_meta.json`` sidecar）依赖每张图的 {scene, serie
 """
 from __future__ import annotations
 
+import logging
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -72,7 +73,7 @@ def parse_tod_response(raw: Any) -> str:
             v = str(data.get("tod") or "").strip().lower()
             return v if v in (TOD_DAY, TOD_NIGHT) else ""
     except Exception:
-        pass
+        logging.getLogger(__name__).debug("swallowed in parse_tod_response", exc_info=True)
     m = _TOD_JSON_RE.search(s)
     if m:
         v = m.group(1).lower()

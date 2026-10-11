@@ -118,6 +118,49 @@ def build_time_context_line(now: Any = None, *, place_label: str = "") -> str:
     return line
 
 
+#: 主链失败后的备用链顺序（ai.fallback_order）。lane 名：
+#:   ``key_pool``＝云端备用 Key 池（ai.key_pool）；``local``＝第二推理端（ai.fallback，
+#:   LAN vLLM/Ollama，如 198:11434 或 176 本机 ollama）。
+#: 缺省保持历史顺序「池 → 本地」（逐字节兼容存量部署与门禁）；智聊私信承接这类
+#: 「主模型=自建 chatx」的部署推荐 ``[local, key_pool]``：chatx → 第二推理端 → 云端池。
+DEFAULT_FALLBACK_ORDER: Tuple[str, ...] = ("key_pool", "local")
+_FALLBACK_LANE_ALIASES = {
+    "key_pool": "key_pool", "pool": "key_pool", "cloud_pool": "key_pool", "cloud": "key_pool",
+    "local": "local", "lan": "local", "fallback": "local", "second": "local",
+    "secondary": "local", "second_endpoint": "local",
+}
+
+
+def parse_fallback_order(raw: Any) -> Tuple[List[str], List[str]]:
+    """解析 ``ai.fallback_order``（纯函数）→ ``(order, unknown)``。
+
+    - 接受 list 或逗号/空白分隔字符串；大小写、别名归一（pool/cloud→key_pool，lan/second→local）；
+    - 去重；未知 lane 收进 ``unknown`` 由调用方告警（不抛）；
+    - **配置里漏掉的 lane 按缺省顺序补在末尾**：顺序可配，但不会因为少写一项就悄悄丢掉
+      一条能用的备用链（真要禁云端用 ``ai.primary=local_only``，那才是隐私开关）。
+    """
+    if raw is None or raw == "" or raw == []:
+        return list(DEFAULT_FALLBACK_ORDER), []
+    if isinstance(raw, str):
+        items = [x for x in raw.replace(",", " ").split() if x]
+    elif isinstance(raw, (list, tuple)):
+        items = [str(x) for x in raw]
+    else:
+        return list(DEFAULT_FALLBACK_ORDER), [repr(raw)]
+    order: List[str] = []
+    unknown: List[str] = []
+    for it in items:
+        lane = _FALLBACK_LANE_ALIASES.get(str(it).strip().lower())
+        if lane is None:
+            unknown.append(str(it))
+        elif lane not in order:
+            order.append(lane)
+    for lane in DEFAULT_FALLBACK_ORDER:
+        if lane not in order:
+            order.append(lane)
+    return order, unknown
+
+
 def order_pool_entries(entries: List[Dict[str, Any]],
                        ping_state: Optional[Dict[str, Dict[str, Any]]] = None,
                        *, now: Optional[float] = None) -> List[Dict[str, Any]]:
@@ -215,6 +258,9 @@ class AIClient(LoggerMixin):
         # 备用云 Key（云质量优于本地兜底），全池失败才落 LAN 本地模型。entries 元素：
         # {name, client, model, label, bad_until}（bad_until=失败冷却，冷却期内跳过）。
         self._pool_entries: List[Dict[str, Any]] = []
+        # 备用链顺序（ai.fallback_order，真实解析在 initialize()）与启动探针结果（backup_status 用）
+        self._fallback_order: List[str] = list(DEFAULT_FALLBACK_ORDER)
+        self._backup_probe: Dict[str, Any] = {}
         self._pool_calls = 0
         self._pool_ok = 0
         self._pool_last_key = ""
@@ -752,6 +798,19 @@ class AIClient(LoggerMixin):
                     len(self._pool_entries),
                     ", ".join(e["name"] for e in self._pool_entries))
 
+        # 备用链顺序（P1-2，2026-10-08）：chatx 主链失败后先试谁。缺省「池 → 本地」不变。
+        self._fallback_order, _fo_unknown = parse_fallback_order(ai_config.get("fallback_order"))
+        if _fo_unknown:
+            self.logger.warning(
+                "ai.fallback_order 含未知项 %s（可用：key_pool / local），已忽略", _fo_unknown)
+        _lanes_on = [ln for ln in self._fallback_order if self._backup_lane_configured(ln)]
+        if _lanes_on:
+            self.logger.info("主链备用顺序: %s（已配置: %s）",
+                             " → ".join(["primary"] + self._fallback_order), ", ".join(_lanes_on))
+        elif self._primary_mode == "cloud":
+            self.logger.warning(
+                "主链无任何备用（ai.fallback 与 ai.key_pool 都未配置）：主模型一挂本轮即不回复")
+
         # 多模型路由（ai.models + ai.task_routes）：主动按任务挑端点/模型（与 key_pool 正交）
         self._build_route_clients(ai_config, api_key)
 
@@ -826,6 +885,19 @@ class AIClient(LoggerMixin):
                     "运行时降级链「重试→备用池→本地兜底→canned」不受影响）")
         except Exception:
             self.logger.debug("后台启动探针异常（忽略）", exc_info=True)
+        finally:
+            await self._boot_probe_backups()
+
+    async def _boot_probe_backups(self) -> None:
+        """启动后探一次备用链（不生成，只 /v1/models）；结果进 /health。任何异常吞掉。"""
+        try:
+            await self.probe_backup_lanes()
+            snap = self.backup_status()
+            self.logger.info(
+                "AI 启动探针（后台）：备用链 %s redundancy=%s",
+                " → ".join(snap["order"]), snap["redundancy"])
+        except Exception:
+            self.logger.debug("备用链启动探针异常（忽略）", exc_info=True)
 
     async def _run_boot_probe(self, probe_coro) -> bool:
         """给启动连接探针套一个短上限（self._boot_probe_timeout）。
@@ -989,6 +1061,41 @@ class AIClient(LoggerMixin):
             self._alert_key_failure_if_matches(e)
             return False
 
+    def _paid_ai_blocked_after_local_miss(
+        self, context: Optional[Dict[str, Any]], wallet_empty: bool,
+    ) -> bool:
+        """余额用尽且免费档守卫开着时，本地没有结果就不打付费云端。
+
+        对客回复、工具调用（``_tool_call``）和裸系统生成（``_bare_system``）同一条。
+        legacy（``translation.free_tier_zero_cost`` 关）仍允许付费回落。余额还在的付费档不进这里。
+        """
+        try:
+            from src.ai.translation_engines import (
+                block_paid_when_local_miss,
+                free_tier_blocks_paid_fallback,
+            )
+            return block_paid_when_local_miss(
+                wallet_empty=bool(wallet_empty),
+                guard=free_tier_blocks_paid_fallback(self.config),
+                customer_facing=True,
+            )
+        except Exception:
+            self.logger.debug("[ai] free-tier guard lookup failed", exc_info=True)
+            return bool(wallet_empty)
+
+    def _stop_paid_ai(self, context: Optional[Dict[str, Any]], lang: str) -> Optional[str]:
+        """本地没有结果：拦住付费云端，留下失败原因，本轮不回复。"""
+        try:
+            from src.ai.translation_engines import note_paid_engine_blocked
+            note_paid_engine_blocked("ai_reply")
+        except Exception:
+            self.logger.debug("[ai] paid_blocked metric failed", exc_info=True)
+        self.logger.warning(
+            "余额用尽且本地模型没有结果 → 不调用付费云端（免费档守卫） request_id=%s",
+            (context or {}).get("request_id") or "n/a")
+        self._note_ai_fail("free_tier_no_local", context, latency_ms=0, attempt=0)
+        return self._fallback_reply(lang)
+
     async def _generate_reply_openai_compat(
         self,
         user_message: str,
@@ -1069,19 +1176,21 @@ class AIClient(LoggerMixin):
             return self._fallback_reply(_fb_lang)
 
         # 2026-08-19 Token enforce（P6）：钱包耗尽（曾注资且余额≤0）+ enforce 开 →
-        # 跳过云端主链/备用池，直接本地兜底出话（免费路径）。只有本地兜底可用才降级
-        # ——无处可去时照走云端（永不断线 > 计费，本次照常计费）。熔断开路时让位
-        # 熔断语义（那条链本就以本地收尾）。
-        _token_degraded = False
-        if not _cb_blocked and not _local_primary and not _route_strict:
+        # 先走本地兜底。本地有结果就用（免费路径）。本地没有结果时：
+        # 免费档守卫开（缺省 enforce）→ 本轮不回复，不改打付费云端。
+        # 对客回复、工具调用、裸系统生成同一条。legacy 才保留付费回落。
+        # 熔断开路时：守卫开则只试本地；守卫关才走备用云 Key。
+        _wallet_empty_ai = False
+        if not _route_strict:
             try:
                 from src.licensing.token_ledger import should_degrade_action
 
-                _token_degraded = bool(
-                    (self._fb_client and self._fb_model)
-                    and should_degrade_action("ai_reply"))
+                _wallet_empty_ai = bool(should_degrade_action("ai_reply"))
             except Exception:
-                _token_degraded = False
+                _wallet_empty_ai = False
+        _token_degraded = bool(
+            _wallet_empty_ai and not _cb_blocked and not _local_primary
+            and self._fb_client and self._fb_model)
 
         so = strategy_overrides or {}
         use_temperature = float(so["temperature"]) if "temperature" in so else self.temperature
@@ -1187,6 +1296,8 @@ class AIClient(LoggerMixin):
                     "本地主模型失败且 local_only（不回落云端）→ 本轮不回复 request_id=%s",
                     request_id or "n/a")
                 return self._fallback_reply(_fb_lang)
+            if self._paid_ai_blocked_after_local_miss(context, _wallet_empty_ai):
+                return self._stop_paid_ai(context, _fb_lang)
             if not self._oa_client and not self._pool_entries:
                 self.logger.warning(
                     "本地主模型失败且未配置云端主链 → 本轮不回复 request_id=%s",
@@ -1207,24 +1318,28 @@ class AIClient(LoggerMixin):
             self.logger.warning(
                 "本地主模型失败 → 回落云端主链 request_id=%s", request_id or "n/a")
         if _cb_blocked:
-            # 熔断开路：主模型免打扰（保住冷却窗口语义）。降级链＝备用云 Key（质量同级）
-            # → 本地兜底，逐级尝试；全灭＝本轮不回复。
-            pool_reply = await self._try_key_pool_chat(
+            # 熔断开路：主模型免打扰。余额用尽且免费档守卫开 → 只试本地，不打备用云 Key。
+            # 守卫关（legacy）才走备用云 Key → 本地。全灭＝本轮不回复。
+            if self._paid_ai_blocked_after_local_miss(context, _wallet_empty_ai):
+                local_reply = None
+                if self._fb_client and self._fb_model and not _skip_local:
+                    local_reply = await self._try_local_fallback_chat(
+                        messages, use_temperature, use_max_tokens, context, request_id,
+                        skip_quality_check=_skip_quality_check,
+                        model_override=use_local_model,
+                    )
+                if local_reply:
+                    return local_reply
+                return self._stop_paid_ai(context, _fb_lang)
+            fb_reply = await self._run_fallback_chain(
                 messages, use_temperature, use_max_tokens, context, request_id,
-                skip_quality_check=_skip_quality_check,
-            )
-            if pool_reply:
-                return pool_reply
-            fb_reply = await self._try_local_fallback_chat(
-                messages, use_temperature, use_max_tokens, context, request_id,
-                skip_quality_check=_skip_quality_check,
-                model_override=use_local_model,
+                skip_quality_check=_skip_quality_check, use_local_model=use_local_model,
             )
             return fb_reply if fb_reply else self._fallback_reply(_fb_lang)
         if _token_degraded:
             # Token enforce 降级：本地兜底出真话（免费路径，_reply_free_path 标记
             # 由 _try_local_fallback_chat 成功时打上 → 顶层计费钩跳过记账）。
-            # 本地失败 → fall through 照走云端主链（永不断线 > 计费）。
+            # 本地没有结果：守卫开 → 本轮不回复；legacy → 照走云端并记 would_block。
             fb_reply = await self._try_local_fallback_chat(
                 messages, use_temperature, use_max_tokens, context, request_id,
                 skip_quality_check=_skip_quality_check,
@@ -1235,28 +1350,31 @@ class AIClient(LoggerMixin):
                     "Token 钱包耗尽（enforce）→ 本地模型已出话 request_id=%s",
                     request_id or "n/a")
                 return fb_reply
+            if self._paid_ai_blocked_after_local_miss(context, True):
+                return self._stop_paid_ai(context, _fb_lang)
+            try:
+                from src.ai.translation_engines import note_paid_engine_would_block
+                note_paid_engine_would_block("ai_reply")
+            except Exception:
+                self.logger.debug("[ai] paid_would_block metric failed", exc_info=True)
             self.logger.warning(
-                "Token enforce 降级失败（本地无话）→ 照走云端主链（永不断线优先）"
+                "Token enforce 降级失败（本地无话）→ legacy 守卫放行，照走云端"
                 " request_id=%s", request_id or "n/a")
+        elif (not _local_primary and not _cb_blocked
+              and self._paid_ai_blocked_after_local_miss(context, _wallet_empty_ai)):
+            # 余额用尽、没有可用的本地端点：不把对客回复改打付费云端。
+            return self._stop_paid_ai(context, _fb_lang)
         if (not _local_primary and not _cb_blocked and not _token_degraded
                 and _skip_cloud and (self._pool_entries or (self._fb_client and self._fb_model))):
             self.logger.warning(
                 "云端主链欠费/失效冷却中 → 先试备用池/本地 request_id=%s",
                 request_id or "n/a")
-            pool_reply = await self._try_key_pool_chat(
+            fb_reply = await self._run_fallback_chain(
                 messages, use_temperature, use_max_tokens, context, request_id,
-                skip_quality_check=_skip_quality_check,
-            )
-            if pool_reply:
-                self._lane_note_ok("pool")
-                return pool_reply
-            fb_reply = await self._try_local_fallback_chat(
-                messages, use_temperature, use_max_tokens, context, request_id,
-                skip_quality_check=_skip_quality_check,
-                model_override=use_local_model,
+                skip_quality_check=_skip_quality_check, use_local_model=use_local_model,
+                note_lanes=True,
             )
             if fb_reply:
-                self._lane_note_ok("local")
                 return fb_reply
         last_error = None
         start_time = time.time()
@@ -1455,20 +1573,225 @@ class AIClient(LoggerMixin):
         self._lane_note_fail("cloud", _fail_reason if last_error is not None else "empty",
                              last_error)
         self._alert_key_failure_if_matches(last_error)
-        pool_reply = await self._try_key_pool_chat(
+        fb_reply = await self._run_fallback_chain(
             messages, use_temperature, use_max_tokens, context, request_id,
-            skip_quality_check=_skip_quality_check,
-        )
-        if pool_reply:
-            return pool_reply
-        fb_reply = await self._try_local_fallback_chat(
-            messages, use_temperature, use_max_tokens, context, request_id,
-            skip_quality_check=_skip_quality_check,
-            model_override=use_local_model,
+            skip_quality_check=_skip_quality_check, use_local_model=use_local_model,
         )
         if fb_reply:
             return fb_reply
         return self._fallback_reply(_fb_lang)
+
+    async def _run_fallback_chain(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        context: Optional[Dict[str, Any]],
+        request_id: str,
+        *,
+        skip_quality_check: bool = False,
+        use_local_model: str = "",
+        note_lanes: bool = False,
+    ) -> Optional[str]:
+        """主链失败/熔断/冷却后的备用链：按 ``self._fallback_order`` 逐条试，首个出话即返回。
+
+        每条 lane 内部语义不变（池：逐 key 一次 + 120s 冷却；本地：无兜底纪律闸、语言钉子、
+        成本记账）。全灭返回 None，由调用方走 ``_fallback_reply``（=本轮不回复）。
+        ``note_lanes``：仅「云端冷却中」入口记 compute_lanes 的成功（与改动前同口径）。
+        """
+        order = list(getattr(self, "_fallback_order", None) or DEFAULT_FALLBACK_ORDER)
+        for lane in order:
+            if lane == "key_pool":
+                reply = await self._try_key_pool_chat(
+                    messages, temperature, max_tokens, context, request_id,
+                    skip_quality_check=skip_quality_check,
+                )
+                if reply:
+                    if note_lanes:
+                        self._lane_note_ok("pool")
+                    return reply
+            elif lane == "local":
+                reply = await self._try_local_fallback_chat(
+                    messages, temperature, max_tokens, context, request_id,
+                    skip_quality_check=skip_quality_check,
+                    model_override=use_local_model,
+                )
+                if reply:
+                    if note_lanes:
+                        self._lane_note_ok("local")
+                    return reply
+        return None
+
+    # ── 备用链可观测（P1-2，2026-10-08）────────────────────────────────────────
+
+    def _backup_lane_configured(self, lane: str) -> bool:
+        if lane == "key_pool":
+            return bool(self._pool_entries)
+        if lane == "local":
+            return bool(self._fb_client and self._fb_model)
+        return False
+
+    async def probe_backup_lanes(self, *, timeout: float = 5.0, alert: bool = True) -> Dict[str, Any]:
+        """启动探针：只做**不生成**的探活（``GET /v1/models``），绝不向任何端点发 chat。
+
+        - ``local``（第二推理端）：``models.list()``，``timeout`` 秒上限；
+        - ``key_pool``：不主动打云端（计费/限流面），读 ``cloud_credentials`` 已有的
+          ping 快照 + 运行态冷却/最近成功作证据；
+        结果缓存进 ``self._backup_probe`` 供 :meth:`backup_status` / ``/health`` 读。
+        ``alert``：备用全部已配置却全部不可达 → ERROR 日志 + host_alert 告警（30 分钟去抖）；
+        一条都没配 → WARNING（主模型单点）。绝不抛异常。
+        """
+        res: Dict[str, Any] = {"ts": time.time(), "lanes": {}}
+        mode = str(getattr(self, "_primary_mode", "cloud") or "cloud")
+        if mode != "cloud":
+            # local/local_only：ai.fallback 本身就是主链（启动探针已探过），这里不重复打；
+            # 本地主链的回落是云端主链 + 池，由各自链路自证。
+            res["skipped"] = f"primary_mode={mode}"
+            self._backup_probe = res
+            return res
+        try:
+            if self._backup_lane_configured("local"):
+                ok: Optional[bool] = None
+                err = ""
+                t0 = time.time()
+                models_api = getattr(self._fb_client, "models", None)
+                lister = getattr(models_api, "list", None)
+                if callable(lister):
+                    try:
+                        await asyncio.wait_for(lister(), timeout=timeout)
+                        ok = True
+                    except asyncio.TimeoutError:
+                        ok, err = False, f"timeout>{timeout:.0f}s"
+                    except Exception as e:  # noqa: BLE001
+                        ok, err = False, type(e).__name__
+                res["lanes"]["local"] = {
+                    "configured": True, "reachable": ok, "error": err,
+                    "latency_ms": int((time.time() - t0) * 1000) if ok else None,
+                }
+            else:
+                res["lanes"]["local"] = {"configured": False, "reachable": None}
+            if self._backup_lane_configured("key_pool"):
+                try:
+                    from src.utils.cloud_credentials import ping_state_snapshot
+                    pings = ping_state_snapshot() or {}
+                except Exception:
+                    pings = {}
+                now = time.time()
+                states = []
+                for e in self._pool_entries:
+                    p = pings.get(str(e.get("name") or ""))
+                    cooling = float(e.get("bad_until") or 0.0) > now
+                    if cooling:
+                        states.append(False)
+                    elif p is not None:
+                        states.append(bool(p.get("ok")))
+                    else:
+                        states.append(None)
+                if any(x is True for x in states):
+                    pool_ok: Optional[bool] = True
+                elif states and all(x is False for x in states):
+                    pool_ok = False
+                else:
+                    pool_ok = None
+                res["lanes"]["key_pool"] = {"configured": True, "reachable": pool_ok,
+                                            "size": len(self._pool_entries)}
+            else:
+                res["lanes"]["key_pool"] = {"configured": False, "reachable": None}
+        except Exception:
+            self.logger.debug("备用链探针异常（忽略）", exc_info=True)
+        self._backup_probe = res
+        if alert:
+            self._alert_backup_redundancy()
+        return res
+
+    def backup_status(self) -> Dict[str, Any]:
+        """备用链状态快照（``/health`` 与看板用）：只含 lane 名/布尔/计数/时间，不含地址与密钥。
+
+        ``redundancy``：
+          - ``ok``：至少一条已配置的备用链探活通过或 10 分钟内真出过话；
+          - ``unknown``：已配置但尚无证据（未探/探针不支持）；
+          - ``down``：已配置的备用链全部探活失败且近期无成功——主模型一挂即静默；
+          - ``none``：一条备用都没配（单点）；``local_only`` 档按设计为 ``none``；
+          - ``n/a``：``ai.primary=local``（本地即主链，回落是云端，不在本表）。
+        """
+        now = time.time()
+        probe = dict(getattr(self, "_backup_probe", None) or {})
+        planes = probe.get("lanes") or {}
+        recent = {
+            "key_pool": float(getattr(self, "_last_pool_ok_ts", 0.0) or 0.0),
+            "local": float(getattr(self, "_last_fb_ok_ts", 0.0) or 0.0),
+        }
+        order = list(getattr(self, "_fallback_order", None) or DEFAULT_FALLBACK_ORDER)
+        lanes: List[Dict[str, Any]] = []
+        any_ok = any_cfg = any_unknown = False
+        for lane in order:
+            cfg = self._backup_lane_configured(lane)
+            pl = planes.get(lane) or {}
+            last_ok = recent.get(lane, 0.0)
+            ok_recent = bool(last_ok) and (now - last_ok) < self._DEGRADE_RECENT_SEC
+            reachable = pl.get("reachable") if cfg else None
+            item: Dict[str, Any] = {
+                "lane": lane, "configured": cfg, "reachable": reachable,
+                "last_ok_age_sec": int(now - last_ok) if last_ok else None,
+            }
+            if lane == "key_pool" and cfg:
+                item["size"] = len(self._pool_entries)
+                item["cooling"] = sum(1 for e in self._pool_entries
+                                      if float(e.get("bad_until") or 0.0) > now)
+            if pl.get("error"):
+                item["error"] = pl.get("error")
+            lanes.append(item)
+            if cfg:
+                any_cfg = True
+                if reachable is True or ok_recent:
+                    any_ok = True
+                elif reachable is None:
+                    any_unknown = True
+        mode = str(getattr(self, "_primary_mode", "cloud") or "cloud")
+        if mode == "local":
+            # 本地即主链：回落是云端主链/池（不在本 lane 表里），这里不下结论
+            redundancy = "n/a"
+        elif mode == "local_only" or not any_cfg:
+            redundancy = "none"
+        elif any_ok:
+            redundancy = "ok"
+        elif any_unknown:
+            redundancy = "unknown"
+        else:
+            redundancy = "down"
+        return {
+            "order": ["primary"] + order,
+            "primary_mode": mode,
+            "redundancy": redundancy,
+            "lanes": lanes,
+            "probed_at": int(probe["ts"]) if probe.get("ts") else None,
+            "chat_fallback_enabled": bool(getattr(self, "_fb_chat_fallback_enabled", True)),
+        }
+
+    def _alert_backup_redundancy(self) -> None:
+        try:
+            st = self.backup_status()
+            red = st.get("redundancy")
+            if red == "down":
+                bad = [f"{ln['lane']}({ln.get('error') or 'unreachable'})"
+                       for ln in st["lanes"] if ln.get("configured")]
+                self.logger.error(
+                    "AI 备用链全部不可达：%s —— 主模型一旦不可用本轮将不回复；"
+                    "请检查 ai.fallback 端点 / ai.key_pool", ", ".join(bad))
+                try:
+                    from src.utils import host_alert
+                    host_alert.notify_host(
+                        f"{self._alert_label()} 备用模型全部不可达",
+                        "主模型目前是唯一能出话的链路（" + ", ".join(bad)
+                        + "）。主模型一挂，自动回复会静默。请检查第二推理端 / 云端备用 Key。",
+                        key="ai_backup_down", cooldown_sec=1800.0)
+                except Exception:
+                    self.logger.debug("备用链告警发送失败（忽略）", exc_info=True)
+            elif red == "none" and st.get("primary_mode") == "cloud":
+                self.logger.warning(
+                    "AI 主链无备用（ai.fallback / ai.key_pool 都未配置）：主模型单点")
+        except Exception:
+            self.logger.debug("备用链告警判定异常（忽略）", exc_info=True)
 
     def _lane_should_skip(self, lane: str) -> bool:
         try:
@@ -2742,6 +3065,21 @@ class AIClient(LoggerMixin):
                 self._task_routes["memory_extract"] = "_lan_tool"
                 self.logger.info(
                     "记忆抽取默认走本地兜底 model=%s（ai.task_routes.memory_extract 可改）",
+                    self._fb_model)
+            # 群戏台词同一条本地端点。调用方用 strict_route，失败不改走云端。
+            # 显式 ai.task_routes.group_show 优先。
+            if ("group_show" not in self._task_routes
+                    and getattr(self, "_fb_client", None)
+                    and str(getattr(self, "_fb_model", "") or "").strip()):
+                self._route_clients.setdefault("_lan_tool", {
+                    "client": self._fb_client,
+                    "model": self._fb_model,
+                    "label": f"{self._fb_model} @ lan (group_show)",
+                    "extra_body": dict(getattr(self, "_fb_extra_body", None) or {}),
+                })
+                self._task_routes["group_show"] = "_lan_tool"
+                self.logger.info(
+                    "群戏台词默认走本地 model=%s（ai.task_routes.group_show 可改）",
                     self._fb_model)
             if self._route_clients:
                 self.logger.info(
@@ -4676,29 +5014,33 @@ class AIClient(LoggerMixin):
                 f"（以上为之前对话的关键信息压缩，请结合当前对话和上条消息回答。）"
             )
 
-        kb_ctx = context.get("kb_context", "").strip()
+        kb_ctx = str(context.get("kb_context") or "").strip()
+        # P0-3（2026-09-29 8E56 实锤）：注入措辞按人设 kind 分套（kb_policy.format_kb_block 单源）——
+        # 客服 / 销售：权威事实、命中以此为准、没有就说没有；陪聊：旧「参考片段（语气用）」；
+        # 支付域只有实时通道数据在场时才附「成功率数值已过期」警告（此前对所有非陪聊部署无差别输出，
+        # 与 kb_store 材料头「必须按步骤执行」互相打架）。
+        _kbd = context.get("_kb_decision")
+        if isinstance(_kbd, dict):
+            _kb_kind = str(_kbd.get("kind") or "")
+            _kb_kind_src = str(_kbd.get("kind_source") or "")
+        else:
+            _kb_kind = str(getattr(_kbd, "kind", "") or "")
+            _kb_kind_src = str(getattr(_kbd, "kind_source", "") or "")
         if kb_ctx and not _live_metrics:
-            if _is_companion:
-                prompt_parts.append(
-                    "\n【参考片段（语气用，非工作指令）】\n"
-                    f"{kb_ctx}\n"
-                    "不要主动提起查单、通道状态、支付、费率等工作话题；除非用户先说到这些词。"
-                )
-            else:
-                _kb_cleaned = kb_ctx
-                if channel_status:
-                    import re as _re
-                    _kb_cleaned = _re.sub(
-                        r'成功率[：:]\s*\d+[\.\d]*%?',
-                        '成功率：见上方实时数据',
-                        _kb_cleaned
-                    )
-                prompt_parts.append(
-                    f"\n【知识库参考（仅供话术风格参考）】\n"
-                    f"⚠️ 重要：知识库中的任何成功率数值、通道状态均已过期，严禁使用！\n"
-                    f"通道的成功率、状态、限额等数据必须且只能使用上方【当前通道实时数据】中的数值。\n"
-                    f"知识库仅用于参考回复的语气和格式：\n{_kb_cleaned}"
-                )
+            try:
+                from src.utils.kb_policy import format_kb_block
+                _kb_block = format_kb_block(
+                    kb_ctx, kind=_kb_kind, kind_source=_kb_kind_src, companion_pack=_is_companion,
+                    live_channel=bool(channel_status),
+                    lang=str(context.get("reply_lang") or "zh"))
+            except Exception:
+                _kb_block = f"\n【知识库参考】\n{kb_ctx}"
+            if _kb_block:
+                prompt_parts.append(_kb_block)
+        # P0-4：客服 / 销售 must 档查无 → 固定话术 / 已转人工指令（kb_policy.nohit_block）
+        _kb_nohit = str(context.get("_kb_nohit_block") or "").strip()
+        if _kb_nohit and not kb_ctx:
+            prompt_parts.append("\n" + _kb_nohit)
         # _live_metrics 时主流程已跳过 KB 检索；若仍带有 kb_context，不注入，避免「商户后台」等模板进入模型
 
         # L4: 用户画像注入
@@ -5930,6 +6272,7 @@ class AIClient(LoggerMixin):
         purpose: str = "tool",
         system: Optional[str] = None,
         strategy_overrides: Optional[Dict[str, Any]] = None,
+        strict_route: bool = False,
     ) -> Optional[str]:
         """工具型调用（抽取 / 分类 / 改写 / 翻译纠错）：裸 system、按 ``purpose``
         归因成本、**不计 ai_reply**、不跑语言守卫 / QualityTracker。
@@ -5939,6 +6282,8 @@ class AIClient(LoggerMixin):
         """
         from src.ai.llm_purpose import purpose_scope
         ctx = self._tool_context(purpose, system=system)
+        if strict_route:
+            ctx["_route_strict"] = True
         with purpose_scope(str(purpose or "tool")):
             return await self.generate_reply(
                 prompt, context=ctx, conversation_history=None,
@@ -6001,6 +6346,7 @@ class AIClient(LoggerMixin):
             "key_pool_calls": self._pool_calls,
             "key_pool_ok": self._pool_ok,
             "key_pool_last_key": self._pool_last_key or None,
+            "fallback_order": list(getattr(self, "_fallback_order", None) or DEFAULT_FALLBACK_ORDER),
         }
 
     _DEGRADE_RECENT_SEC = 600.0   # 「最近出过话」窗口：10 分钟内该链有成功即视为活跃
