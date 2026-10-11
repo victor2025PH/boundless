@@ -268,7 +268,8 @@ class TestForConversation:
         # Q-1 E（#264）：无目标路也带总开关现状 discovery_paused
         # Q-8 A/B（#264）：默认目标现状 default_goal + 阶段计划 stage_plan（销售域 / 未设 → None）
         assert r.json() == {"goal": None, "last": None, "discovery_paused": False,
-                            "default_goal": None, "stage_plan": None}
+                            "default_goal": None, "stage_plan": None,
+                            "sibling_goals": []}
 
     def test_active_goal_view_with_today(self):
         client, _ = _build_client()

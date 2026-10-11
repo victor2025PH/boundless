@@ -29,6 +29,22 @@ _DEFAULT_DAILY_CAP = 200
 _DEFAULT_SCAN_LIMIT = 3000
 
 
+def _bare_members_html(raw: str) -> str:
+    """``?bare=1`` / 无模板时直出。套了 base.html 的源文件不能把 Jinja 原样送给浏览器。"""
+    if "{% extends" not in raw:
+        return raw
+    import re
+    head = re.search(r"\{% block head %\}(.*?)\{% endblock %\}", raw, re.S)
+    body = re.search(r"\{% block content %\}(.*?)\{% endblock %\}", raw, re.S)
+    style = head.group(1) if head else ""
+    inner = body.group(1) if body else raw
+    return (
+        "<!doctype html>\n<html lang=\"zh\">\n<head>\n"
+        "<meta charset=\"utf-8\">\n<title>群成员提取</title>\n"
+        f"{style}\n</head>\n<body>\n{inner}\n</body>\n</html>\n"
+    )
+
+
 def register_group_members_routes(app, auth_dep, audit_store=None, config_manager=None,
                                   page_auth=None, templates=None):
     """挂载 Telegram 群成员提取后台 API。``auth_dep``=登录校验；``audit_store``=操作审计（可选）。
@@ -1102,7 +1118,7 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         _audit(request, "tg_members_outreach_resume", target)
         return {"ok": True, "account_id": target}
 
-    # ── 管理台整页（独立自包含 HTML；号多选/群/过滤/配额 + 任务进度 + 成员表格/导出）──
+    # ── 管理台整页（带模板时套左侧菜单；bare 直出不含 Jinja）──
 
     @app.get("/tools/tg-members", response_class=HTMLResponse)
     async def tg_members_page(request: Request, _=Depends(html_auth)):
@@ -1124,4 +1140,4 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         except Exception:
             logger.warning("[group_members] 管理台模板读取失败", exc_info=True)
             raise HTTPException(500, tr(request, "err.gm.store_unavailable"))
-        return HTMLResponse(content=html)
+        return HTMLResponse(content=_bare_members_html(html))
