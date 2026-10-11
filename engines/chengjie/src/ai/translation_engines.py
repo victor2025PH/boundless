@@ -1176,9 +1176,9 @@ class OpenCCEngine:
 # ── 免费档零成本守卫 ────────────────────────────────────────────────────────
 # 免费档 = 有效 tier 落在 FREE_TIERS（缺省 "" / std / free，含钱包耗尽从
 # pro/certified 降下来的 std）。已知付费档 = pro / certified。
-# ``TranslationService.translate`` 会把其它显式档名收成 std 并记一条警告
-# （未知不当成付费）。直接打 EngineRouter 且传入未知档名仍不设防：新付费档
-# 必须先加进下面的已知集合。
+# ``TranslationService.translate`` 和 ``EngineRouter`` 的 translate / compare /
+# translate_with 都会把其它显式档名收成 std 并记一条警告（未知不当成付费）。
+# ``tier is None`` 仍是不设防。新付费档必须先加进下面的已知集合。
 #
 # 分类以**类**为准，不看桩的 name：测试里名叫 "ai"/"deepl" 的假引擎不是生产类，
 # 不设防。生产类必须登记在下面两张表（棘轮测试钉死，新类不能静默漏网）。
@@ -1208,6 +1208,15 @@ def coerce_translation_tier(tier: str) -> str:
     except Exception:
         logger.debug("[translate] unknown tier metric failed", exc_info=True)
     return "std"
+
+
+def _observe_tier(tier: Optional[str]) -> Optional[str]:
+    """``None`` 保持不设防。其它档名走 :func:`coerce_translation_tier`。"""
+    if tier is None:
+        return None
+    return coerce_translation_tier(tier)
+
+
 _ENFORCE_GUARD_VALUES = frozenset({
     "enforce", "on", "true", "1", "yes", "enable", "enabled",
 })
@@ -1534,6 +1543,7 @@ class EngineRouter:
         ``tier`` 为免费档且 ``free_tier_enforce`` 时付费引擎直接拦住（不调用）。
         同档但未 enforce（legacy）仍调用，并记 would_block。``tier is None`` = 不观察。
         """
+        tier = _observe_tier(tier)
         eng = self.engine_by_name(name)
         if eng is None:
             return EngineResult("", str(name or "?"), False, "unknown_engine")
@@ -1568,6 +1578,8 @@ class EngineRouter:
         ``tier is None`` = 不观察。
         """
         import asyncio as _aio
+
+        tier = _observe_tier(tier)
 
         async def _one(eng: Any) -> EngineResult:
             name = getattr(eng, "name", "?")
@@ -1634,6 +1646,8 @@ class EngineRouter:
         free_tier_enforce: bool = False,
     ) -> EngineResult:
         import time as _t
+
+        tier = _observe_tier(tier)
 
         try:
             from src.ai.translation_engine_stats import get_translation_engine_stats

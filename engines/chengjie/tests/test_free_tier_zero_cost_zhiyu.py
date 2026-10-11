@@ -324,6 +324,23 @@ async def test_std_tiers_block_and_paid_tiers_reach_engines():
 
 
 @pytest.mark.asyncio
+async def test_engine_router_unknown_tier_is_std():
+    """不经 TranslationService，路由层自己也把未知档收成标准档。None 仍不设防。"""
+    ai = _RecAI()
+    router = EngineRouter([ai])
+    held = await router.translate(
+        "hello friend", source_lang="en", target_lang="zh",
+        tier="enterprise", free_tier_enforce=True)
+    assert ai.calls == 0 and held.free_tier_blocked
+    assert get_translation_engine_stats().dump()["unknown_tier"] == 1
+    sent = await router.translate(
+        "hello friend", source_lang="en", target_lang="zh",
+        tier=None, free_tier_enforce=True)
+    assert ai.calls == 1 and sent.ok
+    assert get_translation_engine_stats().dump()["unknown_tier"] == 1
+
+
+@pytest.mark.asyncio
 async def test_default_is_enforce_and_legacy_still_counts_would_block():
     """缺省构造 = enforce，不调用付费引擎。显式 legacy 才打到付费引擎并记 would_block。"""
     blocked_ai = _RecAI()
