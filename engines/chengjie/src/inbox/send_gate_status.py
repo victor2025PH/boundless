@@ -56,7 +56,8 @@ def send_gate_snapshot(
       「系统自动风控（PeerFlood…）+ 倒计时」vs「管理员手动冻结」，不再一律
       说「运营手动」（自动置位被错误归因是实录误导事故）。取不到详情时缺省
       不带该键，前端回落通用文案（旧后端兼容＝feat 特性探测同哲学）。
-    - ``rate_degraded``：发送限速闸判定异常、按 fail-open 放行后的进程累计次数。
+    - ``rate_degraded``：发送限速闸判定异常、按 fail-open 放行后的累计次数
+      ``{count, days}``。``days`` 是最近若干个 UTC 日的 ``[{day, n}]``；库打不开时为空。
       只给横幅展示，不把发送改成拦截，也不改日上限。次数为 0 时不带该键。
     - 返回 None ＝ 护栏没拦、闸门未启用、且本进程没有限速闸异常放行。
     """
@@ -163,11 +164,14 @@ def send_gate_snapshot(
             rate = None
 
     degraded_n = 0
+    degraded_days: list = []
     try:
-        from src.compliance.send_rate_gate import degraded_count
+        from src.compliance.send_rate_gate import degraded_count, degraded_trend
         degraded_n = int(degraded_count() or 0)
+        degraded_days = list(degraded_trend() or [])
     except Exception:
         degraded_n = 0
+        degraded_days = []
 
     if not blocked and quota is None and degraded_n <= 0:
         return None
@@ -179,7 +183,7 @@ def send_gate_snapshot(
     }
     if degraded_n > 0:
         # 限速闸异常后仍放行。横幅只报次数，不把发送改成拦截，也不改日上限。
-        out["rate_degraded"] = {"count": degraded_n}
+        out["rate_degraded"] = {"count": degraded_n, "days": degraded_days}
     if kill:
         out["kill"] = kill
     if rate:

@@ -135,6 +135,7 @@ def test_fail_open_snapshot_reports_count_without_blocking(monkeypatch):
     snap = send_gate_snapshot("telegram", "acc1", "u9", config={})
     assert snap is not None and snap["blocked"] is False
     assert snap["rate_degraded"]["count"] >= 1
+    assert snap["rate_degraded"]["days"] == []
     assert "rate" not in snap
     assert srg.DEFAULTS["script_daily_cap"] == 20
 
