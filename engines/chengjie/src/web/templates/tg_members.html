@@ -1,53 +1,60 @@
-<!doctype html>
-<!--
-  Telegram 群成员提取 · 管理台（独立自包含页，不 extends base.html）。
-
-  刻意自包含：内联 zh/en i18n（无 window.T 依赖）、纯 fetch 驱动、只用 addEventListener
-  （无内联 on* handler）→ 重启前完全惰性、可被渲染冒烟测试验证、不牵动任何在跑页面。
-  由 group_members_routes.py 的 GET /tools/tg-members 直接返回本文件内容。
-  数据源：/api/accounts、/api/tg-members/{jobs,groups,members,members/export,quota}。
-  正式上线时的 nav 集成 / base.html 主题化 / 更细粒度 UX 属部署窗口内的真机打磨项。
--->
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TG 群成员提取</title>
+{% extends "base.html" %}
+{% block title %}{{ (i18n or {}).get('gm_nav', '群成员提取') }}{% endblock %}
+{% block page_title %}{{ (i18n or {}).get('gm_nav', '群成员提取') }}{% endblock %}
+{% block head %}
   <style>
-    :root { --bg:#f6f7f9; --card:#fff; --border:#e5e7eb; --text:#1f2937; --dim:#6b7280;
-            --accent:#1e8cf2; --ok:#0f9d75; --warn:#d97706; --danger:#dc2626; }
-    @media (prefers-color-scheme: dark) {
-      :root { --bg:#0f141a; --card:#161c24; --border:#2a333d; --text:#e5e9ef; --dim:#93a1b0; }
+    /* 颜色跟后台令牌走。只在本页根上补本页用的别名，不改 :root，免得侧栏被带跑。 */
+    .gm-page, .gm-page * { box-sizing: border-box; }
+    .gm-page {
+      --border: var(--bd, #e5e7eb);
+      --text: var(--t, #1f2937);
+      --dim: var(--t3, #6b7280);
+      --accent: var(--p, #1e8cf2);
+      --ok: var(--green, #0f9d75);
+      --warn: var(--amber, #d97706);
+      --danger: var(--red, #dc2626);
+      color: var(--text);
+      font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft Yahei", sans-serif;
     }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text);
-           font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Microsoft Yahei",sans-serif; }
-    .wrap { max-width:1080px; margin:0 auto; padding:20px 16px 60px; }
-    h1 { font-size:20px; margin:0 0 4px; }
-    .sub { color:var(--dim); font-size:12.5px; margin-bottom:16px; }
-    .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
-            padding:16px; margin-bottom:16px; }
-    .card h2 { font-size:15px; margin:0 0 12px; }
-    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
-    label { color:var(--dim); font-size:12.5px; }
-    input, select { font:inherit; padding:6px 9px; border:1px solid var(--border);
-                    border-radius:8px; background:var(--card); color:var(--text); }
-    input[type=text], input[type=number] { min-width:200px; }
-    button { font:inherit; cursor:pointer; border:1px solid var(--border); background:var(--card);
+    .gm-page .wrap { max-width: 1080px; margin: 0 auto; padding: 4px 0 40px; }
+    .gm-page h1 { display: none; }
+    .gm-page .sub { color:var(--dim); font-size:12.5px; margin-bottom:16px; }
+    .gm-page .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
+            padding:16px; margin-bottom:16px; overflow:visible; }
+    .gm-page .card::before { display:none; }
+    .gm-page .card:hover { transform:none; box-shadow:none; }
+    .gm-page .card h2 { display:block; font-size:15px; margin:0 0 12px; padding:0;
+            border-bottom:0; }
+    .gm-page .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+    .gm-page label { color:var(--dim); font-size:12.5px; }
+    .gm-page input, .gm-page select { font:inherit; padding:6px 9px; border:1px solid var(--border);
+                    border-radius:8px; background:var(--card); color:var(--text);
+                    width:auto; max-width:100%; }
+    .gm-page input[type=text], .gm-page input[type=number] { min-width:200px; }
+    .gm-page button { font:inherit; cursor:pointer; border:1px solid var(--border); background:var(--card);
              color:var(--text); border-radius:8px; padding:6px 12px; }
-    button:hover { border-color:var(--accent); }
-    button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-    button[disabled] { opacity:.5; cursor:not-allowed; }
+    .gm-page button:hover { border-color:var(--accent); }
+    .gm-page button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .gm-page button[disabled] { opacity:.5; cursor:not-allowed; }
     .accts { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
     .accts label { display:inline-flex; align-items:center; gap:6px; padding:5px 10px;
                    border:1px solid var(--border); border-radius:999px; color:var(--text); font-size:12.5px; }
     .accts label.off { opacity:.45; }
-    .msg { font-size:12.5px; color:var(--dim); margin-top:6px; }
-    .banner { background:#fef3c7; color:#92400e; border:1px solid #fcd34d; border-radius:10px;
-              padding:10px 12px; margin-bottom:16px; font-size:13px; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
-    th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--border); }
-    th { color:var(--dim); font-weight:600; font-size:12px; }
+    /* 后台壳的 .msg 是带内边距的横幅（display:flex）。本页同名类只是小字说明，必须扳回来。 */
+    .gm-page .msg { display:inline; padding:0; margin:0; border-radius:0; font-weight:400;
+            font-size:12.5px; color:var(--dim); background:none; animation:none; gap:0; }
+    .gm-page div.msg { display:block; margin-top:6px; }
+    .gm-page .banner { display:block; background:#fef3c7; color:#92400e; border:1px solid #fcd34d;
+              border-radius:10px; padding:10px 12px; margin-bottom:16px; font-size:13px; }
+    /* 壳里 .banner{display:flex} 会盖过 hidden 属性，空横幅变成一条黄条。 */
+    .gm-page [hidden] { display:none !important; }
+    .gm-page table { width:100%; border-collapse:collapse; font-size:13px; }
+    .gm-page th, .gm-page td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--border);
+            text-transform:none; letter-spacing:0; }
+    .gm-page th { color:var(--dim); font-weight:600; font-size:12px; }
+    .gm-page details.gm-fold { margin-bottom: 16px; }
+    .gm-page details.gm-fold > summary { cursor:pointer; font-weight:700; padding:12px 16px;
+      background:var(--card); border:1px solid var(--border); border-radius:12px; color:var(--text); }
     .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11.5px; }
     .pill.run { background:color-mix(in srgb, var(--bl-growth,#1e8cf2) 14%, transparent); color:var(--accent); }
     .pill.done { background:rgba(15,157,117,.14); color:var(--ok); }
@@ -55,7 +62,7 @@
     .pill.adm { background:rgba(217,119,6,.14); color:var(--warn); }
     .job { border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
     .job .jhd { display:flex; justify-content:space-between; gap:8px; align-items:center; }
-    .empty { color:var(--dim); padding:8px 2px; }
+    .gm-page .empty { color:var(--dim); padding:8px 2px; text-align:left; }
     /* 接话 / 私聊开口：每人一张卡 */
     .ocard { border:1px solid var(--border); border-radius:10px; padding:10px 12px; margin-bottom:10px; }
     .ocard.approved { border-color:rgba(15,157,117,.5); }
@@ -74,13 +81,15 @@
     .ocard.replied { border-color:rgba(15,157,117,.5); background:rgba(15,157,117,.04); }
     .ocard.replied.stalled { border-color:rgba(217,119,6,.6); background:rgba(217,119,6,.05); }
     .pill.warn { background:rgba(217,119,6,.14); color:var(--warn); }
-    .msg.warn { color:var(--warn); }
+    .gm-page .msg.warn { color:var(--warn); }
     .ocard.replied a { color:inherit; text-decoration:none; }
     .ocard.replied a:hover { text-decoration:underline; }
     .funnel { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:8px 0; font-size:12.5px; }
     .funnel b { font-size:15px; }
     .funnel .arr { color:var(--dim); }
-    .stats-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:12px; }
+    .stats-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap:12px; }
+    .stats-grid > div { min-width:0; overflow-x:auto; }
+    .stats-grid th, .stats-grid td { white-space:nowrap; }
     .stats-grid table { font-size:12.5px; }
     .stats-grid h3 { font-size:13px; margin:0 0 6px; color:var(--dim); }
     .bar { display:inline-block; height:8px; background:var(--dim); opacity:.55; border-radius:4px; vertical-align:middle; }
@@ -119,32 +128,71 @@
             border-radius:999px; overflow:hidden; vertical-align:middle; margin-right:4px; }
     .qbar > i { display:block; height:100%; background:var(--accent); }
     /* 顶部步骤条 + 开口账号条（吸顶：往下翻到接话 / 开口时还看得见用的是哪个号） */
-    .steps { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:-6px 0 14px; font-size:12.5px; }
-    .steps a { color:var(--accent); text-decoration:none; padding:3px 10px; border:1px solid var(--border);
-               border-radius:999px; background:var(--card); }
+    .steps { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:0 0 14px; font-size:12.5px;
+             background:transparent; width:auto; }
+    .steps a { flex:0 0 auto; width:auto; color:var(--accent); text-decoration:none; padding:3px 10px;
+               border:1px solid var(--border); border-radius:999px; background:var(--card); }
     .steps a:hover { border-color:var(--accent); }
     .steps .arr { color:var(--dim); }
     .gm-acct-bar { position:sticky; top:0; z-index:5; padding:10px 16px; }
     .ocard .gt-confirm { margin-top:8px; padding:8px 10px; border:1px dashed var(--accent); border-radius:8px; }
     .ocard .gt-confirm q { font-style:italic; }
   </style>
-</head>
-<body>
+{% endblock %}
+{% block content %}
+<div class="gm-page">
   <div class="wrap">
     <h1 id="t-title"></h1>
     <div class="sub" id="t-sub"></div>
     <nav class="steps" id="gm-steps">
-      <a href="#gm-extract" id="t-step1"></a><span class="arr">→</span>
-      <a href="#gm-gtouch" id="t-step2"></a><span class="arr">→</span>
-      <a href="#gm-outreach" id="t-step3"></a><span class="arr">→</span>
-      <a href="#gm-effect" id="t-step4"></a>
+      <a href="#gm-gtouch" id="t-step1"></a><span class="arr">→</span>
+      <a href="#gm-effect" id="t-step2"></a>
+      <a href="#gm-outreach" id="t-step3" hidden></a>
+      <a href="#gm-extract" id="t-step4" hidden></a>
     </nav>
     <div class="banner" id="gm-disabled" hidden></div>
+    <div class="msg" id="t-accts-l"></div>
+    <div class="accts" id="gm-accts"><span class="empty" id="gm-accts-empty"></span></div>
+    <div class="row" id="gm-reply-pick" hidden>
+      <label id="t-out-acct-l" for="gm-out-acct"></label>
+      <select id="gm-out-acct"></select>
+    </div>
+    <p class="msg" id="gm-reply-hint" hidden></p>
 
+    <section class="card" id="gm-gtouch">
+      <h2 id="t-gtouch"></h2>
+      <div class="msg" id="t-gtouch-l"></div>
+      <div class="row">
+        <button type="button" id="gm-gt-refresh"></button>
+        <button type="button" id="gm-gt-compose-all"></button>
+        <span class="msg" id="gm-gt-stats"></span>
+      </div>
+      <details>
+        <summary id="t-gt-more"></summary>
+        <div class="msg" id="gm-gt-stats-more"></div>
+      </details>
+      <div class="msg" id="gm-gt-note"></div>
+      <div id="gm-gt-list"></div>
+      <div id="gm-gt-sent"></div>
+    </section>
+
+    <section class="card" id="gm-effect">
+      <h2 id="t-effect"></h2>
+      <div class="row">
+        <select id="gm-out-stats-days">
+          <option value="7"></option><option value="14"></option><option value="30"></option>
+        </select>
+        <select id="gm-out-stats-scope">
+          <option value="all"></option><option value="acct"></option>
+        </select>
+      </div>
+      <div id="gm-out-statsbox" hidden></div>
+    </section>
+
+    <details class="gm-fold" id="gm-pull">
+      <summary id="t-pull">还要拉新人</summary>
     <section class="card" id="gm-extract">
       <h2 id="t-extract"></h2>
-      <div class="msg" id="t-accts-l"></div>
-      <div class="accts" id="gm-accts"><span class="empty" id="gm-accts-empty"></span></div>
       <div class="msg" id="gm-accts-total"></div>
       <div class="row">
         <label id="t-group-l" for="gm-group-sel"></label>
@@ -198,39 +246,29 @@
       <div class="msg" id="gm-mstats"></div>
       <table>
         <thead><tr>
-          <th id="th-user"></th><th id="th-name"></th><th id="th-score"></th>
+          <th id="th-user"></th><th id="th-score"></th>
           <th id="th-spoke"></th><th id="th-admin"></th><th id="th-src"></th>
           <th id="th-state"></th>
         </tr></thead>
         <tbody id="gm-mbody"></tbody>
       </table>
     </section>
+    </details>
 
+    <details class="gm-fold" id="gm-cold">
+      <summary id="t-cold">备用：冷私聊，更容易停号</summary>
     <section class="card gm-acct-bar" id="gm-acct-pick">
       <div class="row" style="margin-bottom:0">
-        <label id="t-out-acct-l" for="gm-out-acct"></label>
-        <select id="gm-out-acct"></select>
         <label id="t-out-mode-l" for="gm-out-mode"></label>
         <select id="gm-out-mode">
           <option value="manual"></option>
           <option value="approve"></option>
           <option value="auto"></option>
         </select>
+        <label id="t-out-persona-l" for="gm-out-persona-sel"></label>
+        <select id="gm-out-persona-sel"></select>
         <span class="msg" id="gm-out-persona"></span>
       </div>
-    </section>
-
-    <section class="card" id="gm-gtouch">
-      <h2 id="t-gtouch"></h2>
-      <div class="msg" id="t-gtouch-l"></div>
-      <div class="row">
-        <button type="button" id="gm-gt-refresh"></button>
-        <button type="button" id="gm-gt-compose-all"></button>
-        <span class="msg" id="gm-gt-stats"></span>
-      </div>
-      <div class="msg" id="gm-gt-note"></div>
-      <div id="gm-gt-list"></div>
-      <div id="gm-gt-sent"></div>
     </section>
 
     <section class="card" id="gm-outreach">
@@ -265,23 +303,10 @@
       <div id="gm-out-replied"></div>
       <div id="gm-out-followups"></div>
     </section>
-
-    <section class="card" id="gm-effect">
-      <h2 id="t-effect"></h2>
-      <div class="row">
-        <button type="button" id="gm-out-stats-btn"></button>
-        <select id="gm-out-stats-days">
-          <option value="7">7d</option><option value="14">14d</option><option value="30">30d</option>
-        </select>
-        <select id="gm-out-stats-scope">
-          <option value="acct"></option><option value="all"></option>
-        </select>
-      </div>
-      <div id="gm-out-statsbox" hidden></div>
-    </section>
+    </details>
   </div>
-
-  <script>
+</div>
+<script>
   (function () {
     "use strict";
     var EN = (document.documentElement.lang || "").toLowerCase().indexOf("en") === 0;
@@ -329,8 +354,11 @@
     }
     function scoreChip(s) {
       if (s == null || s === "") return "";
-      var cls = s >= 80 ? "hi" : (s >= 60 ? "mid" : "lo");
-      return '<span class="sc ' + cls + '">' + s + "</span>";
+      var cls, word;
+      if (s >= 80) { cls = "hi"; word = t("值得接话", "Worth a reply"); }
+      else if (s >= 60) { cls = "mid"; word = t("一般", "Ordinary"); }
+      else { cls = "lo"; word = t("先放着", "Leave for later"); }
+      return '<span class="sc ' + cls + '" title="' + esc(s) + '">' + word + "</span>";
     }
     function fmtDur(sec) {
       sec = Math.max(0, Math.round(sec));
@@ -344,24 +372,24 @@
     function setText() {
       $("t-title").textContent = t("Telegram 群成员提取", "Telegram group member extraction");
       $("t-sub").textContent = t(
-        "提取只把人放进库，不发任何消息。之后先在群里公开接有意向的人的话，过几个小时再私聊开口；每号每天私聊 5–10 人。",
-        "Extraction only fills the library and sends nothing. Then reply publicly in the group to people with intent, and DM them a few hours later; 5-10 DMs a day per account.");
-      $("t-step1").textContent = t("① 提取群成员", "1 · Extract members");
-      $("t-step2").textContent = t("② 群里先接话", "2 · Reply in the group");
-      $("t-step3").textContent = t("③ 私聊开口", "3 · DM openers");
-      $("t-step4").textContent = t("④ 效果与成交", "4 · Results & deals");
-      $("t-effect").textContent = t("④ 效果与成交", "4 · Results & deals");
+        "先在群里接有意向的人的话。提取只是把人放进库，不发消息。",
+        "Reply in the group first. Extraction only puts people in the library and sends nothing.");
+      $("t-step1").textContent = t("① 在群里接话", "1 · Reply in the group");
+      $("t-step2").textContent = t("② 看效果", "2 · Results");
+      $("t-pull").textContent = t("还要拉新人", "Pull more people");
+      $("t-cold").textContent = t("备用：冷私聊，更容易停号", "Backup: cold DM, easier to get stopped");
+      $("t-effect").textContent = t("看效果", "Results");
       $("gm-gt-compose-all").textContent = t("AI 拟稿今天这批", "AI-draft today's batch");
       $("t-extract").textContent = t("① 发起提取", "① Start extraction");
-      $("t-accts-l").textContent = t("选择用哪些号拉（仅显示在线的 Telegram 号；多选=多号并行、各拉不同批次）",
-        "Pick accounts (online Telegram only; multi-select = parallel, disjoint batches)");
+      $("t-accts-l").textContent = t("用这个号在群里接话。只显示在线的 Telegram 号。",
+        "Reply in the group with this account. Online Telegram accounts only.");
       $("t-group-l").textContent = t("目标群（选号后自动列出）", "Target group (auto-listed after picking accounts)");
       $("gm-eg-refresh").title = t("刷新群列表", "Refresh groups");
       $("gm-group-adv-toggle").textContent = t("高级：手输群 id / @用户名", "Advanced: manual id / @username");
       $("t-group-manual-l").textContent = t("手输群", "Manual group");
-      $("t-filter-l").textContent = t("过滤器", "Filter");
+      $("t-filter-l").textContent = t("拉哪些人", "Who to pull");
       $("t-cap-l").textContent = t("每号每日上限", "Daily cap / account");
-      $("gm-start").textContent = t("🧲 发起提取", "🧲 Start");
+      $("gm-start").textContent = t("发起提取", "Start extraction");
       $("t-jobs").textContent = t("提取任务", "Extraction jobs");
       $("gm-jobs-empty").textContent = t("暂无任务", "No jobs yet");
       $("t-members").textContent = t("成员库", "Member DB");
@@ -369,19 +397,19 @@
       $("gm-refresh").textContent = t("刷新", "Refresh");
       $("gm-export").textContent = t("导出 CSV", "Export CSV");
       $("gm-mq").placeholder = t("搜名字/用户名", "search name/username");
-      $("th-user").textContent = "user_id";
-      $("th-name").textContent = t("名字", "Name");
+      $("th-user").textContent = t("名字", "Name");
       $("th-score").textContent = t("可聊度", "Score");
       $("th-spoke").textContent = t("发言", "Spoke");
       $("th-admin").textContent = t("管理员", "Admin");
       $("th-src").textContent = t("来源号", "By account");
       $("th-state").textContent = t("开口", "Outreach");
-      $("t-outreach").textContent = t("③ 私聊开口", "3 · DM openers");
+      $("t-outreach").textContent = t("③ 冷私聊（更容易停号，回复更少）", "3 · Cold DM (easier to get stopped, fewer replies)");
       $("t-outreach-l").textContent = t(
-        "只用「当时拉到这个人的那个号」发第一条私聊。生成队列 → AI 按这个号的人设和目标拟一句开场（可改）→ 批准。「批准后自动发」由后台在时段内每 25–90 分钟随机发一条；「手动」则逐条点发。新号从每天 3 条爬坡，也占这个号的总发送额度。对方回了交给收件箱，对方说别发了就全线不再碰。",
-        "The account that captured the person sends the first private line. Build the queue, let AI draft one opener per person from this account's persona and goal (editable), then approve. In 'approve then auto-send' the scheduler sends one every 25-90 min inside the window; 'manual' sends on click. New accounts ramp from 3 a day and each send counts toward the account's overall cap. Replies go to the inbox; a 'stop messaging me' blocks that person everywhere.");
+        "这是备用路径。优先用上面的「先在群里接话」：公开回一句，过几个小时再私聊，回复更多，也更不容易把号停掉。冷私聊是直接给没聊过的人发私信，Telegram 更容易停这个号的私聊。只用当时拉到这个人的那个号发第一条。生成队列后，在线的排在前面，不在线的仍会发。对方先来信的，走收件箱，不受这里的停发影响。",
+        "This is the backup path. Prefer replying in the group first: a public reply, then a DM a few hours later, gets more replies and is less likely to stop the account. A cold DM writes to someone you have never talked to, and Telegram is more likely to stop this account's DMs. Only the account that captured the person sends the first line. Online people are sorted first; offline people are still included. If they message you first, that stays in the inbox and is not under this lock.");
       $("t-out-acct-l").textContent = t("用哪个号", "Account");
       $("t-out-mode-l").textContent = t("开口方式", "Mode");
+      $("t-out-persona-l").textContent = t("人设", "Persona");
       var mo2 = $("gm-out-mode").options;
       mo2[0].textContent = t("手动：逐条点发", "Manual: send on click");
       mo2[1].textContent = t("批准后自动发", "Approve, then auto-send");
@@ -390,14 +418,24 @@
       $("gm-out-compose").textContent = t("AI 拟稿", "AI draft");
       $("gm-out-approve-all").textContent = t("一键批准今日队列", "Approve whole queue");
       $("gm-out-stop").textContent = t("停止这个号", "Stop this account");
-      $("gm-out-resume").textContent = t("恢复开口", "Resume");
+      $("gm-out-resume").textContent = t("解除急停", "Clear the manual stop");
+      $("gm-out-resume").title = t("只解除人工急停。清不掉冷私聊限制，也清不掉短时等待。",
+        "Clears a manual stop only. It does not clear a cold-DM limit or a short wait.");
       $("t-out-hours-l").textContent = t("时段", "Window");
       $("t-out-cap-l").textContent = t("每天最多", "Daily max");
       $("gm-out-save").textContent = t("保存", "Save");
-      $("gm-out-stats-btn").textContent = t("回复率 / 漏斗", "Reply rate / funnel");
-      var sc = $("gm-out-stats-scope").options;
-      sc[0].textContent = t("只看这个号", "This account");
-      sc[1].textContent = t("全部号", "All accounts");
+      $("t-gt-more").textContent = t("额度明细", "Quota detail");
+      function labelOption(sel, value, text) {
+        if (!sel) return;
+        Array.prototype.forEach.call(sel.options, function (o) {
+          if (o.value === value) o.textContent = text;
+        });
+      }
+      labelOption($("gm-out-stats-scope"), "acct", t("只看这个号", "This account"));
+      labelOption($("gm-out-stats-scope"), "all", t("全部号", "All accounts"));
+      labelOption($("gm-out-stats-days"), "7", t("近 7 天", "Last 7 days"));
+      labelOption($("gm-out-stats-days"), "14", t("近 14 天", "Last 14 days"));
+      labelOption($("gm-out-stats-days"), "30", t("近 30 天", "Last 30 days"));
       var so = $("gm-msort").options;
       so[0].textContent = t("可聊度优先", "Score first");
       so[1].textContent = t("近发言优先", "Recent first");
@@ -449,6 +487,7 @@
           var card = c.closest(".gm-acct-card");
           if (card) card.classList.toggle("sel", c.checked);
           onAccountsChanged();
+          syncReplyAccount();
         });
       });
       loadAcctQuotas(tg);
@@ -460,8 +499,15 @@
           return '<option value="' + esc(a.account_id) + '">' + esc(nm) + "</option>";
         }).join("");
         if (prev) osel.value = prev;
-        loadOutreach();
       }
+      var first = box.querySelector(".gm-acct");
+      if (first && !selectedAccounts().length) {
+        first.checked = true;
+        var card = first.closest(".gm-acct-card");
+        if (card) card.classList.add("sel");
+      }
+      onAccountsChanged();
+      syncReplyAccount();
     }
 
     // 每号今日配额余量（"今日 used/cap"）填进卡片 chip；满额标红。未开启/失败静默跳过。
@@ -469,28 +515,22 @@
       var chips = {};
       Array.prototype.slice.call(document.querySelectorAll(".gm-acct-q"))
         .forEach(function (el) { chips[el.getAttribute("data-q")] = el; });
-      var sumUsed = 0, sumCap = 0, got = 0;
+      var got = 0, _quotaLines = [];
       await Promise.all(list.map(function (a) {
         return api("/api/tg-members/quota?account_id=" + encodeURIComponent(a.account_id))
           .then(function (r) {
             if (!r.ok) return;
             var used = r.data.used_today || 0, cap = r.data.cap || 0;
-            sumUsed += used; sumCap += cap; got++;
+            got++;
             var chip = chips[a.account_id];
-            if (!chip) return;
-            var pctq = cap > 0 ? Math.min(100, Math.round(used / cap * 100)) : 0;
-            var full = cap && used >= cap;
-            chip.innerHTML = '<span class="qbar"><i style="width:' + pctq + '%' +
-              (full ? ";background:var(--danger)" : "") + '"></i></span>' +
-              t("入库 ", "pulled ") + used + "/" + cap;
-            if (full) chip.style.color = "var(--danger)";
+            if (chip) chip.textContent = "";
+            _quotaLines.push((_acctName[a.account_id] || a.account_id) + " " + used + "/" + cap);
           }).catch(function () {});
       }));
       var tot = $("gm-accts-total");
       if (tot) {
-        if (got && sumCap > 0) {
-          var tp = Math.min(100, Math.round(sumUsed / sumCap * 100));
-          tot.textContent = t("全机群今日入库 ", "fleet pulled today ") + sumUsed + "/" + sumCap + " (" + tp + "%)";
+        if (got && _quotaLines.length) {
+          tot.textContent = t("今日入库 ", "Pulled today ") + _quotaLines.join(" · ");
         } else { tot.textContent = ""; }
       }
     }
@@ -498,6 +538,28 @@
     function selectedAccounts() {
       return Array.prototype.slice.call(document.querySelectorAll(".gm-acct:checked"))
         .map(function (c) { return c.value; });
+    }
+
+    function syncReplyAccount() {
+      var sel = selectedAccounts();
+      var osel = $("gm-out-acct");
+      var hint = $("gm-reply-hint");
+      var pick = $("gm-reply-pick");
+      if (!osel) return;
+      if (!sel.length) {
+        if (hint) {
+          hint.hidden = false;
+          hint.textContent = t("先点一个号，才能看今天可以接的话。",
+            "Pick an account above to see who you can reply to today.");
+        }
+        if (pick) pick.hidden = true;
+        return;
+      }
+      if (hint) hint.hidden = true;
+      if (sel.indexOf(osel.value) < 0) osel.value = sel[0];
+      if (pick) pick.hidden = sel.length < 2;
+      loadGtouch();
+      if (typeof loadOutreach === "function") loadOutreach();
     }
 
     // 选号变化 → 并行列出「所有所选号」的群，合并成并集填进下拉；记录每群被哪些号覆盖。
@@ -645,8 +707,7 @@
           _jobRate[j.job_id] = { pulled: pulled, ts: now };
         } else { delete _jobRate[j.job_id]; }
         return '<div class="job' + jcls + '"><div class="jhd">' +
-          "<div><b>" + esc(j.group_title || j.group_id) + "</b> · " + esc(acct) +
-          " · shard " + (j.shard_index + 1) + "/" + j.num_shards + "</div>" +
+          "<div><b>" + esc(j.group_title || j.group_id) + "</b> · " + esc(acct) + "</div>" +
           "<div>" + jobStatusPill(j.status) +
           (running ? ' <button data-stop="' + esc(j.job_id) + '">' +
             t("停止", "Stop") + "</button>" : "") +
@@ -692,6 +753,9 @@
       }
       if (sel.value) loadMembers();
       else if (groups.length) { sel.selectedIndex = 0; loadMembers(); }
+      var pull = $("gm-pull");
+      if (pull && !preferGid) pull.open = !groups.length;
+      return groups;
     }
 
     // 从任务卡「看成员」直达：确保群在下拉里（缺则刷新）→ 选中 → 加载 → 滚到成员区。
@@ -711,8 +775,9 @@
         $("gm-monly").value = "";
         await loadMembers();
       }
-      var sec = $("t-members");
-      if (sec && sec.scrollIntoView) sec.scrollIntoView({ behavior: "smooth", block: "start" });
+      var gt = $("gm-gtouch");
+      if (gt && gt.scrollIntoView) gt.scrollIntoView({ behavior: "smooth", block: "start" });
+      loadGtouch();
     }
 
     async function loadMembers() {
@@ -732,9 +797,10 @@
         t("（显示 ", " (showing ") + items.length + "）";
       body.innerHTML = items.map(function (m) {
         var name = (m.first_name || "") + (m.last_name ? " " + m.last_name : "");
-        return "<tr><td>" + esc(m.user_id) + "</td><td>" + esc(name) +
+        var who = name || m.username || m.user_id;
+        return "<tr><td><b>" + esc(who) + "</b>" +
           (m.username ? ' <span style="color:var(--dim)">@' + esc(m.username) + "</span>" : "") +
-          "</td><td>" + scoreChip(m.score) + "</td><td>" +
+          '<div class="msg">' + esc(m.user_id) + "</div></td><td>" + scoreChip(m.score) + "</td><td>" +
           (m.spoke ? "✓" : "") + "</td><td>" +
           (m.is_admin ? '<span class="pill adm">admin</span>' : "") + "</td><td>" +
           esc(m.source_account_id) + "</td><td>" + esc(outreachLabel(m.outreach_state)) +
@@ -760,6 +826,54 @@
 
     var _outCache = {};
 
+    function clockFmt(ts) {
+      var n = Number(ts || 0);
+      if (!n) return "";
+      try { return new Date(n * 1000).toLocaleString(); } catch (e) { return ""; }
+    }
+
+    function compareSentence(c) {
+      if (!c) return "";
+      var warm = c.dm_warm || {}, cold = c.dm_cold || {};
+      if (!(warm.sent || cold.sent)) return "";
+      return t(
+        " 近 7 天：先接话再私聊回复率 " + pct(warm.rate) + "（" + (warm.sent || 0) + " 人），冷私聊 " +
+          pct(cold.rate) + "（" + (cold.sent || 0) + " 人）。",
+        " Last 7 days: reply-in-group then DM " + pct(warm.rate) + " (" + (warm.sent || 0) +
+          "), cold DM " + pct(cold.rate) + " (" + (cold.sent || 0) + ").");
+    }
+
+    function statusLine(d) {
+      var left = (d.remaining == null ? 0 : d.remaining);
+      var until = clockFmt(d.hold_until);
+      var when;
+      if (d.hold === "paused") {
+        when = t("这个号已急停，冷私聊和群里接话都先停。", "This account is manually stopped. Cold DMs and group replies both wait.");
+      } else if (d.hold === "flood") {
+        when = t("冷私聊先停" + (until ? "到?" + until : "一天") + "。群里接话还能发。",
+          "Cold DMs wait" + (until ? " until " + until : " a day") + ". Group replies can continue.");
+      } else if (d.hold === "flood_wait") {
+        when = t("发得太密，等到?" + (until || t("那一小段时间", "the short wait")) + " 再发，不用停一整天。",
+          "Sending was too fast. Wait until " + (until || "the short timer") + ", not a full day.");
+      } else if ((d.gap_wait_sec || 0) > 0) {
+        when = t("下一条大约?" + Math.ceil(d.gap_wait_sec / 60) + " 分钟后可以发。",
+          "The next one can go in about " + Math.ceil(d.gap_wait_sec / 60) + " min.");
+      } else if (d.hours && d.hours.ok === false) {
+        when = t("现在不在时段，下一段从 " + (d.hours.start || 0) + ":00 开始。",
+          "Outside the window. Next window starts at " + (d.hours.start || 0) + ":00.");
+      } else {
+        when = t("现在可以发。", "Ready to send.");
+      }
+      var intent = d.intent_configured ? "" : t(
+        " 未按目标客户筛选，只是最近说过话的人。",
+        " Not filtered to target customers; these are just people who spoke recently.");
+      var hash = (d.unhashed > 0)
+        ? t(" 有?" + d.unhashed + " 人还没有私聊凭证，用这个号再提取一次。",
+            " " + d.unhashed + " people have no chat credential; extract again with this account.")
+        : "";
+      return when + t(" 今天还剩 " + left + " 条。", " " + left + " left today.") + intent + compareSentence(d.path_compare) + hash;
+    }
+
     function loadOutreach() {
       var acct = ($("gm-out-acct") && $("gm-out-acct").value) || "";
       var box = $("gm-out-list");
@@ -778,28 +892,7 @@
           }
           var d = r.data || {};
           _outCache = {};
-          var hold = d.hold ? (" · " + (d.hold === "paused"
-            ? t("已急停", "paused") : t("风控冷却中", "flood hold"))) : "";
-          var capTxt = (d.used_today || 0) + "/" + (d.effective_cap || d.cap || 0);
-          if (d.warming_up) {
-            capTxt += t("（新号爬坡", " (warming up") +
-              (d.age_days != null ? t("，第 ", ", day ") + Math.floor(d.age_days) + t(" 天", "") : "") +
-              t("，满 14 天到 ", ", reaches ") + (d.cap || 0) + t("）", " after 14 days)");
-          }
-          var hours = d.hours || {};
-          var hoursTxt = t(" · 时段 ", " · window ") + (hours.start || 0) + ":00–" + (hours.end || 0) + ":00" +
-            (hours.ok === false ? t("（现在不发）", " (closed now)") : "");
-          var g = d.gate;
-          var gateTxt = "";
-          if (g) {
-            gateTxt = t(" · 总发送 ", " · total sends ") + g.used + "/" + g.cap +
-              (g.blocked ? t("（闸门已拦）", " (gate blocked)") : "");
-          }
-          stats.textContent = t("开口 ", "openers ") + capTxt +
-            t(" · 排队 ", " · queued ") + (d.queued || 0) +
-            t(" · 还能排 ", " · room ") + (d.remaining || 0) + hold + hoursTxt + gateTxt +
-            ((d.unhashed > 0) ? t(" · 有 ", " · ") + d.unhashed +
-              t(" 人还没有私聊凭证，用这个号再提取一次", " people have no chat credential; extract again with this account") : "");
+          stats.textContent = statusLine(d);
           renderOutreachMeta(d);
           renderReplied(d);
           renderFollowups(d);
@@ -821,6 +914,75 @@
 
     var _settingsDirty = false;
     var _ageDirty = false;
+    var _personaList = null;
+    var _personaLoading = null;
+    var _personaSyncing = false;
+
+    function loadPersonaList() {
+      if (_personaList) return Promise.resolve(_personaList);
+      if (_personaLoading) return _personaLoading;
+      _personaLoading = api("/api/personas/profiles").then(function (r) {
+        var summary = (r.data && r.data.summary) || [];
+        _personaList = summary.filter(function (s) { return s && s.id; }).map(function (s) {
+          return { id: String(s.id), name: String(s.name || s.id) };
+        });
+        _personaList.sort(function (a, b) {
+          return a.name.localeCompare(b.name, "zh");
+        });
+        return _personaList;
+      }).catch(function () {
+        _personaList = [];
+        return _personaList;
+      });
+      return _personaLoading;
+    }
+
+    function fillPersonaSelect(currentId, currentName) {
+      var sel = $("gm-out-persona-sel");
+      if (!sel) return;
+      loadPersonaList().then(function (list) {
+        var html = '<option value="">' +
+          t("不单独绑定（用默认）", "Use the default") + "</option>";
+        var seen = false;
+        (list || []).forEach(function (p) {
+          if (p.id === currentId) seen = true;
+          html += '<option value="' + esc(p.id) + '">' + esc(p.name) + "</option>";
+        });
+        if (currentId && !seen) {
+          html += '<option value="' + esc(currentId) + '">' +
+            esc(currentName || currentId) + "</option>";
+        }
+        _personaSyncing = true;
+        sel.innerHTML = html;
+        sel.value = currentId || "";
+        _personaSyncing = false;
+      });
+    }
+
+    async function savePersona() {
+      if (_personaSyncing) return;
+      var acctEl = $("gm-out-acct");
+      var sel = $("gm-out-persona-sel");
+      var acct = acctEl ? acctEl.value : "";
+      if (!acct || !sel) return;
+      sel.disabled = true;
+      var r = await api("/api/persona/account-persona", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: "telegram",
+          account_id: acct,
+          profile_id: sel.value || ""
+        })
+      });
+      sel.disabled = false;
+      if (!r.ok) {
+        $("gm-out-persona").textContent = t("人设没绑上：", "Persona not saved: ") +
+          ((r.data && (r.data.detail || r.data.error)) || r.status);
+        return;
+      }
+      loadOutreach();
+    }
 
     // 模式 / 人设+目标 / 今日汇总 / 时段+条数
     function renderOutreachMeta(d) {
@@ -831,23 +993,24 @@
       var autoOpt = mode ? mode.options[2] : null;
       if (autoOpt) {
         var why = { age: t("号未满 14 天", "account under 14 days"),
-                    flood: t("近 7 天撞过风控", "flood limit in last 7 days"),
+                    flood: t("近 7 天冷私聊被限制过", "cold DMs were limited in the last 7 days"),
                     reply_rate: t("近 7 天回复率低于地板", "7-day reply rate below floor") };
         autoOpt.disabled = ae.ok === false && d.mode !== "auto";
         autoOpt.textContent = t("全自动（排队+拟稿+发）", "Fully automatic") +
           (ae.ok === false ? t(" · 不够格：", " · not eligible: ") + (why[ae.reason] || ae.reason) : "");
       }
       var p = d.persona || {}, g = d.goal || {};
-      var pTxt = p.name ? t("人设：", "Persona: ") + p.name : t("人设：账号默认", "Persona: account default");
-      var gTxt = g.name ? t(" · 目标：", " · Goal: ") + g.name : t(" · 目标：未设默认（回复后再挂）", " · Goal: none yet (attached after first reply)");
-      $("gm-out-persona").textContent = pTxt + gTxt;
+      fillPersonaSelect(p.id || "", p.name || "");
+      var gTxt = g.name ? t("目标：", "Goal: ") + g.name : t("目标：未设默认（回复后再挂）", "Goal: none yet (attached after first reply)");
+      $("gm-out-persona").textContent = gTxt;
       var s = d.summary || {};
       var errs = s.errors || {};
       var reasonMap = {
         privacy: t("隐私设置", "privacy"), deactivated: t("账号注销", "deactivated"),
         peer_invalid: t("联系不上", "unreachable"), stop_contact: t("对方拒绝", "asked to stop"),
         operator_skip: t("人工跳过", "skipped by you"), stale_sending: t("发送超时", "send timed out"),
-        opener_rejected: t("文案被拦", "opener rejected"), flood: t("风控", "flood"),
+        opener_rejected: t("文案被拦", "opener rejected"), flood: t("冷私聊被限制", "cold DM limited"),
+        flood_wait: t("发得太密", "sent too fast"),
         inbound_first: t("对方先来找", "they messaged first"),
         gtouch_inbound: t("群里接话后来找", "came after a group reply")
       };
@@ -878,8 +1041,8 @@
       $("gm-out-age-note").textContent =
         t("登进本系统 ", "In this system ") + (ag.registry_days != null ? Math.floor(ag.registry_days) : "?") + t(" 天", " d") +
         (ag.declared_days != null ? t(" · 申报 ", " · declared ") + Math.floor(ag.declared_days) + t(" 天", " d") : "") +
-        t(" · 按大的算每天能开口几个。填大了就少了新号爬坡保护，封号风险由这个号承担；申报的号要在这里发满 10 条才能全自动，撞一次风控申报自动作废",
-          " · the larger one sets the daily ramp. Overstating skips the new-account ramp and the ban risk is this account's; declared accounts need 10 sends here before full auto, and a flood limit voids the declaration");
+        t(" · 每天条数不再按号龄少给。填过号龄也不拦全自动。冷私聊被限制后，申报会作废",
+          " · the daily count no longer shrinks with account age. Declaring an age does not block full auto. A cold-DM limit voids the declaration");
       var manual = (d.mode || "manual") === "manual";
       $("gm-out-approve-all").textContent = manual
         ? t("一键批准今日队列", "Approve whole queue")
@@ -903,11 +1066,14 @@
         ? '<div class="osaid">' + t("TA 在群里说：", "They said in the group: ") + "<q>" + esc(m.last_msg_text) + "</q>" +
           (m.last_msg_ts ? ' <span>' + esc(ago(m.last_msg_ts)) + "</span>" : "") + "</div>"
         : '<div class="osaid">' + t("没抓到 TA 的发言内容", "No message text captured") + "</div>";
+      var why = (m.online ? '<span class="pill ok">' + t("在线", "online") + "</span> " : "") +
+        (m.gtouch_state === "sent" ? '<span class="pill ok">' + t("刚接过话", "replied in the group") + "</span> " : "") +
+        (m.intent > 0 ? '<span class="pill ok" title="' + t("鎸変汉璁剧殑鎰忓悜鍏抽敭璇嶅懡涓?, "matched the persona's intent keywords") + '">' +
+          t("提到 ", "mentioned ") + esc((m.intent_hits || []).join("、")) + "</span> " : "");
       var head = '<div class="ohd"><div><b>' + esc(name || m.user_id) + "</b> " +
         (m.username ? '<span style="color:var(--dim)">@' + esc(m.username) + "</span> " : "") +
         esc(m.group_title || "") + (m.lang_code ? ' <span class="pill tpl">' + esc(m.lang_code) + "</span>" : "") +
-        (m.intent > 0 ? ' <span class="pill ok" title="' + t("按人设的意向关键词命中，意向高的先排", "matched the persona's intent keywords; higher intent is queued first") + '">' +
-          t("意向 ", "intent ") + esc(String(m.intent)) + "：" + esc((m.intent_hits || []).join("、")) + "</span>" : "") +
+        (why ? "<div class=\"msg\">" + why + "</div>" : "") +
         "</div><div>" + (state === "approved" ? '<span class="pill ok">' : '<span class="pill">') +
         esc(outreachLabel(state)) + "</span> " + sourcePill(m.opener_source) +
         (m.opener_variant && m.opener_source === "ai" ? ' <span class="pill" title="' + t("切入方式（A/B）", "opener angle (A/B)") + '">' + esc(variantLabel(m.opener_variant)) + "</span>" : "") +
@@ -970,10 +1136,39 @@
     }
 
     var OUT_NOTE = null;
+    function waitText(data) {
+      if (!data) return "";
+      var kind = data.kind || "";
+      var until = clockFmt(data.hold_until);
+      if (kind === "flood_wait") {
+        var sec = Number(data.wait_sec || 0);
+        var mins = sec ? Math.max(1, Math.ceil(sec / 60)) : 0;
+        return t(
+          "发得太密，大约?" + (mins || "几") + " 分钟后再发" + (until ? "（到 " + until + "）" : "") +
+            "。人还在队列里，不用停一整天。",
+          "Sending was too fast. Try again in about " + (mins || "a few") + " min" +
+            (until ? " (until " + until + ")" : "") + ". They stay in the queue; this is not a full-day stop.");
+      }
+      if (kind === "flood" || kind === "peer_flood") {
+        return t(
+          "冷私聊先停" + (until ? "到?" + until : "一天") + "。群里接话还能发。解除急停清不掉这次等待。",
+          "Cold DMs wait" + (until ? " until " + until : " a day") +
+            ". Group replies can continue. Clearing the manual stop does not clear this.");
+      }
+      return "";
+    }
+
     function outNote(kind) {
       if (!OUT_NOTE) OUT_NOTE = {
         sent: t("已发出。对方回复后会出现在收件箱。", "Sent. A reply shows up in the inbox."),
-        flood: t("这个号触发风控，今天不再开口。", "This account hit a flood limit. No more openers today."),
+        flood: t("冷私聊先停一天。群里接话还能发。解除急停清不掉这次等待。",
+          "Cold DMs stop for a day. Group replies can continue. Clearing the manual stop does not clear this."),
+        peer_flood: t("冷私聊先停一天。群里接话还能发。解除急停清不掉这次等待。",
+          "Cold DMs stop for a day. Group replies can continue. Clearing the manual stop does not clear this."),
+        flood_wait: t("发得太密，只等 Telegram 说的那段时间。人还在队列里。",
+          "Sending was too fast. Wait only as long as Telegram asked. They stay in the queue."),
+        slowmode: t("这条群有慢速限制，这个号的私聊没有因此停掉。",
+          "That group is in slow mode. This account's DMs were not stopped for it."),
         privacy: t("对方不接收陌生人私聊，已标不可达。", "Their privacy blocks this. Marked unreachable."),
         deactivated: t("对方账号不可用，已标不可达。", "That account is gone. Marked unreachable."),
         peer_invalid: t("这个号还联系不上对方，已标不可达。", "This account cannot reach them. Marked unreachable."),
@@ -1161,10 +1356,11 @@
         account_id: acct, group_id: m.group_id, user_id: m.user_id, text: text, confirm: true
       });
       var kind = (r.data && (r.data.detail || r.data.kind)) || "";
-      $("gm-out-stats").textContent = r.ok && r.data && r.data.ok
+      var note = (r.ok && r.data && r.data.ok)
         ? t("已补一句：", "Nudge sent: ") + (r.data.text || "")
-        : (outNote(kind) || outNote(r.data && r.data.kind) || kind || String(r.status));
-      loadOutreach();
+        : (waitText(r.data) || outNote(r.data && r.data.kind) || outNote(kind) || kind || String(r.status));
+      await loadOutreach();
+      $("gm-out-stats").textContent = note;
     }
 
     function pct(v) { return v == null ? "–" : Math.round(v * 100) + "%"; }
@@ -1256,10 +1452,18 @@
       if (!r.ok) { box.innerHTML = '<div class="empty">' + esc((r.data && r.data.detail) || String(r.status)) + "</div>"; return; }
       var d = r.data || {};
       var f = d.funnel || {};
+      var gtouchSent = ((d.gtouch || {}).sent) || 0;
+      if (!(f.sent || f.replied || f.queued || gtouchSent)) {
+        box.innerHTML = '<div class="empty">' + t("还没有在群里接过话。", "No group replies yet.") + "</div>";
+        return;
+      }
       var lat = d.reply_latency || {};
       var srcLabel = { ai: "AI", template: t("模板", "template"), manual: t("手改", "edited"), unknown: "?" };
       var bySrc = (d.by_source || []).map(function (x) { return Object.assign({}, x, { key: srcLabel[x.key] || x.key }); });
-      box.innerHTML =
+      var gt = gtouchBlock(d.gtouch) || ('<div class="funnel"><b>' +
+        t("群里还没有接过话。", "No group replies yet.") + "</b></div>");
+      box.innerHTML = gt +
+        '<div class="msg">' + t("私聊", "Direct messages") + "</div>" +
         '<div class="funnel">' +
           "<span>" + t("入库 ", "members ") + "<b>" + (f.members || 0) + "</b></span><span class='arr'>→</span>" +
           "<span>" + t("排队中 ", "queued ") + "<b>" + (f.queued || 0) + "</b></span><span class='arr'>→</span>" +
@@ -1279,7 +1483,7 @@
           statsTable(t("按人设", "By persona"), d.by_persona, t("人设", "persona")) +
           statsTable(t("按发出小时", "By hour sent"), d.by_hour, "h") +
           (scope === "all" ? statsTable(t("按账号", "By account"), d.by_account, t("账号", "account")) : "") +
-        "</div>" + gtouchBlock(d.gtouch) + wonBlock(d.won) +
+        "</div>" + wonBlock(d.won) +
         ((d.recent_replies || []).length
           ? '<div class="msg" style="margin-top:10px"><b>' + t("最近回音", "Recent replies") + "</b></div>" +
             d.recent_replies.map(function (m) { return replyCard(m, 48, "replied"); }).join("")
@@ -1364,9 +1568,10 @@
         account_id: acct, group_id: m.group_id, user_id: m.user_id, text: text, confirm: true
       });
       var kind = (r.data && (r.data.detail || r.data.kind)) || "";
-      $("gm-out-stats").textContent = outNote(kind) || outNote(r.data && r.data.kind) || kind || String(r.status);
-      loadOutreach();
+      var note = waitText(r.data) || outNote(r.data && r.data.kind) || outNote(kind) || kind || String(r.status);
+      await loadOutreach();
       loadMembers();
+      $("gm-out-stats").textContent = note;
     }
 
     async function stopOutreach() {
@@ -1408,7 +1613,9 @@
 
     function gtNote(kind) {
       var map = {
-        flood: t("撞到 Telegram 风控，这个号今天停止开口和接话", "Hit a Telegram flood limit; this account stops for today"),
+        flood: t("冷私聊会停一天，群里接话还能发", "Cold DMs stop for a day; group replies can continue"),
+        peer_flood: t("冷私聊会停一天，群里接话还能发", "Cold DMs stop for a day; group replies can continue"),
+        flood_wait: t("发得太密，等到点再发，不用停一整天", "Too fast; wait out the short timer, not a full day"),
         slowmode: t("群开着慢速模式，稍后再发", "The group is in slow mode; try again later"),
         group_denied: t("这个号在这个群发不了言，这个群不再列人", "This account cannot post in this group; it will not be listed again"),
         msg_gone: t("TA 那条消息已经没了", "Their message is gone"),
@@ -1449,6 +1656,8 @@
 
     function gtGoto(where) {
       if (where === "extract") {
+        var pull = $("gm-pull");
+        if (pull) pull.open = true;
         var acct = $("gm-out-acct").value;
         var box = Array.prototype.slice.call(document.querySelectorAll(".gm-acct")).filter(function (c) { return c.value === acct; })[0];
         if (box && !box.checked) { box.checked = true; box.dispatchEvent(new Event("change")); }
@@ -1480,6 +1689,12 @@
         t("。逐条看一眼再发；没拟出的自己写一句。", ". Read each before posting; write the rest yourself.");
     }
 
+    function personaSalesHref(d) {
+      var id = d && d.persona && d.persona.id;
+      if (!id) return "/personas";
+      return "/personas#profile=" + encodeURIComponent(id) + "&tab=style&focus=pe-sales-kw";
+    }
+
     function loadGtouch() {
       var acct = ($("gm-out-acct") && $("gm-out-acct").value) || "";
       var box = $("gm-gt-list"), stats = $("gm-gt-stats"), sent = $("gm-gt-sent");
@@ -1488,22 +1703,37 @@
         if (!r.ok) { stats.textContent = (r.data && r.data.detail) || String(r.status); box.innerHTML = ""; return; }
         var d = r.data || {};
         _gtCache = {};
-        stats.textContent = t("今天接话 ", "Group replies today ") + (d.used_today || 0) + "/" + (d.cap || 0) +
+        var left = Math.max(0, (d.cap || 0) - (d.used_today || 0));
+        var headline;
+        if (d.hold === "paused") headline = t("这个号已急停。", "This account is stopped.");
+        else if (d.gap_wait_sec > 0) headline = t("还要等 ", "Wait ") + Math.ceil(d.gap_wait_sec / 60) + t(" 分钟才能接下一条。", " min before the next reply.");
+        else if (d.hours_ok === false) headline = t("现在不在可接话的时段。", "Outside the reply window.");
+        else if (!d.intent_configured) {
+          var pname = (d.persona && d.persona.name) || "";
+          headline = (d.persona && d.persona.id)
+            ? (pname
+              ? t("「", "\"") + pname + t("」还没填目标客户。", "\" has no target customer.")
+              : t("这个人设还没填目标客户。", "This persona has no target customer."))
+            : t("这个号还没绑人设。", "This account has no persona.");
+        }
+        else headline = t("今天还能接 ", "Replies left today: ") + left + t(" 条。", ".");
+        stats.textContent = headline;
+        var more = $("gm-gt-stats-more");
+        if (more) more.textContent = t("今天已接 ", "Replied today ") + (d.used_today || 0) + "/" + (d.cap || 0) +
           t(" · 每群每天最多 ", " · max per group/day ") + (d.group_cap || 0) +
           t(" · 只接 ", " · only messages from the last ") + (d.max_msg_age_hours || 0) + t(" 小时内的发言", " h") +
-          (d.gap_wait_sec > 0 ? t(" · 还要等 ", " · wait ") + Math.ceil(d.gap_wait_sec / 60) + t(" 分钟", " min") : "") +
-          (d.hold ? t(" · 这个号已停", " · account on hold") : "") +
-          (d.hours_ok === false ? t(" · 现在不在时段内", " · outside the window") : "") +
+          (d.hold === "flood_wait" ? t(" · 短时等待到?", " · short wait until ") + (clockFmt(d.hold_until) || "") : "") +
+          (d.dm_hold === "flood" && !d.hold ? t(" · 冷私聊已停，这里还能发", " · cold DMs are stopped; group replies can continue") : "") +
           ((d.persona || {}).name ? t(" · 人设：", " · persona: ") + d.persona.name : "");
         var rows = d.candidates || [];
         if (!rows.length) {
           box.innerHTML = '<div class="empty">' + (d.intent_configured
-            ? t("近 ", "No messages from the last ") + (d.max_msg_age_hours || 48) +
-              t(" 小时没有命中意向关键词的发言。只接最近的话，隔一两天要重新提取一次拿最新发言。",
-                " h match the intent keywords. Only recent messages qualify, so re-extract every day or two to pick up new ones.") +
-              ' <a href="#gm-extract" data-gt-goto="extract">' + t("用这个号去重新提取 →", "Re-extract with this account →") + "</a>"
-            : t("这个号的人设还没填「目标客户」意向关键词，群里接话只回有意向的人。", "This account's persona has no target-customer intent keywords yet; group replies only go to people with intent.") +
-              ' <a href="/personas" target="_blank" rel="noopener">' + t("去人设工作室填（可按行业一键套用）↗", "Fill them in the persona studio (industry presets available) ↗") + "</a>") + "</div>";
+            ? t("杩?", "Nothing to reply to in the last ") + (d.max_msg_age_hours || 48) +
+              t(" 小时没有可接的话。", " h.") +
+              ' <a href="#gm-extract" data-gt-goto="extract">' + t("去拉新人", "Pull more people") + "</a>"
+            : t("填上意向关键词，这里才会列出可以接的人。", "Fill intent keywords and people to reply to will show up here.") +
+              ' <a href="' + esc(personaSalesHref(d)) + '" target="_blank" rel="noopener">' +
+              t("去填写意向关键词", "Fill intent keywords") + "</a>") + "</div>";
         } else {
           box.innerHTML = rows.map(renderGtCard).join("");
         }
@@ -1565,7 +1795,7 @@
       body.confirm = true;
       var s = await postJSON("/api/tg-members/gtouch/send", body);
       var kind = (s.data && s.data.kind) || "";
-      var note = gtNote(kind) || kind;
+      var note = waitText(s.data) || gtNote(kind) || kind;
       if (s.ok && kind === "sent") {
         var hrs = (s.data && s.data.dm_after_hours) || 0;
         note = m.dm_blocked
@@ -1579,8 +1809,8 @@
                   : t("；TA 排着的私聊开场已退回重拟，会接上群里这句，拟好后要重新批准。", "; their queued DM opener was sent back for a redraft that picks up this reply. Approve it again once drafted."))
               : t("。", "."));
       }
-      stats.textContent = s.ok ? note : ((s.data && s.data.detail) || String(s.status));
-      if (s.data && s.data.requeued) loadOutreach(); else loadGtouch();
+      if (s.data && s.data.requeued) await loadOutreach(); else await loadGtouch();
+      stats.textContent = s.ok ? note : (waitText(s.data) || (s.data && s.data.detail) || String(s.status));
     }
 
     function doExport() {
@@ -1610,17 +1840,17 @@
       $("gm-start").addEventListener("click", startExtract);
       $("gm-refresh").addEventListener("click", loadMembers);
       $("gm-export").addEventListener("click", doExport);
-      $("gm-out-acct").addEventListener("change", loadOutreach);
+      $("gm-out-acct").addEventListener("change", function () { loadGtouch(); loadOutreach(); });
       $("gm-out-mode").addEventListener("change", changeMode);
+      $("gm-out-persona-sel").addEventListener("change", savePersona);
       $("gm-out-queue").addEventListener("click", buildOutreachQueue);
       $("gm-out-compose").addEventListener("click", function () { composeAll(false); });
       $("gm-out-approve-all").addEventListener("click", approveAll);
       $("gm-out-stop").addEventListener("click", stopOutreach);
       $("gm-out-resume").addEventListener("click", resumeOutreach);
       $("gm-out-save").addEventListener("click", saveSettings);
-      $("gm-out-stats-btn").addEventListener("click", loadStats);
-      $("gm-out-stats-days").addEventListener("change", function () { if (!$("gm-out-statsbox").hidden) loadStats(); });
-      $("gm-out-stats-scope").addEventListener("change", function () { if (!$("gm-out-statsbox").hidden) loadStats(); });
+      $("gm-out-stats-days").addEventListener("change", loadStats);
+      $("gm-out-stats-scope").addEventListener("change", loadStats);
       ["gm-out-h0", "gm-out-h1", "gm-out-cap"].forEach(function (id) {
         $(id).addEventListener("input", function () { _settingsDirty = true; });
       });
@@ -1628,12 +1858,12 @@
       $("gm-out-age-save").textContent = t("申报", "Save");
       $("gm-out-age").addEventListener("input", function () { _ageDirty = true; });
       $("gm-out-age-save").addEventListener("click", saveAge);
-      $("t-gtouch").textContent = t("② 群里先接话", "2 · Reply in the group first");
+      $("t-gtouch").textContent = t("在群里接话", "Reply in the group");
       $("t-gtouch-l").textContent = t(
-        "用上面选的号，在群里公开回复有意向的人刚说的那句（挂在 TA 那条下面）：先帮上忙，过几个小时再私聊，私信会顺着这件事开口。" +
-        "私聊被隐私挡住的人也只能这样够到。只逐条手动发；每号每天 5 条、每群每天 2 条。",
-        "Using the account picked above, reply publicly to a recent message from someone with intent (threaded under their message): help first, DM a few hours later, and the DM picks up from that reply. " +
-        "It is also the only way to reach people whose privacy settings block DMs. Manual only; 5 per account and 2 per group per day.");
+        "先从这里开始。用上面选的号，在群里公开回复有意向的人刚说的那句（挂在(TA 那条下面）：先帮上忙，过几个小时再私聊、) +
+        "冷私聊被停的时候，这里仍然可以发。只逐条点发，不会自动刷屏；每号每天 5 条、每群每天 2 条。",
+        "Start here. Using the account picked above, reply publicly to a recent message from someone with intent (threaded under their message), then DM a few hours later. " +
+        "This still works when cold DMs are stopped. One confirmation at a time, never an automatic blast; 5 per account and 2 per group per day.");
       $("gm-gt-refresh").textContent = t("刷新", "Refresh");
       $("gm-gt-refresh").addEventListener("click", loadGtouch);
       $("gm-gt-compose-all").addEventListener("click", gtComposeAll);
@@ -1664,6 +1894,7 @@
       loadAccounts();
       loadJobs();
       loadGroups();
+      loadStats();
     }
 
     if (document.readyState === "loading") {
@@ -1671,5 +1902,4 @@
     } else { init(); }
   })();
   </script>
-</body>
-</html>
+{% endblock %}

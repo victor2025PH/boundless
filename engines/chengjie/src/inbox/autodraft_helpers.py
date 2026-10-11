@@ -1296,7 +1296,8 @@ def make_auto_draft_cb(
         try:
             from src.inbox.peer_bot_guard import guard_auto_draft_action
             _pbg_reason, _pbg_soft = guard_auto_draft_action(
-                conv=conv, store=store, config=app_config)
+                conv=conv, store=store, config=app_config,
+                current_text=str(text or ""))
             if _pbg_reason and not _pbg_soft:
                 logger.info(
                     "[AutoDraft] peer_bot_guard 跳过拟稿 cid=%s reason=%s",
@@ -1315,12 +1316,27 @@ def make_auto_draft_cb(
                     "[AutoDraft] peer_bot_guard 预算软停：本轮转人审拟稿 "
                     "cid=%s reason=%s",
                     conv.get("conversation_id"), _pbg_reason)
-            # 守卫放行（含软停：稿照拟）→ 摘旧的硬拦标（只在标在场时落盘）
-            try:
-                from src.inbox.peer_guard_marker import clear as _pg_clear
-                _pg_clear(store, str(conv.get("conversation_id") or ""))
-            except Exception:
-                logger.debug("[AutoDraft] peer_guard 会话标清除失败（忽略）", exc_info=True)
+                # 智聊对聊 / 改写空转：稿照拟，但状态带要告诉坐席「不会自动发出」。
+                # 额度软停仍走下面的清标（人审由档位封顶表达，不占硬拦红条）。
+                _soft_head = str(_pbg_reason or "").split(":", 1)[0]
+                if _soft_head in ("chatx_handshake", "echo_loop"):
+                    try:
+                        from src.inbox.peer_guard_marker import mark as _pg_mark_soft
+                        _pg_mark_soft(store, str(conv.get("conversation_id") or ""),
+                                      reason=str(_pbg_reason), soft=True)
+                    except Exception:
+                        logger.debug("[AutoDraft] peer_guard 软停标写入失败（忽略）",
+                                     exc_info=True)
+            # 守卫放行（含额度软停：稿照拟）→ 摘旧的硬拦标（只在标在场时落盘）。
+            # 智聊握手 / 空转软停刚写过标，不能紧接着清掉。
+            _keep_soft = str(_pbg_reason or "").split(":", 1)[0] in (
+                "chatx_handshake", "echo_loop")
+            if not _keep_soft:
+                try:
+                    from src.inbox.peer_guard_marker import clear as _pg_clear
+                    _pg_clear(store, str(conv.get("conversation_id") or ""))
+                except Exception:
+                    logger.debug("[AutoDraft] peer_guard 会话标清除失败（忽略）", exc_info=True)
         except Exception:
             _pbg_soft = False
             logger.debug(

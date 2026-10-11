@@ -106,6 +106,7 @@
       <div class="gr-kpi"><div class="val" id="kpi-miss">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_miss', "未达成") }}</div></div>
       <div class="gr-kpi"><div class="val" id="kpi-days">—</div><div class="lbl">{{ (i18n or {}).get('goal_rpt_avg_days', "平均达成天数") }}</div></div>
     </div>
+    <div id="gr-excluded" style="display:none;margin:0 0 12px;font-size:.8rem;line-height:1.6;"></div>
 
     <!-- 账号视角 -->
     <div class="gr-card">
@@ -266,7 +267,11 @@ var GR_I18N = {
   chain_fail: {{ ((i18n or {}).get('goal_rpt_chain_fail', "启动失败"))|tojson }},
   trend_title: {{ ((i18n or {}).get('goal_rpt_trend_title', "完成趋势（近 {n} 天）"))|tojson }},
   trend_done: {{ ((i18n or {}).get('goal_rpt_trend_done', "完成"))|tojson }},
-  trend_won: {{ ((i18n or {}).get('goal_rpt_trend_won', "赢单"))|tojson }}
+  trend_won: {{ ((i18n or {}).get('goal_rpt_trend_won', "赢单"))|tojson }},
+  excluded: {{ ((i18n or {}).get('goal_rpt_excluded', "内部对聊不计入完成率：已剔除 {n} 场"))|tojson }},
+  excluded_synthetic: {{ ((i18n or {}).get('goal_rpt_excluded_synthetic', "合成演练"))|tojson }},
+  excluded_internal_peer: {{ ((i18n or {}).get('goal_rpt_excluded_internal_peer', "登记的智聊或演练对"))|tojson }},
+  excluded_chatx_handshake: {{ ((i18n or {}).get('goal_rpt_excluded_chatx_handshake', "握手指纹，对面像另一台智聊"))|tojson }}
 };
 var grPage = 1, grTotal = 0, grPageSize = 25, grSendRow = null, grDebT = null;
 var grSel = {};          // goal_id -> {conversation_id, name}（跨页保持）
@@ -286,6 +291,33 @@ function grStatusBadge(st){
 }
 function grKindTxt(k){ return k==='order'?GR_I18N.kind_order : k==='manual'?GR_I18N.kind_manual : k==='auto'?GR_I18N.kind_auto : '—'; }
 
+function grRenderExcluded(ex){
+  var box = document.getElementById('gr-excluded');
+  if(!box) return;
+  var n = ex && ex.n || 0;
+  if(!n){ box.style.display='none'; box.innerHTML=''; return; }
+  var label = String(GR_I18N.excluded||'').replace('{n}', String(n));
+  box.style.display='block';
+  box.innerHTML = '<button type="button" class="gr-act" id="gr-excluded-btn">'+esc(label)+'</button>'
+    +'<div id="gr-excluded-list" style="display:none;margin-top:6px;"></div>';
+  document.getElementById('gr-excluded-btn').onclick = function(){
+    var list = document.getElementById('gr-excluded-list');
+    if(!list) return;
+    if(list.style.display!=='none'){ list.style.display='none'; return; }
+    list.innerHTML = (ex.rows||[]).map(function(r){
+      var why = GR_I18N['excluded_'+String(r.reason||'')] || '';
+      return '<div><button type="button" class="gr-act" data-gr-x="'+esc(r.conversation_id)+'">'
+        +esc(r.conversation_id)+'</button> '+esc(why)+'</div>';
+    }).join('');
+    list.style.display='block';
+    list.onclick = function(ev){
+      var id = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-gr-x');
+      if(!id) return;
+      try{ sessionStorage.setItem('ws_focus_conv', id); }catch(_){}
+      location.href = '/workspace';
+    };
+  };
+}
 async function grLoad(){
   var days = document.getElementById('f-days').value;
   try{
@@ -309,6 +341,7 @@ async function grLoad(){
     document.getElementById('kpi-active').textContent = t.active!=null?t.active:'—';
     document.getElementById('kpi-miss').textContent = ((t.failed||0)+(t.expired||0))||'—';
     document.getElementById('kpi-days').textContent = t.avg_days_to_done!=null?t.avg_days_to_done:'—';
+    grRenderExcluded(d.excluded_internal);
     grRenderAccounts(d.accounts||[]);
     grRenderTrend(d.trend||[]);
     grRenderHeat(d.heat||{});

@@ -76,7 +76,8 @@ TONE = {
     "manual": "muted", "human": "muted",
 }
 
-ACTIONS = ("resume", "ack", "retry", "confirm_pin", "retranslate", "route_standard", "none")
+ACTIONS = ("resume", "ack", "retry", "confirm_pin", "retranslate", "route_standard",
+           "mark_human", "restore_auto", "none")
 
 _AUTO_MODES = frozenset({"auto_ai"})
 _HUMAN_MODES = frozenset({"review", "multi_choice"})
@@ -90,6 +91,19 @@ def _now(now: Optional[float]) -> float:
 
 
 # ── 六源采集（每源独立 try，返回 None＝无信号）─────────────────────────────
+
+
+def _sweep_parked(store: Any, cid: str) -> bool:
+    """这场的显式档位是启动扫描写成的拟稿人审。没有这行、或来源不是扫描 → 否。"""
+    fn = getattr(store, "get_automation_mode_meta", None)
+    if not callable(fn) or not cid:
+        return False
+    try:
+        meta = fn(cid) or {}
+    except Exception:
+        return False
+    return (str(meta.get("mode") or "") == "review"
+            and str(meta.get("source") or "") == "chatx_sweep")
 
 
 def _src_mode(store: Any, cid: str, platform: str, account_id: str,
@@ -286,13 +300,17 @@ def _src_pacing_hold(worker: Any, cid: str) -> Optional[Dict[str, Any]]:
 def _src_peer_guard(store: Any, cid: str) -> Optional[Dict[str, Any]]:
     """Q-30 C（#312 #314）：peer_bot_guard 硬拦拟稿的会话标（``peer_guard_marker``，autodraft
     跳过处写、放行处清）。reason_code 原样透出（``colleague:<id>`` / ``ops_group:<id>`` / 守卫码），
-    文案键按前缀选。软停（soft）不算——稿照拟、进人审。"""
+    文案键按前缀选。额度软停不算；智聊握手 / 空转软停要上状态带（稿照拟、不自动发）。"""
     try:
         if store is None:
             return None
         from src.inbox import peer_guard_marker as _pg
         rec = _pg.get(store, cid)
-        if not rec or rec.get("soft"):
+        if not rec:
+            return None
+        head, _ident = _pg.split_reason(str(rec.get("reason") or ""))
+        # 额度软停不上红条；智聊握手 / 空转软停要上，否则坐席仍看到「会自动回」。
+        if rec.get("soft") and head not in getattr(_pg, "VISIBLE_SOFT_HEADS", ()):
             return None
         reason = str(rec.get("reason") or "")
         head, ident = _pg.split_reason(reason)
@@ -529,9 +547,11 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
                     source=h["source"], tagged=h["tagged"])
     pg = src["peer_guard"]
     if pg:
-        # 无「我知道了」动作：出路是改名单（设置 › 自动化与风控），不是摘标
+        # 同事 / 运维群 / 空转：出路是改名单或设目标，状态条不给摘标。
+        # 握手指纹：状态条给「这是真人」，走既有 bot-flag 覆写。
+        action = "mark_human" if str(pg.get("kind") or "") == "chatx_handshake" else "none"
         return _set("held", will_send=False, reason_code=str(pg["reason"]),
-                    text_key=str(pg["text_key"]), action="none",
+                    text_key=str(pg["text_key"]), action=action,
                     kind=pg["kind"], id=pg["id"] or None, code=pg["reason"],
                     since_ts=pg["since_ts"], settings_url="/reply-settings#rps-sec-guard")
     sc = src["sidecar"]
@@ -604,6 +624,12 @@ def compute(store: Any, cid: str, *, platform: str = "", account_id: str = "",
     if is_auto:
         return _set("auto", will_send=True, reason_code="mode_auto_ai",
                     caps=mode["caps"])
+    # 扫描把这场收成拟稿人审、更高优先级的拦截已经解除（例如空转在有目标后清掉）
+    # → 状态条给「改回全自动」。坐席自己选的人审不出现这个按钮。
+    if eff == "review" and _sweep_parked(store, cid):
+        return _set("human", will_send=False, reason_code="mode_review",
+                    text_key="inbox.cs.sweep_review", action="restore_auto",
+                    base_mode=mode["base"], effective=eff, caps=mode["caps"])
     return _set("human", will_send=False, reason_code=f"mode_{eff}",
                 base_mode=mode["base"], effective=eff, caps=mode["caps"])
 

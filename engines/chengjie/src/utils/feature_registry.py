@@ -424,7 +424,7 @@ FEATURES: Tuple[Feature, ...] = (
     Feature(
         key="ui_visibility.cockpit", cls="A", slug="uiv_cockpit",
         baseline=True, show=False,
-        note="驾驶舱：工作台顶栏「驾驶舱」入口（/workspace/cockpit，一键接管/交还）"),
+        note="待人工：工作台顶栏「待人工」入口（/workspace/cockpit，一键接管/交还）"),
     # ── B 类：可解锁（依赖齐了可一键开；零依赖 B=未拍板进基线的纯软件功能） ──
     # 2026-09-09 老板决策 D-Q1（#267 KYHGSZ，撤回 D-O4）：班表 A→B **出厂关**。1.0.78 基线把
     # 08:20–01:00 + 「timezone 空＝本机钟」补进每台机器——桌面机在上海、客户在纽约，

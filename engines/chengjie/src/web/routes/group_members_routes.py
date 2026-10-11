@@ -29,8 +29,24 @@ _DEFAULT_DAILY_CAP = 200
 _DEFAULT_SCAN_LIMIT = 3000
 
 
+def _bare_members_html(raw: str) -> str:
+    """``?bare=1`` / 无模板时直出。套了 base.html 的源文件不能把 Jinja 原样送给浏览器。"""
+    if "{% extends" not in raw:
+        return raw
+    import re
+    head = re.search(r"\{% block head %\}(.*?)\{% endblock %\}", raw, re.S)
+    body = re.search(r"\{% block content %\}(.*?)\{% endblock %\}", raw, re.S)
+    style = head.group(1) if head else ""
+    inner = body.group(1) if body else raw
+    return (
+        "<!doctype html>\n<html lang=\"zh\">\n<head>\n"
+        "<meta charset=\"utf-8\">\n<title>群成员提取</title>\n"
+        f"{style}\n</head>\n<body>\n{inner}\n</body>\n</html>\n"
+    )
+
+
 def register_group_members_routes(app, auth_dep, audit_store=None, config_manager=None,
-                                  page_auth=None):
+                                  page_auth=None, templates=None):
     """挂载 Telegram 群成员提取后台 API。``auth_dep``=登录校验；``audit_store``=操作审计（可选）。
 
     ``page_auth`` 给 HTML 管理台页用（未登录 303 去 /login）。缺省回落 ``auth_dep``。
@@ -1102,16 +1118,21 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         _audit(request, "tg_members_outreach_resume", target)
         return {"ok": True, "account_id": target}
 
-    # ── 管理台整页（独立自包含 HTML；号多选/群/过滤/配额 + 任务进度 + 成员表格/导出）──
+    # ── 管理台整页（带模板时套左侧菜单；bare 直出不含 Jinja）──
 
     @app.get("/tools/tg-members", response_class=HTMLResponse)
     async def tg_members_page(request: Request, _=Depends(html_auth)):
-        """群成员提取管理台（独立自包含页）。
+        """群成员提取管理台。
 
-        刻意不 gate enabled——让管理员总能打开页面（未开启时页内探测 quota 得 403 → 显示提示
-        横幅）；写操作 API 各自受 enabled + viewer 门控。返回独立模板原文（无 Jinja 变量，
-        HTMLResponse 直出）；CSRF 安全方法中间件顺带下发 csrf_token cookie 供页内 POST 复用。
+        带模板时套管理台左侧菜单。``?bare=1`` 或没有模板时返回自包含页。
+        刻意不 gate enabled——未开启时页内探测 quota 得 403 并显示提示。
         """
+        bare = str(request.query_params.get("bare") or "") == "1"
+        if templates is not None and not bare:
+            return templates.TemplateResponse(
+                request, "tg_members.html",
+                {"request": request, "active": "tg_members"},
+            )
         from pathlib import Path as _Path
         tpl = _Path(__file__).resolve().parents[1] / "templates" / "tg_members.html"
         try:
@@ -1119,4 +1140,4 @@ def register_group_members_routes(app, auth_dep, audit_store=None, config_manage
         except Exception:
             logger.warning("[group_members] 管理台模板读取失败", exc_info=True)
             raise HTTPException(500, tr(request, "err.gm.store_unavailable"))
-        return HTMLResponse(content=html)
+        return HTMLResponse(content=_bare_members_html(html))

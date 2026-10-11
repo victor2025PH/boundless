@@ -40,6 +40,13 @@ ACTION_STATUSES = ("planned", "consumed", "sent", "skipped", "blocked")
 _DEADLINE_EDIT_RE = re.compile(r"deadline_days:([0-9.]+)->([0-9.]+)")
 
 
+def _customer_and(alias: str = "") -> "tuple[str, list]":
+    """转化读数跳过合成演练号，以及本轮 ``omit_internal_peers`` 点名的对端。"""
+    from src.inbox.customer_metrics import internal_peer_predicate
+    pred, params = internal_peer_predicate(alias)
+    return " AND " + pred, list(params)
+
+
 def _now() -> float:
     return time.time()
 
@@ -540,6 +547,111 @@ class GoalStore:
             return []
         return [self._row_to_goal(r) for r in rows]
 
+    def list_active_on_other_accounts(
+        self,
+        *,
+        platform: str,
+        chat_key: str,
+        account_id: str,
+        limit: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """同一对端在别的号上的进行中目标。只给坐席看摘要，不注入本窗口的回复。"""
+        plat = str(platform or "").strip()
+        ck = str(chat_key or "").strip()
+        acct = str(account_id or "").strip()
+        if not plat or not ck or not acct:
+            return []
+        lim = max(1, min(int(limit or 3), 5))
+        try:
+            rows = self._conn.execute(
+                "SELECT goal_id, account_id, conversation_id, template, title "
+                "FROM goals WHERE platform = ? AND chat_key = ? AND account_id != ?"
+                " AND status = 'active' ORDER BY updated_at DESC LIMIT ?",
+                (plat, ck, acct, lim),
+            ).fetchall()
+        except Exception:
+            return []
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            out.append({
+                "goal_id": str(r["goal_id"] or ""),
+                "account_id": str(r["account_id"] or ""),
+                "conversation_id": str(r["conversation_id"] or ""),
+                "template": str(r["template"] or ""),
+                "title": str(r["title"] or ""),
+            })
+        return out
+
+    def adopt_into_conversation(
+        self,
+        goal_id: str,
+        *,
+        conversation_id: str,
+        platform: str,
+        account_id: str,
+        chat_key: str,
+        now: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """把别的号上同一对端的进行中目标抄到本会话。不搬内部进度字段。"""
+        src = self.get_goal(goal_id)
+        if not src or str(src.get("status") or "") != "active":
+            return None
+        if str(src.get("platform") or "") != str(platform or ""):
+            return None
+        if str(src.get("chat_key") or "") != str(chat_key or ""):
+            return None
+        if str(src.get("account_id") or "") == str(account_id or ""):
+            return None
+        if self.count_active_for_conversation(conversation_id) >= 1:
+            return None
+        raw = src.get("params") if isinstance(src.get("params"), dict) else {}
+        params = {str(k): v for k, v in raw.items() if not str(k).startswith("_")}
+        n = float(now if now is not None else _now())
+        try:
+            remain = float(src.get("deadline_ts") or 0) - n
+            days = remain / 86400.0 if remain > 3600 else 0.0
+        except (TypeError, ValueError):
+            days = 0.0
+        return self.create_goal(
+            conversation_id=conversation_id, platform=platform,
+            account_id=account_id, chat_key=chat_key,
+            template=str(src.get("template") or ""),
+            title=str(src.get("title") or ""), params=params,
+            autonomy=str(src.get("autonomy") or "auto"),
+            deadline_days=days, created_by="sibling_adopt", now=n)
+
+    def excluded_terminal(
+        self,
+        since_ts: float,
+        extra_chat_keys: Optional[List[str]] = None,
+        *,
+        limit: int = 40,
+    ) -> List[Dict[str, Any]]:
+        """窗口内不计入完成率的终态目标：合成号段，或点名的对端。"""
+        keys = [str(k) for k in (extra_chat_keys or []) if str(k or "").strip()][:200]
+        lim = max(1, min(int(limit or 40), 80))
+        where = "chat_key GLOB '990001[0-9][0-9][0-9]'"
+        params: List[Any] = [float(since_ts or 0.0)]
+        if keys:
+            where += " OR chat_key IN (" + ",".join("?" * len(keys)) + ")"
+            params.extend(keys)
+        params.append(lim)
+        try:
+            rows = self._conn.execute(
+                "SELECT conversation_id, chat_key, status FROM goals"
+                " WHERE status IN ('done','failed','expired','cancelled')"
+                " AND done_at >= ? AND (" + where + ")"
+                " ORDER BY done_at DESC LIMIT ?",
+                tuple(params),
+            ).fetchall()
+        except Exception:
+            return []
+        return [{
+            "conversation_id": str(r["conversation_id"] or ""),
+            "chat_key": str(r["chat_key"] or ""),
+            "status": str(r["status"] or ""),
+        } for r in rows]
+
     def summary(self) -> Dict[str, Any]:
         """看板/观测聚合：按状态计数 + 活跃目标按模板分布。绝不抛。"""
         out: Dict[str, Any] = {"by_status": {}, "active_by_template": {}, "total": 0}
@@ -902,14 +1014,15 @@ class GoalStore:
             "profile_fills": {"total": 0, "by_src": {}, "by_track": {}},
         }
         try:
+            omit, omit_p = _customer_and()
             rows = self._conn.execute(
                 "SELECT template, status, COUNT(*) AS n,"
                 " AVG(progress) AS avg_progress,"
                 " AVG(CASE WHEN done_at > 0 THEN (done_at - start_ts) / 86400.0"
                 " END) AS avg_days"
                 " FROM goals WHERE status IN ('done','failed','expired','cancelled')"
-                " AND done_at >= ? GROUP BY template, status",
-                (s,),
+                " AND done_at >= ?" + omit + " GROUP BY template, status",
+                (s, *omit_p),
             ).fetchall()
             for r in rows:
                 tmpl = str(r["template"])
@@ -947,7 +1060,7 @@ class GoalStore:
                     "SELECT template, COUNT(*) AS n FROM goals"
                     " WHERE status = 'done' AND done_at >= ?"
                     " AND (result LIKE 'order:%' OR result LIKE 'manual:%')"
-                    " GROUP BY template", (s,),
+                    + omit + " GROUP BY template", (s, *omit_p),
                 ).fetchall()
                 for r in rows:
                     bt = out["by_template"].setdefault(str(r["template"]), {
@@ -983,7 +1096,7 @@ class GoalStore:
                     "SELECT template, params, start_ts, deadline_ts, status,"
                     " done_at, result FROM goals"
                     " WHERE status IN ('done','failed','expired','cancelled')"
-                    " AND done_at >= ? LIMIT 5000", (s,),
+                    " AND done_at >= ?" + omit + " LIMIT 5000", (s, *omit_p),
                 ).fetchall()
                 for r in rows:
                     try:
@@ -1052,7 +1165,7 @@ class GoalStore:
             rows = self._conn.execute(
                 "SELECT template, milestone_idx, COUNT(*) AS n FROM goals"
                 " WHERE status IN ('done','failed','expired') AND done_at >= ?"
-                " GROUP BY template, milestone_idx", (s,),
+                + omit + " GROUP BY template, milestone_idx", (s, *omit_p),
             ).fetchall()
             for r in rows:
                 bt = out["by_template"].get(str(r["template"]))
@@ -1100,7 +1213,8 @@ class GoalStore:
                 "SELECT goal_id, template, title, status, progress, start_ts,"
                 " done_at FROM goals"
                 " WHERE status IN ('done','failed','expired','cancelled')"
-                " AND done_at >= ? ORDER BY done_at DESC LIMIT 10", (s,),
+                " AND done_at >= ?" + omit + " ORDER BY done_at DESC LIMIT 10",
+                (s, *omit_p),
             ).fetchall()
             out["recent"] = [{
                 "goal_id": str(r["goal_id"]), "template": str(r["template"]),
@@ -1117,7 +1231,7 @@ class GoalStore:
             # site_catalog 的 pains→产品映射与主推序）
             rows = self._conn.execute(
                 "SELECT result FROM goals WHERE status = 'done'"
-                " AND done_at >= ? AND result LIKE 'order:%'", (s,),
+                " AND done_at >= ? AND result LIKE 'order:%'" + omit, (s, *omit_p),
             ).fetchall()
             by_plan: Dict[str, int] = {}
             for r in rows:
@@ -1192,6 +1306,7 @@ class GoalStore:
             # P12 流失×转化：生命周期终态目标 JOIN 画像主因——看「嫌贵的
             # 有没有买回来 / 没用起来的有没有续上」。won 只认 order:/manual:
             # （winback done=回话≠成交，计入 done 但不进 won）。
+            omit_g, omit_gp = _customer_and("g")
             rows = self._conn.execute(
                 "SELECT g.status, g.created_by, g.result, cp.fields"
                 " FROM goals g"
@@ -1200,8 +1315,8 @@ class GoalStore:
                 " WHERE g.created_by IN"
                 " ('retention_auto','winback_auto','reconvert_auto')"
                 " AND g.status IN ('done','failed','expired')"
-                " AND g.done_at >= ?",
-                (s,),
+                " AND g.done_at >= ?" + omit_g,
+                (s, *omit_gp),
             ).fetchall()
             outcomes: Dict[str, Dict[str, Any]] = {}
             for r in rows:
@@ -1241,7 +1356,9 @@ class GoalStore:
             out["deadline_edits"] = self.deadline_edit_outcomes(s)
 
             r = self._conn.execute(
-                "SELECT COUNT(*) FROM goals WHERE status = 'active'").fetchone()
+                "SELECT COUNT(*) FROM goals WHERE status = 'active'" + omit,
+                tuple(omit_p),
+            ).fetchone()
             out["active_now"] = int(r[0]) if r else 0
         except Exception as e:  # noqa: BLE001
             logger.debug("outcome_report failed: %s", e)
@@ -1553,14 +1670,16 @@ class GoalStore:
             return acc[key]
 
         try:
+            omit, omit_p = _customer_and()
             rows = self._conn.execute(
                 "SELECT platform, account_id, status, COUNT(*) AS n,"
                 " AVG(CASE WHEN status='done' AND done_at > 0"
                 "     THEN (done_at - start_ts) / 86400.0 END) AS avg_days"
                 " FROM goals"
                 " WHERE status IN ('done','failed','expired','cancelled')"
-                " AND done_at >= ? GROUP BY platform, account_id, status",
-                (s,),
+                " AND done_at >= ?" + omit
+                + " GROUP BY platform, account_id, status",
+                (s, *omit_p),
             ).fetchall()
             for r in rows:
                 b = _bucket(str(r["platform"]), str(r["account_id"]))
@@ -1571,7 +1690,9 @@ class GoalStore:
 
             rows = self._conn.execute(
                 "SELECT platform, account_id, COUNT(*) AS n FROM goals"
-                " WHERE status = 'active' GROUP BY platform, account_id",
+                " WHERE status = 'active'" + omit
+                + " GROUP BY platform, account_id",
+                tuple(omit_p),
             ).fetchall()
             for r in rows:
                 _bucket(str(r["platform"]), str(r["account_id"]))["active"] = \
@@ -1581,8 +1702,8 @@ class GoalStore:
                 "SELECT platform, account_id, COUNT(*) AS n FROM goals"
                 " WHERE status = 'done' AND done_at >= ?"
                 " AND (result LIKE 'order:%' OR result LIKE 'manual:%')"
-                " GROUP BY platform, account_id",
-                (s,),
+                + omit + " GROUP BY platform, account_id",
+                (s, *omit_p),
             ).fetchall()
             for r in rows:
                 _bucket(str(r["platform"]), str(r["account_id"]))["won"] = \
@@ -1592,9 +1713,9 @@ class GoalStore:
             rows = self._conn.execute(
                 "SELECT platform, account_id, template, COUNT(*) AS n"
                 " FROM goals WHERE status = 'done' AND done_at >= ?"
-                " GROUP BY platform, account_id, template"
+                + omit + " GROUP BY platform, account_id, template"
                 " ORDER BY n DESC",
-                (s,),
+                (s, *omit_p),
             ).fetchall()
             for r in rows:
                 b = _bucket(str(r["platform"]), str(r["account_id"]))
@@ -1602,12 +1723,13 @@ class GoalStore:
                     b["top_template"] = str(r["template"])
 
             # 赢单金额：won_meta 事件按 goal join 回账号（窗口按目标 done_at）
+            omit_g, omit_gp = _customer_and("g")
             rows = self._conn.execute(
                 "SELECT g.platform AS pf, g.account_id AS aid, e.detail AS d"
                 " FROM goal_events e JOIN goals g ON g.goal_id = e.goal_id"
                 " WHERE e.kind = 'won_meta' AND g.status = 'done'"
-                " AND g.done_at >= ?",
-                (s,),
+                " AND g.done_at >= ?" + omit_g,
+                (s, *omit_gp),
             ).fetchall()
             for r in rows:
                 try:
@@ -1685,6 +1807,9 @@ class GoalStore:
         if template:
             where.append("template = ?")
             params.append(str(template))
+        pred, pred_p = _customer_and()
+        where.append(pred[len(" AND "):])
+        params.extend(pred_p)
         cond = " AND ".join(where) or "1=1"
         out: Dict[str, Any] = {"rows": [], "total": 0}
         try:
@@ -1736,25 +1861,27 @@ class GoalStore:
         out = {"done": 0, "failed": 0, "expired": 0, "won": 0,
                "won_amount": 0.0}
         try:
+            omit, omit_p = _customer_and()
             rows = self._conn.execute(
                 "SELECT status, COUNT(*) FROM goals"
                 " WHERE status IN ('done','failed','expired')"
-                " AND done_at >= ? AND done_at < ? GROUP BY status",
-                (float(lo), float(hi))).fetchall()
+                " AND done_at >= ? AND done_at < ?" + omit + " GROUP BY status",
+                (float(lo), float(hi), *omit_p)).fetchall()
             for r in rows:
                 out[str(r[0])] = int(r[1])
             r = self._conn.execute(
                 "SELECT COUNT(*) FROM goals WHERE status = 'done'"
                 " AND done_at >= ? AND done_at < ?"
-                " AND (result LIKE 'order:%' OR result LIKE 'manual:%')",
-                (float(lo), float(hi))).fetchone()
+                " AND (result LIKE 'order:%' OR result LIKE 'manual:%')" + omit,
+                (float(lo), float(hi), *omit_p)).fetchone()
             out["won"] = int(r[0]) if r else 0
+            omit_g, omit_gp = _customer_and("g")
             rows = self._conn.execute(
                 "SELECT e.detail FROM goal_events e"
                 " JOIN goals g ON g.goal_id = e.goal_id"
                 " WHERE e.kind = 'won_meta' AND g.status = 'done'"
-                " AND g.done_at >= ? AND g.done_at < ?",
-                (float(lo), float(hi))).fetchall()
+                " AND g.done_at >= ? AND g.done_at < ?" + omit_g,
+                (float(lo), float(hi), *omit_gp)).fetchall()
             for r in rows:
                 try:
                     amt = json.loads(r[0] or "{}").get("amount")
@@ -1782,10 +1909,11 @@ class GoalStore:
             buckets[day] = {"day": day, "done": 0, "won": 0}
         try:
             since = n - d * 86400.0
+            omit, omit_p = _customer_and()
             rows = self._conn.execute(
                 "SELECT done_at, result FROM goals WHERE status = 'done'"
-                " AND done_at >= ? AND done_at <= ?",
-                (since, n)).fetchall()
+                " AND done_at >= ? AND done_at <= ?" + omit,
+                (since, n, *omit_p)).fetchall()
             for r in rows:
                 day = time.strftime(
                     "%m-%d", time.localtime(float(r["done_at"] or 0)))
@@ -1806,11 +1934,12 @@ class GoalStore:
         """窗口内 done 数按（账号 × 模板）交叉（报表热力矩阵数据源）。绝不抛。"""
         out: Dict[str, Dict[str, int]] = {}
         try:
+            omit, omit_p = _customer_and()
             rows = self._conn.execute(
                 "SELECT platform, account_id, template, COUNT(*) AS n"
                 " FROM goals WHERE status = 'done' AND done_at >= ?"
-                " GROUP BY platform, account_id, template",
-                (float(since_ts or 0.0),)).fetchall()
+                + omit + " GROUP BY platform, account_id, template",
+                (float(since_ts or 0.0), *omit_p)).fetchall()
             for r in rows:
                 acct = f"{r['platform']}:{r['account_id']}"
                 out.setdefault(acct, {})[str(r["template"])] = int(r["n"])

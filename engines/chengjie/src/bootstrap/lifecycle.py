@@ -125,6 +125,9 @@ async def start_assistant(assistant):
             from src.bootstrap.background_tasks import reconcile_dead_peer_marks
             asyncio.create_task(
                 reconcile_dead_peer_marks(assistant), name="dead_peer_reconcile")
+            from src.bootstrap.background_tasks import sweep_live_chatx_holds
+            asyncio.create_task(
+                sweep_live_chatx_holds(assistant), name="chatx_hold_sweep")
 
             # ★ W3-3G / W3-3K：启动 reunion 草稿成功率评估循环（DraftEvalScheduler）
             if assistant.contacts is not None and assistant.contacts.store is not None:

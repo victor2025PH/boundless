@@ -425,6 +425,20 @@ async def run_autoreply(
         logger.info("[peer-guard] skip reason=%s cid=%s:%s:%s line=protocol",
                     _never, platform, account_id, chat_key)
         return _result("never_auto_reply", inbound=text, never_auto_reply=_never)
+    # 对面也是智聊 / 互相改写：协议直发链同样不自动发出（拟稿仍由 B 线按软停转人审）。
+    try:
+        from src.inbox.peer_bot_guard import chatx_or_echo_hold as _cx_hold
+        _cx_reason, _cx_soft = _cx_hold(
+            cfg, platform=platform, account_id=account_id, chat_key=chat_key,
+            text=str(text or ""),
+            conversation_id=f"{platform}:{account_id}:{chat_key}",
+            chat_type=str(payload.get("chat_type") or (_src0 or {}).get("chat_type") or ""))
+    except Exception:
+        _cx_reason, _cx_soft = "", False
+    if _cx_reason:
+        logger.info("[peer-guard] skip reason=%s soft=%s cid=%s:%s:%s line=protocol",
+                    _cx_reason, int(_cx_soft), platform, account_id, chat_key)
+        return _result("chatx_peer_hold", inbound=text, chatx_peer_hold=_cx_reason)
     if _is_group_msg:
         _gmode = ""
         if inbox_mode_fn is not None:
