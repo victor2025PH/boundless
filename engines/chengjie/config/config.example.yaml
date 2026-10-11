@@ -287,7 +287,9 @@ line:
 # WhatsApp Cloud API（官方 Business 通道：合规/高送达/不封号，根治 RPA 封号）
 # 控制台 Webhook URL 填: https://你的域名/wa/webhook（与 webhook_path 一致）。
 # 与 WhatsApp RPA(mode=device)/Baileys(mode=protocol) 可按账号并存；官方走 mode=official。
-# ⚠️ 24h 客服窗口：窗口内自由文本；窗口外（客户超过 24 小时没回复）只能发已审核模板。
+# 个人号 / 协议通道默认全自动自由文本，不需要 Meta 模板。下面的模板只给官方 Cloud，
+# 而且可选：name 留空 = 窗口外不回退模板，进待人工。Cloud 回退代码保留。
+# ⚠️ 24h 客服窗口（仅官方 Cloud）：窗口内自由文本；窗口外只能发已审核模板。
 # 回退是被动的：发送被官方拒为 window_expired 时才改发模板。没有「沉默满 24h」的定时外发。
 whatsapp_cloud:
   enabled: false

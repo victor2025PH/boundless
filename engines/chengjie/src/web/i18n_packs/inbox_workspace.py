@@ -1136,8 +1136,9 @@ ZH = {
         "客户再发则重置；超窗/超条的发送会被平台丢弃。本系统会在用完前自动停发并等客户回复，"
         "且不拆条、不发缓冲话术。这是平台规则，不是本系统限制。",
     "inbox.connect.win_note_whatsapp":
-        "「24 小时客服窗」＝WhatsApp Cloud API 政策：用户最后一次发消息后 24 小时内可自由回复，"
-        "超窗只能发送预先审核的模板消息。平台规则，非本系统限制。",
+        "个人号 / 协议通道全自动自由文本回复，不需要 Meta 模板。"
+        "「24 小时客服窗」只约束官方 Cloud API：用户最后一次发消息后 24 小时内可自由回复，"
+        "超窗只能发送预先审核的模板；模板可选，没配就进待人工。平台规则，非本系统限制。",
     "inbox.connect.win_note_messenger":
         "Messenger 平台政策：标准消息窗为用户最后互动后 24 小时，超窗发送受平台消息标签规则约束。",
     "inbox.connect.win_note_instagram":
@@ -4431,9 +4432,10 @@ EN = {
         "before the quota runs out and waits for the customer, never splits replies into bubbles "
         "and never sends holding text. A platform rule, not a limit of this system.",
     "inbox.connect.win_note_whatsapp":
-        "The “24-hour service window” is WhatsApp Cloud API policy: reply freely within 24 hours "
-        "of the user's last message; outside the window only pre-approved template messages can "
-        "be sent. A platform rule, not a limit of this system.",
+        "Personal and protocol WhatsApp replies in full-auto free text and does not need a Meta "
+        "template. The 24-hour service window applies only to the official Cloud API: reply freely "
+        "within 24 hours of the user's last message; outside it only a pre-approved template can "
+        "be sent, and that template is optional. A platform rule, not a limit of this system.",
     "inbox.connect.win_note_messenger":
         "Messenger platform policy: the standard messaging window is 24 hours after the user's "
         "last interaction; sending outside it is governed by message-tag rules.",

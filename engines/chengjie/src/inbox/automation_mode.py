@@ -91,6 +91,42 @@ def conversation_is_group(store: Any, conversation_id: str) -> bool:
         return False
 
 
+_WA_PERSONAL_MODES = frozenset({"protocol", "device", "web", "personal"})
+
+
+def whatsapp_personal_account(platform: str, account_id: str) -> bool:
+    """非企业 WhatsApp（个人号 / 协议 / 设备 / 网页）。官方 Cloud 的 mode=official 不是。
+
+    注册表没有这一行，或读失败：不猜，调用方保持原档位。
+    """
+    if str(platform or "").strip().lower() != "whatsapp":
+        return False
+    aid = str(account_id or "").strip()
+    if not aid:
+        return False
+    try:
+        from src.integrations.account_registry import get_account_registry
+        row = get_account_registry().get("whatsapp", aid) or {}
+    except Exception:
+        return False
+    return str(row.get("mode") or "").strip().lower() in _WA_PERSONAL_MODES
+
+
+def whatsapp_personal_default_mode(conversation_id: str) -> Optional[str]:
+    """个人号 WhatsApp 未按账号选档时缺省全自动。已选过的档位交给账号层。"""
+    parts = str(conversation_id or "").split(":", 2)
+    if len(parts) < 2 or not whatsapp_personal_account(parts[0], parts[1]):
+        return None
+    try:
+        from src.inbox.account_mode_onboarding import decided_mode
+        decided = decided_mode(parts[0], parts[1])
+        if decided:
+            return str(decided)
+    except Exception:
+        pass
+    return "auto_ai"
+
+
 def global_automation_mode_from_config(config: Optional[Dict[str, Any]]) -> str:
     """读 ``inbox.auto_draft.automation_mode``（缺省 auto_ai）。"""
     mode = str(_auto_draft_cfg(config).get("automation_mode") or "auto_ai").lower()
@@ -182,9 +218,13 @@ def resolve_automation_mode(
         explicit = store.get_automation_mode_if_set(conversation_id)
         if explicit is not None:
             return explicit
-    mode = _account_mode_layer(conversation_id, config)
-    if mode is None:
-        mode = global_automation_mode_from_config(config)
+    channel_mode = whatsapp_personal_default_mode(conversation_id)
+    if channel_mode:
+        mode = channel_mode
+    else:
+        mode = _account_mode_layer(conversation_id, config)
+        if mode is None:
+            mode = global_automation_mode_from_config(config)
     if (mode == "auto_ai"
             and not group_autopilot_exempt(conversation_id, config)
             and conversation_is_group(store, conversation_id)):
@@ -216,6 +256,20 @@ def maybe_bootstrap_automation_mode(
     explicit = store.get_automation_mode_if_set(conversation_id)
     if explicit is not None:
         return explicit
+    channel_mode = whatsapp_personal_default_mode(conversation_id)
+    if channel_mode:
+        if (channel_mode == "auto_ai"
+                and not group_autopilot_exempt(conversation_id, config)
+                and conversation_is_group(store, conversation_id)):
+            return "review"
+        try:
+            from src.inbox.account_mode_onboarding import (
+                cap_unconfirmed_default_persona,
+            )
+            return cap_unconfirmed_default_persona(
+                conversation_id, channel_mode, config)
+        except Exception:
+            return channel_mode
     acct_mode = _account_mode_layer(conversation_id, config)
     if acct_mode is not None:
         # 账号层生效期**不落盘**：账号决策自身持久，会话动态跟随——运营确认
