@@ -28,9 +28,10 @@
 
 紧急关闭：``compliance.send_rate_gate.enabled: false``。任何异常一律放行（fail-open，
 与 send_guard 同口径：坏掉的护栏不得把全部发送卡死），但会打 warning。放行次数记在
-同一份限速库的 ``send_rate_degraded`` 里，重启还在。库打不开时改记在同目录的
-``.degraded`` 计数文件（只存一个整数），重启还在；文件也写不了时只记在本进程。
-日上限不因此放宽。
+同一份限速库的 ``send_rate_degraded`` 里，重启还在；库开着时另按 UTC 日写入
+``send_rate_degraded_day``，并在放下锁之后通知 :func:`register_degraded_hook`。
+库打不开时改记在同目录的 ``.degraded`` 计数文件（只存一个整数），重启还在，
+没有按日表；文件也写不了时只记在本进程。日上限不因此放宽。
 """
 from __future__ import annotations
 
@@ -303,6 +304,10 @@ CREATE TABLE IF NOT EXISTS send_rate_degraded (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     n INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS send_rate_degraded_day (
+    day TEXT PRIMARY KEY,
+    n INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -337,9 +342,33 @@ class SendRateStore:
                 "SELECT n FROM send_rate_degraded WHERE id = 1").fetchone()
         return int(row[0] if row else 0)
 
+    def bump_degraded_day(self, day: str) -> int:
+        """当天 fail-open 次数 +1。不改日发送上限。"""
+        key = str(day or "")[:10]
+        if not key:
+            return 0
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO send_rate_degraded_day (day, n) VALUES (?, 1) "
+                "ON CONFLICT(day) DO UPDATE SET n = n + 1",
+                (key,))
+            row = self._conn.execute(
+                "SELECT n FROM send_rate_degraded_day WHERE day = ?",
+                (key,)).fetchone()
+            self._conn.commit()
+        return int(row[0] if row else 0)
+
+    def degraded_days(self, limit: int = 7) -> list:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT day, n FROM send_rate_degraded_day ORDER BY day DESC LIMIT ?",
+                (max(1, int(limit)),)).fetchall()
+        return [{"day": str(r[0]), "n": int(r[1])} for r in rows]
+
     def reset_degraded(self) -> None:
         with self._lock:
             self._conn.execute("UPDATE send_rate_degraded SET n = 0 WHERE id = 1")
+            self._conn.execute("DELETE FROM send_rate_degraded_day")
             self._conn.commit()
 
     def close(self) -> None:
@@ -489,6 +518,34 @@ def _unlink_degraded_sidecar(path: str) -> None:
 
 _DEGRADED_LOCK = threading.Lock()
 _DEGRADED_COUNT = 0
+_DEGRADED_HOOKS: list = []
+
+
+def register_degraded_hook(fn) -> None:
+    """fail-open 次数增加后调用 ``fn(total, day_count)``。异常吞掉，不改放行。"""
+    if not callable(fn):
+        return
+    with _DEGRADED_LOCK:
+        _DEGRADED_HOOKS.append(fn)
+
+
+def _fire_degraded_hooks(total: int, day_count: int) -> None:
+    for fn in list(_DEGRADED_HOOKS):
+        try:
+            fn(int(total), int(day_count))
+        except Exception:
+            logger.debug("[send-rate-gate] degraded hook failed", exc_info=True)
+
+
+def degraded_trend(limit: int = 7) -> list:
+    """最近若干天的 fail-open 次数。库打不开时没有按日表，返回空列表。"""
+    try:
+        if _store_degraded_sidecar():
+            return []
+        return get_store().degraded_days(limit)
+    except Exception:
+        logger.debug("[send-rate-gate] degraded trend read failed", exc_info=True)
+        return []
 
 
 def _store_degraded_sidecar() -> Optional[str]:
@@ -503,6 +560,7 @@ def note_degraded() -> int:
 
     库打不开时改写旁边的 ``.degraded`` 整数文件（先读再加，不从 1 覆盖历史）。
     文件也写不了时退回本进程计数。仍然放行。不改变任何上限。
+    库开着时另记当天次数，并在放下锁之后通知已注册的 hook。
     不在持有 ``_DEGRADED_LOCK`` 时调用 :func:`get_store`（与 reset 的锁序相反会死锁）。
     """
     global _DEGRADED_COUNT
@@ -521,17 +579,27 @@ def note_degraded() -> int:
                 n = max(_DEGRADED_COUNT, _read_degraded_sidecar(sidecar)) + 1
                 _write_degraded_sidecar(sidecar, n)
                 _DEGRADED_COUNT = n
-                return n
             except Exception:
                 logger.warning("[send-rate-gate] 降级计数文件写失败，只记本进程", exc_info=True)
                 known = _read_degraded_sidecar(sidecar)
                 _DEGRADED_COUNT = max(_DEGRADED_COUNT, known) + 1
-                return _DEGRADED_COUNT
-        if persisted is None:
+                n = _DEGRADED_COUNT
+        elif persisted is None:
             _DEGRADED_COUNT += 1
-            return _DEGRADED_COUNT
-        _DEGRADED_COUNT = max(_DEGRADED_COUNT, persisted)
-        return persisted
+            n = _DEGRADED_COUNT
+        else:
+            _DEGRADED_COUNT = max(_DEGRADED_COUNT, persisted)
+            n = persisted
+    day_n = 0
+    if persisted is not None and not sidecar:
+        try:
+            day_n = int(get_store().bump_degraded_day(
+                time.strftime("%Y-%m-%d", time.gmtime())))
+        except Exception:
+            logger.debug("[send-rate-gate] degraded day bump failed", exc_info=True)
+            day_n = 0
+    _fire_degraded_hooks(n, day_n)
+    return n
 
 
 def degraded_count() -> int:
@@ -574,6 +642,7 @@ def reset_for_tests() -> None:
         _unlink_degraded_sidecar(side)
     with _DEGRADED_LOCK:
         _DEGRADED_COUNT = 0
+        _DEGRADED_HOOKS.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -760,5 +829,5 @@ __all__ = [
     "gate_cfg", "enabled", "classify_origin", "script_daily_cap_for", "origin_to_sent_by", "in_script_scope",
     "set_script_scope", "reset_script_scope", "mark_script_from_request", "SendRateStore",
     "get_store", "reset_for_tests", "check", "record_external", "snapshot",
-    "note_degraded", "degraded_count",
+    "note_degraded", "degraded_count", "degraded_trend", "register_degraded_hook",
 ]

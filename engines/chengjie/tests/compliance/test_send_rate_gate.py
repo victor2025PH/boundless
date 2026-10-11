@@ -213,6 +213,65 @@ def test_check_error_fails_open_and_counts(monkeypatch):
     assert srg.degraded_count() == 0
 
 
+def test_degraded_day_trend_and_hook(monkeypatch):
+    """库开着时按 UTC 日累计 fail-open。hook 在放下锁之后收到累计和当天次数，
+    钩子里读库不会死锁。钩子自己抛错也不改放行。日上限仍是 20。"""
+    seen = []
+
+    def hook(total, day_count):
+        seen.append((total, day_count, list(srg.degraded_trend())))
+
+    def bad(_total, _day_count):
+        raise RuntimeError("hook")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("logic")
+
+    monkeypatch.setattr(srg, "classify_origin", boom)
+    srg.register_degraded_hook(hook)
+    srg.register_degraded_hook(bad)
+    d = srg.check("telegram", "a1", origin="agent")
+    assert d["allowed"] is True and d["degraded"] is True and d["reason"] == "error"
+    d2 = srg.check("telegram", "a1", origin="agent")
+    assert d2["allowed"] is True and d2["degraded_count"] == 2
+    assert [row[0] for row in seen] == [1, 2]
+    assert seen[-1][1] == 2
+    assert seen[-1][2] == srg.degraded_trend()
+    rows = srg.degraded_trend()
+    assert len(rows) == 1 and rows[0]["n"] == 2 and len(rows[0]["day"]) == 10
+    assert srg.DEFAULTS["script_daily_cap"] == 20
+    srg.reset_for_tests()
+    assert srg.degraded_count() == 0
+    assert srg.degraded_trend() == []
+
+
+def test_degraded_sidecar_has_no_day_table(tmp_path, monkeypatch):
+    """库打不开时 hook 仍被通知，但当天次数是 0，趋势为空。仍然放行，上限仍是 20。"""
+    db = tmp_path / "send_rate_gate.db"
+    db.mkdir()
+    monkeypatch.setenv("ZHILIAO_SEND_RATE_DB", str(db))
+    srg.reset_for_tests()
+    seen = []
+
+    def hook(total, day_count):
+        seen.append((total, day_count))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("logic")
+
+    monkeypatch.setattr(srg, "classify_origin", boom)
+    srg.register_degraded_hook(hook)
+    try:
+        d = srg.check("telegram", "a1", origin="agent")
+        assert d["allowed"] is True and d["degraded"] is True and d["degraded_count"] == 1
+        assert seen == [(1, 0)]
+        assert srg.degraded_trend() == []
+        assert srg.DEFAULTS["script_daily_cap"] == 20
+    finally:
+        srg.reset_for_tests()
+        assert srg.degraded_count() == 0
+
+
 def test_degraded_count_persists_across_reopen(tmp_path, monkeypatch):
     """fail-open 次数写在限速库里。关掉进程内单例再读，次数还在。上限仍是 20。"""
     db = tmp_path / "send_rate_gate.db"
