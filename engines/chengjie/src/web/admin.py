@@ -1027,6 +1027,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         "/reply-settings": "reply_settings",
         "/model-keys": "model_keys",
         "/personal-settings": "personal_settings",
+        "/tools/tg-members": "tg_members",
         # 账号资产中心（账号资产保全 P1，2026-08-19）
         "/workspace/assets": "asset_center",
     }
@@ -2035,6 +2036,7 @@ def create_app(config_manager, audit_store=None, boot_ts: float = 0,
         register_group_members_routes(
             app, auth_dep=_api_auth, audit_store=audit_store,
             config_manager=config_manager, page_auth=_page_auth,
+            templates=templates,
         )
     except Exception:
         import logging as _log_gm

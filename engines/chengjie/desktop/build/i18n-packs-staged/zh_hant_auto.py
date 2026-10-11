@@ -5690,9 +5690,9 @@ ZH_HANT = {
     # ── dv_uiv_k_ai_settings_d ──
     'dv_uiv_k_ai_settings_d': '「AI 與轉接設定」頁的「AI 提示詞 & 行為配置」與「人工客服轉接」兩張卡 + 側欄「人工轉接」入口。提示詞隻影響未綁人設的會話（Telegram 主線 / 官網聊天），收件箱與三端 RPA 走人設系統不受其管；頁面 /settings 與深鏈 #prompt / #escalation 仍可直達',
     # ── dv_uiv_k_cockpit ──
-    'dv_uiv_k_cockpit': '駕駛艙',
+    'dv_uiv_k_cockpit': '待人工',
     # ── dv_uiv_k_cockpit_d ──
-    'dv_uiv_k_cockpit_d': '工作台頂欄「駕駛艙」入口（介入佇列 + 一鍵接管/交還）。該頁主動作要跳原生頁，隨「人工操作檯」一併隱藏；佇列裡的四個訊號在收件箱篩選與草稿佇列各有既有入口。頁面 /workspace/cockpit 與 /api/cockpit/overview 仍可直達',
+    'dv_uiv_k_cockpit_d': '工作台頂欄「待人工」入口：列出 AI 搞不定、要人來處理的會話（接管、交還、去處理）。該頁主動作要跳原生頁，隨「人工操作檯」一併隱藏；這幾類會話在收件箱篩選和草稿佇列裡也進得去。頁面 /workspace/cockpit 與 /api/cockpit/overview 仍可直達',
     # ── dv_uiv_k_group_extract ──
     'dv_uiv_k_group_extract': '群成員提取',
     # ── dv_uiv_k_group_extract_d ──
@@ -6326,7 +6326,7 @@ ZH_HANT = {
     'err.gm.not_group': '該會話不是群/超級群，無法提取成員',
     'err.gm.outreach_age': '號齡要填 0–3650 之間的天數（0 = 撤銷申報）',
     'err.gm.outreach_auto_gate_age': '這個號還不夠老（註冊未滿 14 天或天齡不明），先用「批准後自動發」',
-    'err.gm.outreach_auto_gate_declared_unproven': '申報過號齡的號要先在這裡發滿 10 條開口（近 7 天）才能全自動，先用「批准後自動發」',
+    'err.gm.outreach_auto_gate_declared_unproven': '填過號齡不攔全自動',
     'err.gm.outreach_auto_gate_flood': '這個號近 7 天撞過 Telegram 風控，暫不能全自動',
     'err.gm.outreach_auto_gate_reply_rate': '這個號近 7 天開口回覆率低於地板，先改文案/人設再放手',
     'err.gm.outreach_cap': '這個號今天的開口額度用完了',
@@ -7100,6 +7100,10 @@ ZH_HANT = {
     'goal_rpt_done': '已完成',
     # ── goal_rpt_done_rate ──
     'goal_rpt_done_rate': '完成率',
+    'goal_rpt_excluded': '內部對聊不計入完成率：已剔除 {n} 場',
+    'goal_rpt_excluded_synthetic': '合成演練',
+    'goal_rpt_excluded_internal_peer': '登記的智聊或演練對',
+    'goal_rpt_excluded_chatx_handshake': '握手指紋，對面像另一台智聊',
     # ── goal_rpt_empty ──
     'goal_rpt_empty': '該視窗內沒有記錄',
     # ── goal_rpt_extract_stall ──
@@ -10056,7 +10060,16 @@ ZH_HANT = {
     'inbox.goal.hero.hold': '第{day}/{total}天 · 今日讓路',
     'inbox.goal.hero.last_skip': '上輪未按目標推進：{reason}',
     'inbox.goal.hero.last_skip_t': '最近一次 AI 生成時目標沒有進入指令，原因見此。目標卡顯示的天數/進度只是時間推算，不代表 AI 真的在推進。',
-    'inbox.goal.hero.set': '為 TA 設個工作目標 →',
+    'inbox.goal.hero.set': '這場沒有工作目標，自動回覆只會接話 · 設一個 →',
+    'inbox.goal.hero.held_peer': '自動發送已停 · 設一個目標，或確認對方是真人',
+    'inbox.goal.hero.held_echo': '自動發送已停 · 設一個目標，或把檔位改成手動',
+    'inbox.goal.hero.set_btn': '設一個',
+    'inbox.goal.hero.sibling': '另一號已有目標「{title}」',
+    'inbox.goal.hero.sibling_on': '在{account}',
+    'inbox.goal.hero.sibling_tpl': '模板 {template}',
+    'inbox.goal.hero.adopt': '沿用到本會話',
+    'inbox.goal.hero.adopt_confirm': '把「{title}」（{template}，在{account}）沿用到本會話？只複製方向，不搬那邊的進度。',
+    'inbox.goal.hero.adopt_confirm_sales': '這是銷售目標「{title}」（{template}）。從{account}抄到這個支持號後，本窗口會按獲客來聊。只複製方向，不搬進度。確定沿用？',
     'inbox.goal.hint_got_it': '知道了',
     'inbox.goal.hold.emotion': '對方情緒低落，今日讓路',
     'inbox.goal.hold.no_intent': '今日無推進安排',

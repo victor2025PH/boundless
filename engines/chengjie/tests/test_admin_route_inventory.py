@@ -2349,6 +2349,12 @@ _ADDITIONS_2026_10_08_DM_INTEGRATION = """
 """
 _BASELINE += _ADDITIONS_2026_10_08_DM_INTEGRATION
 
+# 2026-10-07 坐席把另一号的进行中目标抄到本会话。向导号钉选已在上面的集成基线里。
+_ADDITIONS_2026_10_07_GOAL_ADOPT = """
+/api/goals/adopt-sibling	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_07_GOAL_ADOPT
+
 
 def _parse_baseline():
     expected = set()

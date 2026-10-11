@@ -500,7 +500,7 @@ TH = {
     # ── brand ──
     'brand.product': 'สนทนาอัจฉริยะ',
     # ── ck ──
-    'ck.nav': 'ห้องนักบิน',
+    'ck.nav': 'รอคนดูแล',
     # ── cs2_inbox_entry_go ──
     'cs2_inbox_entry_go': 'ส่งความห่วงใยไปหนึ่งข้อความ →',
     # ── cs2_inbox_entry_label ──
