@@ -11,7 +11,10 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 from src.inbox.store import AUTOMATION_MODES, _DEFAULT_AUTOMATION_MODE
 
@@ -123,7 +126,7 @@ def whatsapp_personal_default_mode(conversation_id: str) -> Optional[str]:
         if decided:
             return str(decided)
     except Exception:
-        pass
+        logger.debug("[automation] personal whatsapp decided-mode read failed", exc_info=True)
     return "auto_ai"
 
 

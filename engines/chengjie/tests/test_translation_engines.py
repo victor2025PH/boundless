@@ -306,13 +306,24 @@ def test_blank_local_mt_defaults_to_lan_vllm_chatx():
 
 
 def test_config_examples_preset_local_mt():
+    import yaml
     from pathlib import Path
+
+    from src.ai.translation_engines import DEFAULT_LOCAL_MT_BASE_URL, DEFAULT_LOCAL_MT_MODEL
     root = Path(__file__).resolve().parents[1]
-    for rel in ("config/config.example.yaml", "config/config.desktop.min.yaml",
-                "config/lingox.overlay.example.yaml"):
+    for rel in ("config/config.example.yaml", "config/lingox.overlay.example.yaml"):
         text = (root / rel).read_text(encoding="utf-8")
         assert "http://192.168.0.173:8001" in text, rel
         assert "model: chatx" in text, rel
+    seed_text = (root / "config/config.desktop.min.yaml").read_text(encoding="utf-8")
+    assert "192.168." not in seed_text
+    seed = yaml.safe_load(seed_text) or {}
+    mt = ((seed.get("translation") or {}).get("engines") or {}).get("ollama_mt") or {}
+    assert not str(mt.get("base_url") or "").strip()
+    assert not str(mt.get("model") or "").strip()
+    eng = build_engines({"engines": {"order": ["ollama_mt"], "ollama_mt": mt}}, ai_client=None)
+    assert eng[0]._base_url == DEFAULT_LOCAL_MT_BASE_URL
+    assert eng[0]._model == DEFAULT_LOCAL_MT_MODEL
 
 
 def test_build_engines_with_ollama_mt():
