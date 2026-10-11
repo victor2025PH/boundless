@@ -39,12 +39,13 @@ translation:
     protect: []              # 品牌/产品名逐字保留，如 ["LINE","WhatsApp","Shopify"]
   engines:
     # 付费档顺序。免费档把已构建的 ollama_mt / opencc 排到前面。
-    # 地址和模型名由每个部署自己填。不要改成 order: ["ai"] 指望免费档去打云。
+    # 缺省是语言机 173 的 vLLM chatx。可改；不要改成 order: ["ai"] 指望免费档去打云。
     order: ["ollama_mt", "opencc", "ai"]
     timeout_sec: 8
     ollama_mt:
-      base_url: ""           # 本部署地址，例如 http://127.0.0.1:11434（缺则免费档转人工）
-      model: ""              # 本部署模型名，例如 hy-mt2-7b-official:latest
+      base_url: http://192.168.0.173:8001
+      model: chatx
+      api: openai
 
 # ── 4. 坐席工作台入站自动翻译（打开会话即见译文，通译核心体验）──────
 workspace:

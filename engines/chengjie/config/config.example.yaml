@@ -4152,13 +4152,20 @@ translation:
     #        source_lang: "auto"
     #        target_lang: "{target_name}"   # 占位符：{target_lang}/{source_lang}/{target_name}/{source_name}
     # 本地/局域网专用 MT 模型（默认适配腾讯 Hunyuan-MT 官方 prompt：
-    # zh↔xx 用中文指令、xx↔xx 用英文指令）。零 API 成本；缺 base_url/model
-    # 自动跳过，免费档因此转人工。地址和模型名由每个部署自己填，不要写进仓库。
+    # zh↔xx 用中文指令、xx↔xx 用英文指令）。零 API 成本。
+    # 缺省 = 语言机 173 的 vLLM（deploy/machines.json：ollama :11434 已停，
+    # 在线的是 chatx :8001，Qwen3-27B AWQ）。每个部署可改 base_url / model。
+    # 代码里地址和模型都空时也用同一缺省。只填地址不填模型 = 该线路不可用。
+    # 本部署不用本地模型时，把 ollama_mt 从 order 里拿掉（云轻量档就是这样）。
     ollama_mt:
-      base_url: ""                   # 本部署的本地或内网地址，例如 http://127.0.0.1:11434
+      base_url: http://192.168.0.173:8001
       # base_urls:                   # 多端点双活（优先于 base_url）：按序尝试，
-      #   - http://127.0.0.1:11434   # 端点异常进 60s 冷却降权（不剔除）
-      model: ""                      # 本部署的模型名，例如 hy-mt2-7b-official:latest
+      #   - http://192.168.0.173:8001
+      model: chatx
+      api: openai                    # vLLM 走 /v1/chat/completions；原生 Ollama 改 native
+      payload_extra:
+        chat_template_kwargs:
+          enable_thinking: false     # Qwen3 默认思考会把译文吃空
       api_key: "ollama"
       timeout_sec: 10                # 覆盖全局 engines.timeout_sec（冷加载留裕量）
       keep_alive: "30m"              # Ollama 侧模型常驻时长（防频繁冷启动）

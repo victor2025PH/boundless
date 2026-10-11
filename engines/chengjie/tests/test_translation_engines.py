@@ -275,6 +275,46 @@ def test_ollama_mt_base_url_forms():
     assert OllamaMTEngine(["http://a:1", "http://b:2"], "m")._base_url == "http://a:1"
 
 
+def test_blank_local_mt_defaults_to_lan_vllm_chatx():
+    """地址和模型都空 → 173 的 vLLM chatx。只填地址不补模型。显式地址不被盖掉。"""
+    from src.ai.translation_engines import (
+        DEFAULT_LOCAL_MT_API, DEFAULT_LOCAL_MT_BASE_URL, DEFAULT_LOCAL_MT_MODEL,
+    )
+    eng = build_engines(
+        {"engines": {"order": ["ollama_mt"], "ollama_mt": {"base_url": "", "model": ""}}},
+        ai_client=None,
+    )
+    mt = eng[0]
+    assert mt.available is True
+    assert mt._base_url == DEFAULT_LOCAL_MT_BASE_URL
+    assert mt._model == DEFAULT_LOCAL_MT_MODEL
+    assert mt._api == DEFAULT_LOCAL_MT_API
+    assert mt._payload_extra.get("chat_template_kwargs", {}).get("enable_thinking") is False
+
+    missing = build_engines({"engines": {"order": ["ollama_mt"]}}, ai_client=None)
+    assert missing[0]._base_url == DEFAULT_LOCAL_MT_BASE_URL
+    assert missing[0]._model == DEFAULT_LOCAL_MT_MODEL
+
+    custom = build_engines(
+        {"engines": {"order": ["ollama_mt"],
+                     "ollama_mt": {"base_url": "http://127.0.0.1:11434", "model": "hy"}}},
+        ai_client=None,
+    )
+    assert custom[0]._base_url == "http://127.0.0.1:11434"
+    assert custom[0]._model == "hy"
+    assert custom[0]._api == "native"
+
+
+def test_config_examples_preset_local_mt():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("config/config.example.yaml", "config/config.desktop.min.yaml",
+                "config/lingox.overlay.example.yaml"):
+        text = (root / rel).read_text(encoding="utf-8")
+        assert "http://192.168.0.173:8001" in text, rel
+        assert "model: chatx" in text, rel
+
+
 def test_build_engines_with_ollama_mt():
     cfg = {"engines": {
         "order": ["ollama_mt", "ai"],
