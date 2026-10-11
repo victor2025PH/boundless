@@ -65,7 +65,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "toggle": "English",
         "toast_title": "机房手机异常",
         "recovered": "已恢复：{items}",
-        "hide_hint": "关闭窗口后留在托盘；有新的异常会再弹出来",
+        "hide_hint": "关闭或最小化后留在右下角托盘（双击托盘图标可再打开）；有新的异常会自动弹出来",
+        "tray_btn": "收到托盘",
         "refresh_hint": "名单会自动更新",
         "reason_offline": "离线",
         "reason_unauthorized": "未授权",
@@ -105,7 +106,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "toggle": "中文",
         "toast_title": "Room phone alert",
         "recovered": "Recovered: {items}",
-        "hide_hint": "Closing hides this window to the tray. It opens again when a phone fails.",
+        "hide_hint": "Closing or minimizing keeps this in the tray (double-click the tray icon to reopen). It pops up again on new problems.",
+        "tray_btn": "Hide to tray",
         "refresh_hint": "This list updates automatically",
         "reason_offline": "Offline",
         "reason_unauthorized": "Unauthorized",
@@ -246,30 +248,57 @@ $form = New-Object System.Windows.Forms.Form
 $form.Text = 'ChatX'
 $form.TopMost = $true
 $form.ShowInTaskbar = $true
-$form.Size = New-Object System.Drawing.Size(440, 390)
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+$form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10)
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
+$form.ClientSize = New-Object System.Drawing.Size(480, 420)
 $form.StartPosition = 'CenterScreen'
 $form.MinimizeBox = $true
 $form.MaximizeBox = $false
+$form.Padding = New-Object System.Windows.Forms.Padding(16)
 
 $pcLabel = New-Object System.Windows.Forms.Label
-$pcLabel.Location = New-Object System.Drawing.Point(12, 10)
-$pcLabel.Size = New-Object System.Drawing.Size(400, 44)
+$pcLabel.Location = New-Object System.Drawing.Point(16, 14)
+$pcLabel.Size = New-Object System.Drawing.Size(448, 44)
+$pcLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 10, [System.Drawing.FontStyle]::Bold)
 $form.Controls.Add($pcLabel)
 
 $list = New-Object System.Windows.Forms.ListBox
-$list.Location = New-Object System.Drawing.Point(12, 58)
-$list.Size = New-Object System.Drawing.Size(400, 200)
+$list.Location = New-Object System.Drawing.Point(16, 62)
+$list.Size = New-Object System.Drawing.Size(448, 236)
+$list.IntegralHeight = $false
+$list.DrawMode = [System.Windows.Forms.DrawMode]::OwnerDrawFixed
+$list.ItemHeight = 26
+$list.add_DrawItem({
+  param($sender, $e)
+  if ($e.Index -lt 0) { return }
+  $e.DrawBackground()
+  $txt = [string]$sender.Items[$e.Index]
+  $f = $sender.Font
+  if (-not $txt.StartsWith('  ')) { $f = New-Object System.Drawing.Font($sender.Font, [System.Drawing.FontStyle]::Bold) }
+  $r = New-Object System.Drawing.RectangleF(($e.Bounds.X + 6), ($e.Bounds.Y + 3), ($e.Bounds.Width - 8), ($e.Bounds.Height - 4))
+  $br = New-Object System.Drawing.SolidBrush($e.ForeColor)
+  $e.Graphics.DrawString($txt, $f, $br, $r)
+  $br.Dispose()
+})
 $form.Controls.Add($list)
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Location = New-Object System.Drawing.Point(12, 264)
-$hint.Size = New-Object System.Drawing.Size(400, 36)
+$hint.Location = New-Object System.Drawing.Point(16, 306)
+$hint.Size = New-Object System.Drawing.Size(448, 48)
+$hint.ForeColor = [System.Drawing.Color]::DimGray
 $form.Controls.Add($hint)
 
 $btn = New-Object System.Windows.Forms.Button
-$btn.Location = New-Object System.Drawing.Point(12, 308)
-$btn.Size = New-Object System.Drawing.Size(120, 28)
+$btn.Location = New-Object System.Drawing.Point(16, 366)
+$btn.Size = New-Object System.Drawing.Size(130, 36)
 $form.Controls.Add($btn)
+
+$trayBtn = New-Object System.Windows.Forms.Button
+$trayBtn.Location = New-Object System.Drawing.Point(334, 366)
+$trayBtn.Size = New-Object System.Drawing.Size(130, 36)
+$trayBtn.Text = 'Tray'
+$form.Controls.Add($trayBtn)
 
 $notify = New-Object System.Windows.Forms.NotifyIcon
 $notify.Visible = $true
@@ -294,6 +323,7 @@ function Update-View {
     $form.Text = $title
     if ($title.Length -gt 63) { $notify.Text = $title.Substring(0, 63) } else { $notify.Text = $title }
     $btn.Text = Txt $snap $script:lang 'toggle'
+    $trayBtn.Text = Txt $snap $script:lang 'tray_btn'
     $hint.Text = Txt $snap $script:lang 'hide_hint'
     $list.Items.Clear()
     $pcText = ''
@@ -412,6 +442,12 @@ $form.add_FormClosing({
     $e.Cancel = $true
     $form.Hide()
   }
+})
+
+$trayBtn.add_Click({ $form.Hide() })
+
+$form.add_Resize({
+  if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) { $form.Hide() }
 })
 
 $notify.add_DoubleClick({
