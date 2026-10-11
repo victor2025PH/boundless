@@ -1064,14 +1064,11 @@ class AIClient(LoggerMixin):
     def _paid_ai_blocked_after_local_miss(
         self, context: Optional[Dict[str, Any]], wallet_empty: bool,
     ) -> bool:
-        """对客回复在余额用尽且免费档守卫开着时，本地没有结果就不打付费云端。
+        """余额用尽且免费档守卫开着时，本地没有结果就不打付费云端。
 
-        工具调用（``_tool_call`` / ``_bare_system``）保持付费回落：它们不是对客那句。
-        legacy（``translation.free_tier_zero_cost`` 关）也保持回落。余额还在的付费档不进这里。
+        对客回复、工具调用（``_tool_call``）和裸系统生成（``_bare_system``）同一条。
+        legacy（``translation.free_tier_zero_cost`` 关）仍允许付费回落。余额还在的付费档不进这里。
         """
-        ctx = context or {}
-        if ctx.get("_tool_call") or ctx.get("_bare_system"):
-            return False
         try:
             from src.ai.translation_engines import (
                 block_paid_when_local_miss,
@@ -1180,8 +1177,8 @@ class AIClient(LoggerMixin):
 
         # 2026-08-19 Token enforce（P6）：钱包耗尽（曾注资且余额≤0）+ enforce 开 →
         # 先走本地兜底。本地有结果就用（免费路径）。本地没有结果时：
-        # 免费档守卫开（缺省 enforce）且这是对客回复 → 本轮不回复，不改打付费云端。
-        # legacy 才保留付费回落。工具调用不在这句客户口径里，仍可回落。
+        # 免费档守卫开（缺省 enforce）→ 本轮不回复，不改打付费云端。
+        # 对客回复、工具调用、裸系统生成同一条。legacy 才保留付费回落。
         # 熔断开路时：守卫开则只试本地；守卫关才走备用云 Key。
         _wallet_empty_ai = False
         if not _route_strict:

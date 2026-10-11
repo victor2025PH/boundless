@@ -1284,10 +1284,11 @@ def free_tier_blocks_paid_fallback(config: Any = None) -> bool:
 def block_paid_when_local_miss(
     *, wallet_empty: bool, guard: bool, customer_facing: bool,
 ) -> bool:
-    """余额用尽、守卫开、且这是对客回复：本地没有结果时不许改打付费接口。
+    """余额用尽且守卫开：本地没有结果时不许改打付费接口。
 
-    工具调用（``customer_facing=False``）和余额还在的付费档保持原路径。
-    ``guard=False`` 是 legacy 逃生口，允许付费回落。
+    对客回复、工具调用和裸系统生成都由调用方把 ``customer_facing`` 标成 True。
+    ``customer_facing=False`` 仍放行（留给明确的非本路径）。
+    ``guard=False`` 是 legacy 逃生口，允许付费回落。余额还在时不拦。
     """
     return bool(wallet_empty and guard and customer_facing)
 
