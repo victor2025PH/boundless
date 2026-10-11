@@ -270,7 +270,7 @@ def login_default_mode(platform: str, account_id: str) -> Optional[str]:
         if whatsapp_personal_account(platform, account_id):
             return None
     except Exception:
-        pass
+        logger.debug("[login-gate] personal whatsapp check failed", exc_info=True)
     rec = _load_state().get("accounts", {}).get(account_key(platform, account_id)) or {}
     login_ts = _f(rec, "login_ts")
     if login_ts <= 0:
