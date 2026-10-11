@@ -183,6 +183,21 @@ def test_queue_composes_dedups_and_sorts():
     assert len(d1) == 1 and d1[0]["kind"] == "draft_pending"
     assert q["counts"]["needs_human"] == 1
     assert all(v == "ok" for v in q["sources"].values())
+    assert q["scan_truncated"] is False
+
+
+def test_needs_human_reason_and_scan_window():
+    """卡片带原因码（crisis 前缀收成 crisis）；扫满 scan_limit 要标截断。"""
+    store = _FakeStore()
+    store.convs = [_conv("telegram:a:h1"), _conv("telegram:a:h2")]
+    store.tagged = [_conv("telegram:a:h1", name="老王")]
+    store.get_handoff_meta = lambda cid: (
+        {"reason": "crisis:self_harm"} if cid.endswith("h1") else {})
+    q = ck.collect_intervention_queue(
+        store, {"inbox": {"cockpit": {"scan_limit": 2}}}, now=NOW)
+    h1 = next(i for i in q["items"] if i["conversation_id"].endswith("h1"))
+    assert h1["handoff_reason"] == "crisis"
+    assert q["scan_truncated"] is True
 
 
 def test_waiting_exclusions_and_age_window():

@@ -27,6 +27,19 @@ logger = logging.getLogger("src.companion.goals.defaults")
 KV_PREFIX = "goals:default:"
 CREATED_BY_ACCOUNT = "account_default"
 CREATED_BY_PERSONA = "persona_default"
+CREATED_BY_SUPPORT = "builtin_support"
+#: 支持号没有账号/人设默认目标时的兜底。只挂 bug_intake.support_accounts 里的号，
+#: 不给销售号、陪伴号硬套成交目标。
+SUPPORT_GOAL_NOTE = "把对方这次要办的事答清楚；购买、报价、开通转交销售。不闲聊，不把对方的话换个说法还回去。"
+SUPPORT_GOAL_SPEC: Dict[str, Any] = {
+    "template": "custom",
+    "params": {"note": SUPPORT_GOAL_NOTE},
+    "autonomy": "auto",
+    "days": 7.0,
+    "title": "把问题答清楚",
+    "enabled": True,
+    "scope": "builtin_support",
+}
 #: 每账号每日自动挂上限（跨重启稳：按 created_by 进库计数）
 MAX_ATTACH_PER_DAY = 60
 #: 存量预览默认上限
@@ -159,6 +172,19 @@ def list_defaults(inbox_store: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _is_support_account(cfg_root: Any, account_id: str) -> bool:
+    """报障配置里的支持号。未配置或解析失败 → False，绝不误挂。"""
+    acct = str(account_id or "").strip()
+    if not acct:
+        return False
+    try:
+        from src.ops.bug_intake import parse_cfg
+        root = cfg_root if isinstance(cfg_root, dict) else {}
+        return acct in set(parse_cfg(root).get("support_accounts") or ())
+    except Exception:
+        return False
+
+
 def _conv_persona_id(user_context: Optional[Dict[str, Any]], chat_key: str) -> str:
     uc = user_context or {}
     try:
@@ -219,6 +245,74 @@ def _create(store: Any, spec: Dict[str, Any], *, conversation_id: str, platform:
         deadline_days=days, created_by=created_by, now=now)
 
 
+def on_conversation_goal(
+    goal_store: Any, inbox_store: Any, *, conversation_id: str,
+    platform: str = "", account_id: str = "", chat_key: str = "",
+) -> None:
+    """这场已经有进行中的目标。
+
+    补上群里问过的原话（已有目标不再只在新建时写一次）。
+    清掉空转粘性，让状态条能给出「改回全自动」。不改档位。
+    """
+    cid = str(conversation_id or "").strip()
+    if goal_store is None or not cid:
+        return
+    try:
+        if int(goal_store.count_active_for_conversation(cid) or 0) < 1:
+            return
+    except Exception:
+        return
+    if str(platform or "").lower() == "telegram" and account_id and chat_key:
+        _backfill_group_question(
+            goal_store, conversation_id=cid, account_id=str(account_id),
+            chat_key=str(chat_key))
+    if inbox_store is None:
+        return
+    try:
+        from src.inbox.peer_bot_guard import clear_echo_hold
+        clear_echo_hold(inbox_store, cid)
+    except Exception:
+        logger.debug("[goal-default] 清空转粘性失败", exc_info=True)
+    try:
+        from src.inbox import peer_guard_marker as marker
+        rec = marker.get(inbox_store, cid) or {}
+        head, _ident = marker.split_reason(str(rec.get("reason") or ""))
+        if head == "echo_loop":
+            marker.clear(inbox_store, cid)
+    except Exception:
+        logger.debug("[goal-default] 清空转状态带失败", exc_info=True)
+
+
+def _backfill_group_question(
+    goal_store: Any, *, conversation_id: str, account_id: str, chat_key: str,
+) -> bool:
+    """进行中的目标还没有「你在群里问过」时，补进备注。已有则不动。"""
+    try:
+        from src.companion.group_member_outreach import outreach_context_note
+        ctx = outreach_context_note(account_id, chat_key)
+    except Exception:
+        return False
+    if "你在群里问过" not in str(ctx or ""):
+        return False
+    try:
+        goal = goal_store.find_active_goal(conversation_id=conversation_id)
+    except Exception:
+        return False
+    if not goal:
+        return False
+    params = dict(goal.get("params") or {})
+    own = str(params.get("note") or "").strip()
+    if "你在群里问过" in own:
+        return False
+    # 引语放前面：提示词里的【背景】只留开头 80 字，后补会被截掉。
+    params["note"] = f"{ctx}；{own}" if own else ctx
+    try:
+        return bool(goal_store.update_goal_fields(goal["goal_id"], params=params))
+    except Exception:
+        logger.debug("[goal-default] 回填群问失败", exc_info=True)
+        return False
+
+
 def maybe_attach_default_goal(
     store: Any, cfg_root: Any, *, platform: str, chat_key: str, account_id: str = "",
     conversation_id: str = "", user_context: Optional[Dict[str, Any]] = None,
@@ -232,8 +326,16 @@ def maybe_attach_default_goal(
         conv_id = str(conversation_id or "").strip()
         if not conv_id and platform and account_id and chat_key:
             conv_id = f"{platform}:{account_id}:{chat_key}"
+        on_conversation_goal(
+            store, inbox_store, conversation_id=conv_id, platform=platform,
+            account_id=account_id, chat_key=chat_key)
         pid = _conv_persona_id(uc, chat_key)
         spec = get_default(inbox_store, platform=platform, account_id=account_id, persona_id=pid)
+        builtin_support = False
+        if not spec and _is_support_account(cfg_root, account_id):
+            spec = dict(SUPPORT_GOAL_SPEC)
+            spec["params"] = dict(SUPPORT_GOAL_SPEC["params"])
+            builtin_support = True
         if not spec:
             return None
         from src.companion.goals.templates import get_template
@@ -254,7 +356,10 @@ def maybe_attach_default_goal(
                             platform, account_id or "-", conv_id, why)
             return None
         n = float(now if now is not None else time.time())
-        created_by = CREATED_BY_ACCOUNT if spec.get("scope") == "account" else CREATED_BY_PERSONA
+        if builtin_support:
+            created_by = CREATED_BY_SUPPORT
+        else:
+            created_by = CREATED_BY_ACCOUNT if spec.get("scope") == "account" else CREATED_BY_PERSONA
         if store.count_created_by_since(created_by, _day_start(n)) >= MAX_ATTACH_PER_DAY:
             logger.info("[goal-default] account=%s:%s conv=%s attached=0 reason=daily_cap",
                         platform, account_id or "-", conv_id)
@@ -270,6 +375,9 @@ def maybe_attach_default_goal(
         goal = _create(store, spec, conversation_id=conv_id, platform=platform,
                        account_id=account_id, chat_key=chat_key, created_by=created_by, now=n)
         if goal is not None:
+            on_conversation_goal(
+                store, inbox_store, conversation_id=conv_id, platform=platform,
+                account_id=account_id, chat_key=chat_key)
             try:
                 from src.companion.goals.stats import get_goal_stats
                 get_goal_stats().record_created()

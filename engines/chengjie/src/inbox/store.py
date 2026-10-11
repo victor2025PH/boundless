@@ -4098,6 +4098,41 @@ class InboxStore:
         return {str(r["cid"]): {"direction": str(r["direction"] or "in"),
                                 "ts": float(r["ts"] or 0)} for r in rows}
 
+    def list_unanswered_private(
+        self, *, older_than_ts: float, limit: int = 1000,
+    ) -> Dict[str, Any]:
+        """最后一条是客户说的、且不新于 ``older_than_ts`` 的未归档私聊。
+
+        给待人工的「客户在等」。不走「最近 N 个会话」窗口——等得越久的人
+        ``last_ts`` 越老，正好被那个窗口丢掉。按末条时间从新到旧，最多
+        ``limit`` 条；多出来的记 ``truncated``，调用方可以说「还有更早的没列进来」。
+        超过 3 天的也返回，由页面折进历史积压，不在这里丢。
+        """
+        lim = max(1, min(int(limit or 1000), 2000))
+        sql = (
+            "SELECT c.conversation_id AS conversation_id, c.platform AS platform, "
+            "c.account_id AS account_id, c.chat_key AS chat_key, "
+            "c.chat_type AS chat_type, c.display_name AS name, "
+            "c.last_text AS last_msg, c.last_ts AS last_ts, c.unread AS unread, "
+            "c.last_read_ts AS last_read_ts, "
+            "m.ts AS wait_ts, m.text AS inbound_text, m.media_type AS inbound_media "
+            "FROM messages m "
+            "JOIN (SELECT conversation_id, MAX(ts) AS mts FROM messages "
+            "      GROUP BY conversation_id) x "
+            "  ON m.conversation_id = x.conversation_id AND m.ts = x.mts "
+            "JOIN conversations c ON c.conversation_id = m.conversation_id "
+            "LEFT JOIN conversation_meta meta "
+            "  ON meta.conversation_id = c.conversation_id "
+            "WHERE m.direction = 'in' AND m.ts > 0 AND m.ts <= ? "
+            "  AND c.chat_type NOT IN ('group', 'channel', 'room') "
+            "  AND COALESCE(meta.archived, 0) = 0 "
+            "ORDER BY m.ts DESC LIMIT ?"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, (float(older_than_ts), lim + 1)).fetchall()
+        items = [dict(r) for r in rows[:lim]]
+        return {"items": items, "truncated": len(rows) > lim}
+
     def last_inbound_ts_map(
         self, conversation_ids: Optional[List[str]] = None,
     ) -> Dict[str, float]:

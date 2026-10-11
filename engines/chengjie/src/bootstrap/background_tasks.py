@@ -1285,6 +1285,30 @@ async def reconcile_dead_peer_marks(assistant) -> None:
         assistant.logger.debug("dead-peer 存量核销跳过", exc_info=True)
 
 
+async def sweep_live_chatx_holds(assistant) -> None:
+    """启动后按最近私聊往前翻：已经在智聊对聊或改写空转的，收成人审并写状态带。"""
+    try:
+        await asyncio.sleep(25)
+        store = getattr(assistant, "inbox_store", None)
+        if store is None:
+            return
+        cfg = getattr(getattr(assistant, "config", None), "config", None) or {}
+        from src.inbox.peer_bot_guard import sweep_live_chatx_holds as _sweep
+        out = await asyncio.to_thread(_sweep, store, config=cfg)
+        held = list(out.get("held") or [])
+        if not held:
+            return
+        from src.inbox.peer_guard_marker import mark as _mark
+        for item in held:
+            _mark(store, str(item.get("conversation_id") or ""),
+                  reason=str(item.get("reason") or ""), soft=bool(item.get("soft")))
+        assistant.logger.info(
+            "[peer-guard] 存量扫描 checked=%s held=%s",
+            out.get("checked", 0), len(held))
+    except Exception:
+        assistant.logger.debug("[peer-guard] 存量扫描跳过", exc_info=True)
+
+
 async def episodic_backfill_periodic(assistant):
     """可选：按间隔补全情景记忆缺失向量（memory.vector.backfill_periodic）。"""
     try:

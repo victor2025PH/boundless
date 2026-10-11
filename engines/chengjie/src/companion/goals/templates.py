@@ -597,6 +597,21 @@ def get_template(template_id: str) -> Optional[Dict[str, Any]]:
     return TEMPLATES.get(str(template_id or "").strip())
 
 
+def describe_sibling(
+    row: Dict[str, Any], *, support_account: bool, lang: str = "zh",
+) -> Dict[str, Any]:
+    """给沿用条补上模板名。支持号抄到销售模板时带一句提醒，仍由坐席确认。"""
+    out = dict(row or {})
+    tmpl = get_template(str(out.get("template") or "")) or {}
+    en = str(lang or "").lower().startswith("en")
+    out["template_name"] = str(
+        tmpl.get("name_en" if en else "name_zh") or out.get("template") or "")
+    out["template_kind"] = str(tmpl.get("kind") or "")
+    out["sales_on_support"] = bool(
+        support_account and out["template_kind"] == "conversion")
+    return out
+
+
 def list_templates(*, client_hide: bool = False,
                    business_domain: str = "") -> List[Dict[str, Any]]:
     """API/UI 消费的公开形状（含 id；不含 intents 内部池）。

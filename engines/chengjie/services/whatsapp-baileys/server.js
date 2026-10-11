@@ -31,6 +31,7 @@ import {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  Browsers,
   downloadMediaMessage,
   proto,
 } from "@whiskeysockets/baileys";
@@ -1166,6 +1167,7 @@ async function _startLoginInner(loginId, proxyUrl) {
     version,
     auth: state,
     printQRInTerminal: false,
+    ...(credsAccountId ? {} : { browser: Browsers.macOS("Chrome") }),
     // 诊断：socket 内部日志默认 silent（生产降噪）；排查掉线时用 WA_SOCK_LOG_LEVEL=debug 起服务，
     // 即可看到 Baileys 的 stream:error / connection close 的真实原因码（401/428/440/515…）。
     logger: pino({ level: process.env.WA_SOCK_LOG_LEVEL || "silent" }),
@@ -1697,6 +1699,20 @@ app.get("/login/:id/status", (req, res) => {
     hint_code: _pair.hint_code,
     reason_class: (_lastReason.get(req.params.id) || {}).cls || "",
   });
+});
+
+
+app.post("/login/:id/pair", async (req, res) => {
+  const entry = sessions.get(req.params.id);
+  if (!entry || !entry.sock) return res.status(404).json({ ok: false, error: "no session" });
+  const phone = String((req.body && req.body.phone) || "").replace(/\D/g, "");
+  if (phone.length < 8 || phone.length > 15) return res.status(400).json({ ok: false, error: "bad phone" });
+  try {
+    const code = await entry.sock.requestPairingCode(phone);
+    res.json({ ok: true, code });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String((e && e.message) || e).slice(0, 160) });
+  }
 });
 
 app.post("/login/:id/cancel", async (req, res) => {

@@ -389,6 +389,13 @@ def _collect_chats_from_store(
         st = acct_status.get(key, "")
         if st == "offline" and not include_hidden:
             continue  # 历史在 store，重登后同路径自动回显
+        # 合成演练号不进默认清单，和未读徽标同一口径。点名的演练对仍留在清单里、'
+        try:
+            from src.inbox.customer_metrics import is_synthetic_drill
+            if is_synthetic_drill(c.get("chat_key")):
+                continue
+        except Exception:
+            pass
         out.append(store_row_to_chat(
             c, automation_mode=mode, message_count=mc,
             account_label=lmap.get(key),

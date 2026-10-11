@@ -1648,6 +1648,20 @@ _ADDITIONS_2026_08_14_COCKPIT_RESOLVE = """
 """
 _BASELINE += _ADDITIONS_2026_08_14_COCKPIT_RESOLVE
 
+# 2026-10-08 cockpit snooze: set-aside waiting chats, server-side.
+_ADDITIONS_2026_10_08_COCKPIT_SNOOZE = """
+/api/cockpit/snooze	POST
+/api/cockpit/unsnooze	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_08_COCKPIT_SNOOZE
+
+# 2026-10-08 pending-human: inline reply counts toward cleared-today.
+_ADDITIONS_2026_10_08_COCKPIT_CLEARED = """
+/api/cockpit/cleared	POST
+"""
+_BASELINE += _ADDITIONS_2026_10_08_COCKPIT_CLEARED
+
+
 # 2026-08-16 会话删除（boss 直接需求）：工作台删除单会话全部本地数据（全表硬删
 # + 防复活墓碑，真实新消息自动解除回显；拒 agent/viewer）。账号删除的连带清库
 # 走既有 /api/accounts/*/remove 的 body 扩展（purge_data），不新增端点。
@@ -2320,6 +2334,13 @@ _ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS = """
 /api/voice/session-expressiveness	PUT
 """
 _BASELINE += _ADDITIONS_2026_09_22_VOICE_EXPRESSIVENESS
+
+# 2026-10-07 群演向导号钉选（group_show_routes）" 坐席把另一号的进行中目标抄到本会话、"
+_ADDITIONS_2026_10_07_GOAL_ADOPT_AND_GUIDE = """
+/api/goals/adopt-sibling	POST
+/api/group-show/guide-account	GET,POST
+"""
+_BASELINE += _ADDITIONS_2026_10_07_GOAL_ADOPT_AND_GUIDE
 
 
 def _parse_baseline():

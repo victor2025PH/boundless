@@ -1637,7 +1637,7 @@ window.__ADK_ON = {{ 'true' if account_dock_enabled is not defined else (account
               {% if (ui_vis or {}).get('group_extract') %}
               <section class="cp-card" style="padding:12px;">
                 <div class="cp-card-ttl" style="margin-bottom:6px;"><span class="cp-card-ic" data-cp-ic="link"></span><span data-i18n="inbox.tgm.title">群成员提取</span></div>
-                <div style="font-size:12px;color:var(--text-tiny);line-height:1.5;margin-bottom:8px;" data-i18n="inbox.tgm.desc">多号进群 → 限速拉「发言且非管理员」的人入库 → 每日控量。只读提取；私聊触达是独立步骤。</div>
+                <div style="font-size:12px;color:var(--text-tiny);line-height:1.5;margin-bottom:8px;" data-i18n="inbox.tgm.desc">先在群里接有意向的人的话。提取只是把人放进库，不发消息。</div>
                 <a class="asb-btn" style="text-decoration:none;display:inline-block;" href="/tools/tg-members" target="_blank" rel="noopener" data-i18n="inbox.tgm.open">🧲 打开管理台</a>
               </section>
               {% endif %}
@@ -6869,7 +6869,9 @@ window._ayResume=_ayResume;
 var _csState=null, _csCid='', _csTimer=null, _csBusy=false;
 var _CS_ACT_KEYS={ack:'inbox.cs.act.ack',resume:'inbox.cs.act.resume',confirm_pin:'inbox.cs.act.confirm_pin',
   retranslate:'inbox.cs.act.retranslate',   // Q-39 B #326（cs-）：xlate_hold → 「重试翻译」
-  route_standard:'inbox.cs.act.route_standard'};   // R87 #330（cs-）：route_offline → 「切回标准」
+  route_standard:'inbox.cs.act.route_standard',   // R87 #330（cs-）：route_offline → 「切回标准」
+  mark_human:'inbox.cs.act.mark_human',   // 握手指纹：状态条上的「这是真人」'
+  restore_auto:'inbox.cs.act.restore_auto'};   // 扫描收成的拟稿人审：改回全自动
 function _csKeyOr(k,fb){ var t=window.T(k); return (t&&t!==k)?t:(fb||''); }
 function _csHeldWhy(p){
   p=p||{}; var reason=String(p.reason_code||p.reason||'');
@@ -7024,6 +7026,35 @@ async function _csAction(btn){
         if(_csR.ok&&_csD&&_csD.ok){ _toast(window.T('inbox.cs.retranslate_ok'),'#16a34a'); try{ loadThread(c,true); }catch(_){} }
         else { _toast(window.T('inbox.cs.retranslate_fail')+((_csD&&(_csD.detail||_csD.error))?(' · '+String(_csD.detail||_csD.error).slice(0,80)):''),'#b91c1c'); }
         if(_csD&&_csD.conv_state){ _csSet(_csD.conv_state,c); }
+      }
+    }
+    else if(a==='restore_auto'){
+      if(!confirm(window.T('inbox.cs.restore_auto_confirm'))){ /* 取消不改档 */ }
+      else {
+        var _csAr=await apiFetch('/api/unified-inbox/automation',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({platform:c.platform,account_id:c.account_id||'default',
+            chat_key:c.chat_key,mode:'auto_ai'})},{timeoutMs:30000});
+        var _csAd={}; try{ _csAd=await _csAr.json(); }catch(_){ _csAd={}; }
+        if(!_csAr.ok||_csAd.ok===false){ _toast(window.T('inbox.botflag.fail'),'#b91c1c'); }
+        else { try{ if(typeof loadModeState==='function') loadModeState(c); }catch(_){} }
+      }
+    }
+    else if(a==='mark_human'){
+      if(!confirm(window.T('inbox.botflag.confirm_human'))){ /* 取消不改判定 */ }
+      else {
+        var _csBr=await apiFetch('/api/unified-inbox/bot-flag',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({platform:c.platform,account_id:c.account_id||'default',
+            chat_key:c.chat_key,value:'human'})},{timeoutMs:30000});
+        var _csBd={}; try{ _csBd=await _csBr.json(); }catch(_){ _csBd={}; }
+        if(!_csBr.ok||_csBd.ok===false){ _toast(window.T('inbox.botflag.fail'),'#b91c1c'); }
+        else {
+          _botFlagState={cid:_csBd.conversation_id, flag:Number(_csBd.peer_is_bot)||0,
+                         score:Number(_csBd.bot_score)||0, evidence:String(_csBd.bot_evidence||'')};
+          try{ _renderBotBadge(); }catch(_){}
+          _toast(window.T('inbox.botflag.saved'),'#64748b');
+        }
       }
     }
     else if(a==='route_standard'){   // R87 #330（cs-）：无限制端点离线 → 本会话改回标准档（复用模式面板同一写口）
@@ -15510,6 +15541,9 @@ async function _doSendMedia(caption){
   if(bar) bar.classList.remove('sending');
   if(aborted) _toast(window.T('inbox.file.canceled'),'#64748b');
   if(sent>0){
+    // 待人工「今天清掉」：这一趟至少发出一件（服务端同一轮只算一次）
+    _ckNoteInboxReply({conversation_id:chat.conversation_id, platform:chat.platform,
+      account_id:chat.account_id||'default', chat_key:chat.chat_key});
     // 发送期间切了会话：输入框里已是新会话的草稿，不清；线程刷新只刷当前视图
     if(selectedChat===chat){ const ta=document.getElementById('reply-ta'); if(ta) ta.value=''; }
     _toast(sent===1?window.T('inbox.media.sent'):window.Tf('inbox.file.sent_n',{n:sent}),'#0f9d75');
@@ -15817,6 +15851,7 @@ async function sendMsg(){
     const d=await r.json();
     if(d.ok){
       _sentOk=true;   // composer P2：成功微反馈
+      _ckNoteInboxReply(body);   // 待人工「今天清掉」（只记成功的）
       // M-2 A1（#232）：✓ 只认平台/边车回执 delivered===true；RPA 入队 → 「已排队发送」；
       // 旧后端无字段 → 「已提交」。此前一律「✓ 已发送」＝乐观显示非边车回执。
       _sentReceipt=(d.delivered===true||(d.result&&d.result.delivered===true))?'delivered':((d.queued||(d.result&&d.result.queued))?'queued':'');
@@ -15917,6 +15952,7 @@ async function sendMsg(){
     try{ _recon=await _reconcileTextSend(optMsg&&optMsg._retryBody); }catch(_){}
     if(_recon==='sent'){
       _sentOk=true;
+      _ckNoteInboxReply(optMsg&&optMsg._retryBody);   // 慢发送对账确认已发出 = 成功
       threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
       try{ await loadThread(selectedChat,true); await loadChats(); }catch(_){}
       try{ _refreshConvStatus(selectedChat); }catch(_){}
@@ -15977,6 +16013,31 @@ async function sendMsg(){
   }
 }
 
+/* 待人工「今天清掉」：完整对话里发送成功的回复也记一笔，走待人工同一个记账口
+   （src=inbox：服务端判断发之前这位是不是在「客户在等」里，同一轮只算一次；
+   会话放 reply_conversation_id，没有这条判据的旧后端回 400、不会每句都记）。
+   只在发送成功后调；失败不调。顺手给「从待人工打开」的回程记录打上 sent，
+   回到待人工时这张先收起、落到下一张（cockpit.html 读同一键）。不等结果、不提示。 */
+function _ckNoteInboxReply(body){
+  try{
+    if(!body) return;
+    let cid=String(body.conversation_id||'');
+    const sc=selectedChat;
+    if(!cid && sc && String(sc.platform||'')===String(body.platform||'') && String(sc.chat_key||'')===String(body.chat_key||'')){
+      cid=String(sc.conversation_id||'');
+    }
+    if(!cid) cid=[body.platform||'', body.account_id||'default', body.chat_key||''].join(':');
+    if(!body.chat_key) return;
+    apiFetch('/api/cockpit/cleared',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reply_conversation_id:cid, how:'reply', src:'inbox'})}).catch(function(){});
+    try{
+      const rec=JSON.parse(localStorage.getItem('aitr.ck.ret.v1')||'null');
+      if(rec && rec.cid===cid){ rec.sent=Date.now(); localStorage.setItem('aitr.ck.ret.v1', JSON.stringify(rec)); }
+    }catch(_){}
+  }catch(_){}
+}
+window._ckNoteInboxReply=_ckNoteInboxReply;   // 门禁跨窗口演练直接调（本页脚本不挂全局）
+
 // P4-9：失败气泡一键重发——原样重放当初的发送 body（含引用/翻译参数），成功即并入真实线程。
 async function resendFailed(optId){
   const idx=threadMsgs.findIndex(m=>m.message_id===optId);
@@ -16002,6 +16063,7 @@ async function resendFailed(optId){
     const r=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
     const d=await r.json();
     if(d&&d.ok){
+      _ckNoteInboxReply(body);   // 重发成功（被压制＝原件其实已发出）也是这句回出去了
       threadMsgs=threadMsgs.filter(m=>m.message_id!==optId);
       // A1：服务端按原件 id 判「其实已发出/仍在途」→ 压制了本次重发。清掉假失败
       // 气泡之外还得说清楚，否则坐席只看到「点了重发但没多一条」会以为没生效。
@@ -16052,6 +16114,7 @@ async function resendStoreFailed(mid){
     const r=await apiFetch('/api/unified-inbox/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}, {timeoutMs: 60000});
     const d=await r.json();
     if(d&&d.ok){
+      _ckNoteInboxReply(body);   // 自动投递失败那条由坐席重发成功：也是回了
       await loadThread(selectedChat,true);
       await loadChats();
     } else {
@@ -18589,8 +18652,42 @@ function _paintHeroGoal(el, mode, opts){
   el.onclick=null;
   if(mode==='hide'){ el.hidden=true; el.innerHTML=''; return; }
   if(mode==='cta'){
-    el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span>'+esc(_goalT('inbox.goal.hero.set','Set a work goal for them \u2192'))+'</span>';
-    el.onclick=function(){
+    var _heldHead='';
+    try{
+      var _cst=_csState;
+      if(_cst&&_cst.state==='held') _heldHead=String(_cst.reason_code||'').split(':')[0];
+    }catch(_){}
+    var _cta=_heldHead==='chatx_handshake'
+      ?_goalT('inbox.goal.hero.held_peer','Auto-send is off · set a goal, or confirm they are a real person')
+      :(_heldHead==='echo_loop'
+        ?_goalT('inbox.goal.hero.held_echo','Auto-send is off · set a goal, or switch this chat to manual')
+        :_goalT('inbox.goal.hero.set','No work goal yet — auto replies only continue the chat'));
+    var _setBtn=' <button type="button" class="hg-draft" data-hg-set="1">'+esc(_goalT('inbox.goal.hero.set_btn','Set one'))+'</button>';
+    var _sibHtml='';
+    if(opts&&opts.sibling){
+      var _sibLine=_goalTf('inbox.goal.hero.sibling',{title:String(opts.sibling||'')},'Another account already has “{title}”');
+      if(opts.siblingTemplate){
+        _sibLine+=' · '+_goalTf('inbox.goal.hero.sibling_tpl',{template:String(opts.siblingTemplate||'')},'template {template}');
+      }
+      if(opts.siblingAccount){
+        _sibLine+=' · '+_goalTf('inbox.goal.hero.sibling_on',{account:String(opts.siblingAccount||'')},'on {account}');
+      }
+      var _adoptBtn=opts.siblingId
+        ?(' <button type="button" class="hg-draft" data-hg-adopt="1">'+esc(_goalT('inbox.goal.hero.adopt','Use it here'))+'</button>')
+        :'';
+      _sibHtml='<div class="hg-sib">'+esc(_sibLine)+_adoptBtn+'</div>';
+    }
+    el.innerHTML='<span class="hg-ic">'+uiIcon('target',12)+'</span><span>'+esc(_cta)+'</span>'+_setBtn+_sibHtml;
+    el.onclick=function(ev){
+      var t=ev&&ev.target;
+      if(t&&t.closest&&t.closest('[data-hg-adopt]')){
+        try{ ev.stopPropagation(); ev.preventDefault(); }catch(_){}
+        _adoptSiblingGoal(opts&&opts.siblingId, opts&&opts.sibling, opts&&opts.siblingAccount, opts&&opts.siblingTemplate, opts&&opts.salesOnSupport);
+        return;
+      }
+      var _open=t&&t.closest&&t.closest('[data-hg-set]');
+      if(opts&&opts.siblingId&&!_open) return;
+      if(_open){ try{ ev.stopPropagation(); ev.preventDefault(); }catch(_){} }
       _uiBeacon('goal_hero_click');
       _cpExpandAndScroll('goal','customer');
       try{
@@ -18649,6 +18746,29 @@ function _paintHeroGoal(el, mode, opts){
     _cpExpandAndScroll('goal','customer');
   };
 }
+async function _adoptSiblingGoal(goalId, title, account, templateName, salesOnSupport){
+  var cid=_wsCpCid;
+  if(!cid||!goalId) return;
+  var _ck=salesOnSupport?'inbox.goal.hero.adopt_confirm_sales':'inbox.goal.hero.adopt_confirm';
+  var _q=_goalTf(_ck,{
+    title:String(title||''), account:String(account||''), template:String(templateName||'')
+  },'Copy “{title}” ({template}, on {account}) into this chat? Direction only, not their progress.');
+  if(!window.confirm(_q)) return;
+  try{
+    var r=await apiFetch('/api/goals/adopt-sibling',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversation_id:cid,goal_id:String(goalId)})});
+    if(!r.ok){
+      var err=null; try{ err=await r.json(); }catch(_){}
+      if(window.CRMW&&CRMW.toast) CRMW.toast((err&&err.detail)||'failed');
+      return;
+    }
+    _renderHeroGoal();
+    try{ if(selectedChat && typeof _csRefresh==='function') _csRefresh(selectedChat); }catch(_){}
+    try{
+      var ge=document.getElementById('ws-cp-goal');
+      if(ge&&typeof ge.reload==='function') ge.reload();
+    }catch(_){}
+  }catch(_){}
+}
 async function _renderHeroGoal(fromData){
   var el=document.getElementById('cp-hero-goal'); if(!el) return;
   if(_cpCardCollapsed('hero')){ _paintHeroGoal(el,'hide'); return; }
@@ -18668,7 +18788,15 @@ async function _renderHeroGoal(fromData){
   var g=d&&d.goal;
   if(!g || (g.status&&g.status!=='active'&&g.status!=='paused')){
     _applyGoalTabSignal(null);
-    _paintHeroGoal(el,'cta');
+    var _sib=(d&&d.sibling_goals&&d.sibling_goals[0])||null;
+    var _pl=String(_cid||'').split(':')[0];
+    _paintHeroGoal(el,'cta',{
+      sibling:_sib?String(_sib.title||_sib.template||''):'',
+      siblingId:_sib?String(_sib.goal_id||''):'',
+      siblingAccount:_sib?String(_acctLabel(_pl, String(_sib.account_id||''))||''):'',
+      siblingTemplate:_sib?String(_sib.template_name||_sib.template||''):'',
+      salesOnSupport:!!(_sib&&_sib.sales_on_support)
+    });
     return;
   }
   _applyGoalTabSignal(g);
@@ -18727,6 +18855,7 @@ function _onGoalHostEvent(ev){
     }
     _renderHeroGoal();
     _refreshGoalAgenda(true);
+    try{ if(selectedChat && typeof _csRefresh==='function') _csRefresh(selectedChat); }catch(_){}
   }catch(_){}
 }
 async function _refreshGoalAgenda(force){
@@ -21627,6 +21756,9 @@ async function sendVoiceReply(){
     }
   },1000);
   const onSent=async(meta,reused)=>{
+    /* 待人工「今天清掉」：直发成功与对账确认已发出都走这里，失败不走 */
+    _ckNoteInboxReply({conversation_id:sendChat.conversation_id, platform:sendChat.platform,
+      account_id:sendChat.account_id||'default', chat_key:sendChat.chat_key});
     _voicePreviewReuse=null;   /* 试听产物已消费，防陈旧复用 */
     const m=meta||{};
     let hint=window.T('inbox.voice.sent')+(m.provider?`（${m.provider}${m.emotion?' / '+m.emotion:''}）`:'');

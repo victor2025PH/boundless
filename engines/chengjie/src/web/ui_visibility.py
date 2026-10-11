@@ -129,7 +129,7 @@ UI_VISIBILITY_KEYS = (
     ("group_show", "群脉导播台（侧栏「真机矩阵」组内项 + 命令面板）"),
     ("team_collab", "团队协作（副驾协作注解卡，web + 桌面双宿主）"),
     ("ai_settings", "AI 与转接设置（AI 提示词 & 行为配置卡 / 人工客服转接卡 / 侧栏「人工转接」项）"),
-    ("cockpit", "驾驶舱（工作台顶栏「驾驶舱」入口 /workspace/cockpit）"),
+    ("cockpit", "待人工（工作台顶栏「待人工」入口 /workspace/cockpit）"),
 )
 
 DEFAULTS: Dict[str, bool] = {k: False for k, _ in UI_VISIBILITY_KEYS}

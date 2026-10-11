@@ -11,8 +11,10 @@
      超时＝没人管；
   2. ``needs_human``——协议自动回复链打的「需人工」标签会话
      （HANDOFF_TAG：高风险/生成失败/配额熔断等，store.list_tagged_conversations）；
-  3. ``waiting``——客户说了最后一句、超过宽限期还没人回（last_message_dirs
-     末条方向口径；排除群聊/已归档/有 pending 草稿的——那是 4 号源辖区；
+  3. ``waiting``——客户说了最后一句、超过宽限期还没人回（末条方向口径，
+     优先 ``list_unanswered_private``，不靠「最近 N 个会话」；排除平台系统号与
+     本实例自家号互聊、群聊/已归档/
+     有 pending 草稿的——那是 4 号源辖区；超过 72 小时的留给历史积压，不丢；
      **刻意不排除 manual 档会话**：manual=AI 不会回，客户在等的就是人，
      这正是本队列该点名的）；同级内按 **effective_unread**（已读水位口径，
      不是协议同步裸数字）把「没看过」排在「看过没回」前面；
@@ -38,6 +40,12 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("ai_chat_assistant.cockpit")
 
+# 与页面 isStale 同一刻度：超过这个年龄的（接管超时除外）不占 queue_cap，
+# 另留一截给「历史积压」。积压只列最近的 _STALE_KEEP 条（离 3 天最近、最可能
+# 救回来的在前）；总人数另给 ``stale_total``，页面照实写，不拿列出的条数冒充。
+_STALE_FOLD_SEC = 72 * 3600
+_STALE_KEEP = 40
+
 #: kind → 优先级（1 最高；排序键=（priority, -age)：同级更久的在前）
 KIND_PRIORITY = {
     "takeover_overdue": 1,
@@ -49,6 +57,23 @@ KIND_PRIORITY = {
 _CACHE_TTL_SEC = 30.0
 _cache_lock = threading.Lock()
 _cache: Dict[str, Any] = {"ts": 0.0, "snap": None}
+
+# 最近一张快照里「客户在等」的会话（含先不回）→ 这一轮开始等的时间。完整对话
+# 里发出回复后，靠它判断这一句算不算清掉了待人工里的一条。刻意不随
+# invalidate_cache 清空：一发出去缓存就失效，下一张快照里这个人已经不在等了，
+# 要看的正是发之前那一张。
+_listed_lock = threading.Lock()
+#: cid → (这一轮开始等的时间, 最近一次在快照里见到它的时间)。不随每张快照整体
+#: 覆盖：刚掉出名单的人再留 _LISTED_KEEP_SEC 秒——发送成功到记账请求之间若有
+#: 别的标签页先重算了快照，这个人已经不在等了，但要看的正是发之前那一张。
+_listed_waiting: Dict[str, tuple] = {}
+_listed_at: float = 0.0
+_LISTED_KEEP_SEC = 60.0
+#: 快照比这更旧（或进程刚起还没有快照）时，按会话现算「发之前在不在等」
+_LISTED_FRESH_SEC = 120.0
+_inbox_note_lock = threading.Lock()
+#: 收件箱刚发出去的出站（分条、慢发送、分钟级时间戳）算这一次的，不当成「之前有人回过」
+_JUST_SENT_SEC = 120.0
 
 
 def _cfg_block(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -142,6 +167,24 @@ def _identity_extra(row: Any) -> Dict[str, Any]:
     }
 
 
+def _handoff_reason(store: Any, cid: str) -> str:
+    """会话「需人工」原因码。无元数据＝manual；crisis:* 收成 crisis。
+
+    与 ``needs_human_by_reason`` 同一口径，但挂在队列卡片上——看板计数回答
+    「有多少」，卡片要回答「这一条为什么」。缺方法/抛错退回 manual，不挡队列。
+    """
+    meta: Dict[str, Any] = {}
+    try:
+        if cid and hasattr(store, "get_handoff_meta"):
+            meta = dict(store.get_handoff_meta(cid) or {})
+    except Exception:
+        meta = {}
+    reason = str(meta.get("reason") or "") if meta else "manual"
+    if reason.startswith("crisis"):
+        reason = "crisis"
+    return reason or "manual"
+
+
 def _src_needs_human(store: Any, now: float,
                      limit: int) -> List[Dict[str, Any]]:
     from src.integrations.protocol_autoreply import HANDOFF_TAG
@@ -151,7 +194,8 @@ def _src_needs_human(store: Any, now: float,
         if not cid:
             continue
         last_ts = float(row.get("last_ts") or 0)
-        extra = {"unread": _effective_unread(row)}
+        extra = {"unread": _effective_unread(row),
+                 "handoff_reason": _handoff_reason(store, cid)}
         extra.update(_identity_extra(row))
         out.append(_item(
             "needs_human", cid,
@@ -164,9 +208,91 @@ def _src_needs_human(store: Any, now: float,
     return out
 
 
+def _own_account_ids(store: Any) -> Dict[str, set]:
+    """本实例自己的号：platform → {account_id}（会话库账号名录）。取不到就空。"""
+    out: Dict[str, set] = {}
+    try:
+        for (plat, acct) in (store.account_directory() or {}).keys():
+            if acct:
+                out.setdefault(str(plat or "").lower(), set()).add(str(acct))
+    except Exception:
+        logger.debug("[cockpit] 账号名录读取失败（不排除自家号）", exc_info=True)
+    return out
+
+
+def _not_a_customer(row: Any, own: Dict[str, set]) -> bool:
+    """平台系统号（Telegram 777000 验证码等）/ 收藏夹，或对端就是本实例另一个号。
+
+    只认确定信号：系统号名单与 Saved Messages 走 store.is_system_peer（全仓一份）；
+    「自家号互聊」只在 telegram / whatsapp 判——这两个平台 account_id 就是号本身
+    的 user id / E.164，对端 chat_key 等于本实例另一个号的 account_id 即为自家号。
+    """
+    plat = str(row.get("platform") or "").lower()
+    acct = str(row.get("account_id") or "")
+    key = str(row.get("chat_key") or "")
+    if not key:
+        return False
+    try:
+        from src.inbox.store import is_system_peer
+        if is_system_peer(plat, acct, key):
+            return True
+    except Exception:
+        pass
+    if plat in ("telegram", "whatsapp") and key in own.get(plat, set()):
+        return True
+    return False
+
+
 def _src_waiting(store: Any, now: float, *, grace_sec: float,
                  max_age_sec: float, scan_limit: int,
-                 pending_cids: set, takeover_cids: set) -> List[Dict[str, Any]]:
+                 pending_cids: set, takeover_cids: set
+                 ) -> tuple:
+    """返回 ``(items, truncated)``。
+
+    有 ``list_unanswered_private`` 时按「末条是客户说的」全量查，超过 72 小时
+    的也留下（页面折进历史积压）。没有该方法的旧 store 才退回最近 N 个会话。
+    ``max_age_sec`` 保留给调用方签名，不再用来把久等的人丢掉。
+    """
+    del max_age_sec  # 超过窗口的交给前端折进积压，不在源里丢
+    if hasattr(store, "list_unanswered_private"):
+        got = store.list_unanswered_private(
+            older_than_ts=now - grace_sec, limit=max(scan_limit, 1000))
+        rows = list((got or {}).get("items") or [])
+        truncated = bool((got or {}).get("truncated"))
+        own = _own_account_ids(store)
+        seen: set = set()
+        out = []
+        for c in rows:
+            cid = str(c.get("conversation_id") or "")
+            if not cid or cid in pending_cids or cid in takeover_cids:
+                continue
+            # 同一会话末条并列（同一秒两条入站）时查询会出两行
+            if cid in seen:
+                continue
+            seen.add(cid)
+            if _not_a_customer(c, own):
+                continue
+            ts = float(c.get("wait_ts") or c.get("last_ts") or 0)
+            if ts <= 0:
+                continue
+            age = now - ts
+            if age < grace_sec:
+                continue
+            detail = str(c.get("inbound_text") or c.get("last_msg") or "")[:80]
+            extra = {"unread": _effective_unread(c)}
+            media = str(c.get("inbound_media") or "").strip().lower()
+            if not detail and media:
+                extra["quote_media"] = media
+            extra.update(_identity_extra(c))
+            out.append(_item(
+                "waiting", cid,
+                name=str(c.get("name") or ""),
+                platform=str(c.get("platform") or ""),
+                age_sec=age,
+                detail=detail,
+                extra=extra,
+            ))
+        return out, truncated
     convs = store.list_conversations(limit=scan_limit) or []
     cids = [str(c.get("conversation_id") or "") for c in convs]
     dirs = store.last_message_dirs([c for c in cids if c]) or {}
@@ -174,13 +300,18 @@ def _src_waiting(store: Any, now: float, *, grace_sec: float,
         archived = set(store.archived_conversation_ids() or [])
     except Exception:
         archived = set()
+    own = _own_account_ids(store)
+    seen = set()
     out = []
     for c in convs:
         cid = str(c.get("conversation_id") or "")
-        if not cid or cid in archived or cid in pending_cids:
+        if not cid or cid in archived or cid in pending_cids or cid in seen:
             continue
+        seen.add(cid)
         if cid in takeover_cids:
             continue   # 接管中＝有人在管，不算漏球（超时另有 1 号源点名）
+        if _not_a_customer(c, own):
+            continue
         ctype = str(c.get("chat_type") or "").lower()
         if ctype in ("group", "channel", "room"):
             continue
@@ -191,7 +322,7 @@ def _src_waiting(store: Any, now: float, *, grace_sec: float,
         if ts <= 0:
             continue
         age = now - ts
-        if age < grace_sec or age > max_age_sec:
+        if age < grace_sec:
             continue
         # 已读/未读细分（P2 调准）：unread>0＝坐席连看都没看过，同级排更前；
         # unread=0＝看过没回（可能是刻意不回/僵尸会话），排后但不隐藏——
@@ -206,7 +337,7 @@ def _src_waiting(store: Any, now: float, *, grace_sec: float,
             detail=str(c.get("last_msg") or "")[:80],
             extra=extra,
         ))
-    return out
+    return out, len(convs) >= int(scan_limit)
 
 
 def _src_draft_pending(store: Any, now: float, *, min_age_sec: float,
@@ -335,11 +466,13 @@ def collect_intervention_queue(
         sources["needs_human"] = "error"
         logger.debug("[cockpit] needs_human 源失败", exc_info=True)
 
+    waiting_truncated = False
     try:
-        raw.extend(_src_waiting(
+        waiting, waiting_truncated = _src_waiting(
             store, ts, grace_sec=grace_sec, max_age_sec=max_age_sec,
             scan_limit=scan_limit, pending_cids=pending_cids,
-            takeover_cids=takeover_cids))
+            takeover_cids=takeover_cids)
+        raw.extend(waiting)
         sources["waiting"] = "ok"
     except Exception:
         sources["waiting"] = "error"
@@ -389,21 +522,59 @@ def collect_intervention_queue(
             if lm:
                 it["last_text"] = lm
 
-    # 排序：优先级 → 未读优先（unread>0＝没人看过，比「看过没回」更紧急）→ 久者在前
-    items = sorted(by_cid.values(),
-                   key=lambda i: (i["priority"],
-                                  0 if int(i.get("unread") or 0) > 0 else 1,
-                                  -float(i["age_sec"] or 0)))
-    items = items[:queue_cap]
+    # 排序：优先级 → 未读优先（unread>0＝没人看过，比「看过没回」更紧急）→ 久者在前。
+    # 超过 72 小时的（接管超时除外）另留一截，不占 queue_cap——否则陈年积压会把
+    # 今天要回的人挤出榜，页面上的「历史积压」也折不到他们。
+    ranked = sorted(by_cid.values(),
+                    key=lambda i: (i["priority"],
+                                   0 if int(i.get("unread") or 0) > 0 else 1,
+                                   -float(i["age_sec"] or 0)))
+    fresh_rows: List[Dict[str, Any]] = []
+    stale_rows: List[Dict[str, Any]] = []
+    for it in ranked:
+        if (it.get("kind") != "takeover_overdue"
+                and float(it.get("age_sec") or 0) > _STALE_FOLD_SEC):
+            stale_rows.append(it)
+        else:
+            fresh_rows.append(it)
+    # 积压同级内离 3 天最近的在前：几百天前的那句已经救不回来，先列还来得及的
+    stale_rows.sort(key=lambda i: (i["priority"], float(i["age_sec"] or 0)))
+    items = fresh_rows[:queue_cap] + stale_rows[:_STALE_KEEP]
+    rest = fresh_rows[queue_cap:] + stale_rows[_STALE_KEEP:]
     try:
         _backfill_quotes(store, items,
                          cap=int(_num(blk, "quote_probe_cap", 20.0)))
     except Exception:
         logger.debug("[cockpit] 引用补齐失败（忽略）", exc_info=True)
+    try:
+        from src.inbox.cockpit_hold import apply_snooze
+        visible, held = apply_snooze(items)
+        rest_visible, rest_held = apply_snooze(rest) if rest else ([], [])
+    except Exception:
+        logger.debug("[cockpit] 先不回分账失败（忽略）", exc_info=True)
+        visible, held = items, []
+        rest_visible, rest_held = rest, []
     counts: Dict[str, int] = {}
-    for it in items:
+    for it in visible:
         counts[it["kind"]] = counts.get(it["kind"], 0) + 1
-    out: Dict[str, Any] = {"items": items, "counts": counts, "sources": sources}
+
+    def _is_stale(it: Dict[str, Any]) -> bool:
+        return (it.get("kind") != "takeover_overdue"
+                and float(it.get("age_sec") or 0) > _STALE_FOLD_SEC)
+
+    out: Dict[str, Any] = {
+        "items": visible, "snoozed": held + rest_held,
+        "counts": counts, "sources": sources,
+        # 只在「客户在等」这条查询自己触顶时为真。不再把「最近 300 个会话扫满」
+        # 当成截断——那种窗口会把等最久的人永久标成「可能没列全」。
+        "scan_truncated": bool(waiting_truncated),
+        # 超过 3 天的真实人数（不含先不回）；页面列出的只是其中最近的 _STALE_KEEP 条
+        "stale_total": sum(1 for it in visible + rest_visible if _is_stale(it)),
+        "fresh_total": sum(1 for it in visible + rest_visible if not _is_stale(it)),
+        # 内部：全部「客户在等」（不截断、含先不回）——收件箱记账与「先不回」取数用，
+        # cockpit_snapshot 出口前摘掉，不进接口
+        "_waiting_all": [it for it in ranked if it.get("kind") == "waiting"],
+    }
     # #207：「需人工」按打标原因分列（dup_guard_blocked / crisis / manual …），
     # 让看板能回答「这些红标是 AI 没回上还是真要人判断」；取数失败不影响主体。
     try:
@@ -428,7 +599,9 @@ def cockpit_snapshot(store: Any, config: Optional[Dict[str, Any]] = None,
             return out
     snap: Dict[str, Any] = {"generated_at": ts}
     q = collect_intervention_queue(store, config, now=ts)
+    waiting_all = q.pop("_waiting_all", None)
     snap.update(q)
+    _remember_listed(q, ts, waiting_all=waiting_all)
     try:
         from src.inbox.takeover import list_active, takeover_stats
         active = list_active()
@@ -440,11 +613,181 @@ def cockpit_snapshot(store: Any, config: Optional[Dict[str, Any]] = None,
     except Exception:
         logger.debug("[cockpit] takeover 统计读取失败（忽略）", exc_info=True)
         snap["takeover"] = {"active": [], "stats": {}}
+    try:
+        from src.inbox.cockpit_hold import cleared_today
+        snap["cleared_today"] = cleared_today(now=ts)
+    except Exception:
+        logger.debug("[cockpit] 今日清掉计数失败（忽略）", exc_info=True)
+        snap["cleared_today"] = 0
     with _cache_lock:
         _cache.update({"ts": ts, "snap": snap})
     out = dict(snap)
     out["cache_age_sec"] = 0.0
     return out
+
+
+def _remember_listed(q: Dict[str, Any], ts: float, *,
+                     waiting_all: Optional[List[Dict[str, Any]]] = None) -> None:
+    global _listed_at
+    src = waiting_all if waiting_all is not None else (
+        list(q.get("items") or []) + list(q.get("snoozed") or []))
+    m: Dict[str, float] = {}
+    for it in src:
+        if it.get("kind") != "waiting":
+            continue
+        cid = str(it.get("conversation_id") or "")
+        if not cid:
+            continue
+        try:
+            m[cid] = float(ts) - float(it.get("age_sec") or 0)
+        except (TypeError, ValueError):
+            continue
+    with _listed_lock:
+        for cid, since in m.items():
+            _listed_waiting[cid] = (since, float(ts))
+        floor = float(ts) - _LISTED_KEEP_SEC
+        for cid in [c for c, v in _listed_waiting.items() if v[1] < floor]:
+            _listed_waiting.pop(cid, None)
+        _listed_at = float(ts)
+
+
+def _listed_since(cid: str, ts: float) -> Optional[float]:
+    with _listed_lock:
+        v = _listed_waiting.get(cid)
+    if not v:
+        return None
+    since, seen = v
+    with _listed_lock:
+        at = _listed_at
+    if seen >= at:
+        return since          # 就在最近那张快照里
+    return since if (ts - seen) <= _LISTED_KEEP_SEC else None
+
+
+def _ondemand_since(store: Any, cid: str, ts: float,
+                    config: Optional[Dict[str, Any]] = None) -> Optional[float]:
+    """快照太旧或还没有快照时，按会话现算「这次发送之前，这个人在不在『客户在等』」。
+
+    口径与 waiting 源一致：未归档私聊、不是系统号/自家号、不在接管中、没有超过
+    草稿阈值的待审稿、末条（刚发出的这次与投递失败的除外）是客户说的、且已等过宽限期。
+    返回这一轮开始等的时间（末条入站的 ts）；不在等返回 None。
+    """
+    blk = _cfg_block(config)
+    grace_sec = _num(blk, "waiting_grace_min", 10.0) * 60.0
+    draft_age_sec = _num(blk, "draft_age_min", 30.0) * 60.0
+    try:
+        conv = store.get_conversation(cid) if hasattr(store, "get_conversation") else None
+    except Exception:
+        conv = None
+    if not conv:
+        return None
+    if str(conv.get("chat_type") or "").lower() in ("group", "channel", "room"):
+        return None
+    try:
+        if cid in set(store.archived_conversation_ids() or []):
+            return None
+    except Exception:
+        pass
+    if _not_a_customer(conv, _own_account_ids(store)):
+        return None
+    try:
+        from src.inbox.takeover import list_active
+        if cid in {str(e.get("conversation_id") or "") for e in (list_active() or [])}:
+            return None
+    except Exception:
+        pass
+    try:
+        for r in store.list_drafts(status="pending", limit=200) or []:
+            if (str(r.get("conversation_id") or "") == cid
+                    and float(r.get("created_ts") or 0) <= ts - draft_age_sec):
+                return None
+    except Exception:
+        pass
+    try:
+        msgs = store.list_recent_messages(cid, limit=20) or []
+    except Exception:
+        return None
+    for m in reversed(msgs):
+        direction = str(m.get("direction") or "")
+        try:
+            mts = float(m.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if direction == "out":
+            if mts >= ts - _JUST_SENT_SEC:
+                continue
+            if str(m.get("status") or "") in ("failed", "resent"):
+                continue
+            return None
+        if direction == "in":
+            return mts if (0 < mts <= ts - grace_sec) else None
+    return None
+
+
+def inbox_reply_clears(store: Any, cid: str,
+                       now: Optional[float] = None,
+                       config: Optional[Dict[str, Any]] = None) -> bool:
+    """完整对话里发出的这一句，算不算清掉了待人工里的一条。
+
+    三条都满足才算：发之前这个人在「客户在等」（含先不回；最近一张快照
+    不超过 _LISTED_FRESH_SEC 秒就看快照，否则按会话现算）；
+    这一轮等待还没记过（页内回过、前一句已经算过的不重复）；这次发送之前
+    最后说话的是客户——快照之后 AI 或别的坐席先回过的不算。刚发出去
+    ``_JUST_SENT_SEC`` 秒内的出站是这一次的；投递失败的出站客户没收到，不算回过。
+    """
+    cid = str(cid or "").strip()
+    if not cid:
+        return False
+    ts = time.time() if now is None else float(now)
+    with _listed_lock:
+        fresh = (ts - _listed_at) <= _LISTED_FRESH_SEC
+    if fresh:
+        # 刚算过的快照里不在等（接管中/有待审稿/AI 已回…）就不算
+        since = _listed_since(cid, ts)
+    else:
+        # 快照太旧或进程刚起还没有：按会话现算，不让收件箱这一句白回
+        since = _ondemand_since(store, cid, ts, config)
+    if since is None:
+        return False
+    from src.inbox.cockpit_hold import cleared_since
+    if cleared_since(cid, since):
+        return False
+    try:
+        msgs = store.list_recent_messages(cid, limit=20) or []
+    except Exception:
+        logger.debug("[cockpit] 收件箱回复核对读消息失败（按快照算）", exc_info=True)
+        msgs = []
+    for m in reversed(msgs):
+        direction = str(m.get("direction") or "")
+        try:
+            mts = float(m.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if direction == "out":
+            if mts >= ts - _JUST_SENT_SEC:
+                continue
+            if str(m.get("status") or "") in ("failed", "resent"):
+                continue
+            return False
+        if direction == "in":
+            return True
+    return True
+
+
+def note_inbox_reply(store: Any, cid: str,
+                     now: Optional[float] = None, *,
+                     config: Optional[Dict[str, Any]] = None,
+                     by: str = "") -> bool:
+    """判断并记账（how=reply，同一笔 note_cleared）。两句并发也只记一次。
+
+    收件箱发出和待人工页内回一句都走这里——同一轮等待只算一次，不在等的不算。
+    """
+    with _inbox_note_lock:
+        if not inbox_reply_clears(store, cid, now=now, config=config):
+            return False
+        from src.inbox.cockpit_hold import note_cleared
+        note_cleared(str(cid or "").strip(), "reply", now=now, by=by)
+        return True
 
 
 def invalidate_cache() -> None:
@@ -458,4 +801,8 @@ def invalidate_cache() -> None:
 
 
 def _reset_cache_for_tests() -> None:
+    global _listed_at
     invalidate_cache()
+    with _listed_lock:
+        _listed_waiting.clear()
+        _listed_at = 0.0
