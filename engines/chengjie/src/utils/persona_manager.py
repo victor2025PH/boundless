@@ -129,6 +129,11 @@ PROMPT_EXEMPT_FIELDS = frozenset({
     # 陪聊人设显式恢复业务知识库（kb_gate.persona_kb_suppressed 早已消费，此前漏登记 →
     # L-2 JSON 导入闸把它当未知字段拒绝）。同为策略开关，不进 prompt。
     "kb_access",
+    # 顶层 language / country（2026-10-11 印度游戏人设）：档案页和路由用的代码
+    # （hi / india），不是给模型念的句子。该跟的语言和国籍已经写在 background
+    # 与 speaking.language_follow 里；再把裸代码注入就是第二份事实源。
+    "language",
+    "country",
 })
 
 # 已表态的字段全集。门禁比对「真实 schema ⊆ 本集合」，
@@ -136,9 +141,10 @@ PROMPT_EXEMPT_FIELDS = frozenset({
 PERSONA_SCHEMA_FIELDS = PROMPT_CONSUMED_FIELDS | PROMPT_EXEMPT_FIELDS
 
 # 顶层键之外、schema 表没登记但真实档案/表单在用的键（quirks 进 persona_voice 口头禅；
-# language 进档案页；capabilities 已按子键登记，这里补顶层；时间戳是导出/备份元数据）。
+# capabilities 已按子键登记，这里补顶层；时间戳是导出/备份元数据）。
+# language / country 已在 PROMPT_EXEMPT_FIELDS 表态，不再放这里。
 _EXTRA_TOP_KEYS = frozenset({
-    "quirks", "language", "capabilities", "emotion", "temper", "avatar",
+    "quirks", "capabilities", "emotion", "temper", "avatar",
     "created_at", "updated_at",
 })
 

@@ -337,7 +337,7 @@ _AUDIENCE_DECLARED = frozenset({
     # singing / voice_eval / help / strategies：2026-09-06 L-4 A（D-L6）改判客户
     # 形态隐藏（空壳 / 研发调参面），已加进 nav_schema.CLIENT_HIDDEN_ITEM_IDS。
     "singing", "strategies",
-    "strategy_analytics", "telegram", "templates", "usage_center", "users",
+    "strategy_analytics", "telegram", "templates", "tg_members", "usage_center", "users",
     "voice_eval", "whatsapp_rpa", "work_goal", "workspace", "ws_aiq", "ws_boards",
     "ws_perf", "ws_queue", "ws_roi",
 })

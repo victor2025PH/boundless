@@ -335,7 +335,7 @@ def test_persona_voice_tab_url_and_deep_link():
     assert persona_voice_tab_url("a b/c") == "/personas#profile=a%20b%2Fc&tab=voice"
     assert persona_voice_tab_url("") == "/personas"
     html = _PERSONAS.read_text(encoding="utf-8")
-    assert r"/^#profile=([^&]+)(?:&tab=(\w+))?$/" in html
+    assert r"/^#profile=([^&]+)(?:&tab=(\w+))?(?:&focus=([\w-]+))?$/" in html
     fn = _seg(html, "function _processHashProfile() {", "// ── P9-1")
     assert "_pendingHashTab" in fn and "switchDTab(tab)" in fn and "p.then(" in fn
 

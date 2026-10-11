@@ -659,9 +659,21 @@ def _chatx_hold_get(store: Any, conversation_id: str) -> str:
     if store is None or not conversation_id or not hasattr(store, "get_app_setting"):
         return ""
     try:
-        return str(store.get_app_setting(_chatx_hold_key(conversation_id), "") or "").strip()
+        raw = store.get_app_setting(_chatx_hold_key(conversation_id), "")
+    except TypeError:
+        try:
+            raw = store.get_app_setting(_chatx_hold_key(conversation_id))
+        except Exception:
+            return ""
     except Exception:
         return ""
+    # 只认短令牌。别的子系统存在同一个 get_app_setting 上的 JSON（风控保持）
+    # 不是粘性；测试桩的 MagicMock 也不是。真正的旧令牌仍交给调用方按握手读。
+    if isinstance(raw, str):
+        token = raw.strip()
+        if token == "" or re.fullmatch(r"[A-Za-z0-9_:-]{1,64}", token):
+            return token
+    return ""
 
 
 def _chatx_hold_set(store: Any, conversation_id: str, reason: str) -> None:
