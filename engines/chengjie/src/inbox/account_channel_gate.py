@@ -262,7 +262,15 @@ def login_default_mode(platform: str, account_id: str) -> Optional[str]:
     """登录后账号层默认档；``None``＝本层不表态（回落 onboarding / 全局）。
 
     有过登录记录且登录晚于用户最近一次按账号确认 → ``review``（半自动）。
+    个人号 / 协议 WhatsApp 不在这里改成半自动（全自动是该通道的缺省）。
+    登录冷静期仍由 ``gate_caps`` 单独封顶，不靠这一层。
     """
+    try:
+        from src.inbox.automation_mode import whatsapp_personal_account
+        if whatsapp_personal_account(platform, account_id):
+            return None
+    except Exception:
+        pass
     rec = _load_state().get("accounts", {}).get(account_key(platform, account_id)) or {}
     login_ts = _f(rec, "login_ts")
     if login_ts <= 0:
