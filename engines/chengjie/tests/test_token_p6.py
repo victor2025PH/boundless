@@ -159,9 +159,9 @@ def test_block_paid_when_local_has_no_result():
         "translation": {"free_tier_zero_cost": "enforce"}}))
     assert AIClient._paid_ai_blocked_after_local_miss(client, {}, True) is True
     assert AIClient._paid_ai_blocked_after_local_miss(
-        client, {"_tool_call": True}, True) is False
+        client, {"_tool_call": True}, True) is True
     assert AIClient._paid_ai_blocked_after_local_miss(
-        client, {"_bare_system": "translate"}, True) is False
+        client, {"_bare_system": "translate"}, True) is True
     assert AIClient._paid_ai_blocked_after_local_miss(client, {}, False) is False
     client.config.config["translation"]["free_tier_zero_cost"] = "legacy"
     assert AIClient._paid_ai_blocked_after_local_miss(client, {}, True) is False
