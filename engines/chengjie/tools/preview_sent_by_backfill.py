@@ -12,7 +12,7 @@
 
 推断规则（按优先级，先命中者为准；每条事件最多认领 1 条消息，取同会话时间最近的）：
   R1 agent_claimed   agent_sends.claimed_mid 精确指向该消息                → agent（强）
-  R2 script_account  会话所属账号在脚本测试号名单里（--script-accounts 或环境变量 CHENGJIE_SCRIPT_SENDER_ACCOUNTS）       → script（强）
+  R2 script_account  会话所属账号在脚本测试号名单里（名单与匹配口径同限速闸，见下）  → script（强）
   R3 draft_sent      reply_drafts.sent_at 与消息同会话、时间差 ≤ 窗口：
                      decided_by 为空或含 auto/ai/pilot/system → ai；否则（坐席 id）→ agent
   R4 autoreply_audit autoreply_audit 同会话、时间差 ≤ 窗口、decision 属发送类    → ai
@@ -20,10 +20,18 @@
   R6 agent_window    agent_sends 未认领行（claimed_mid=''）同会话、时间差 ≤ 窗口 → agent（弱）
   R0 no_evidence     以上都没命中                                             → phone（缺省口径）
 
+脚本测试号名单（与限速闸 ``src/compliance/send_rate_gate.script_accounts`` 同一读法）：
+  ``--script-accounts``（显式，逗号分隔）> 环境变量 ``CHENGJIE_SCRIPT_SENDER_ACCOUNTS``（设了就整体
+  覆盖，空串＝清空）> ``--config`` 给的配置文件里 ``compliance.send_rate_gate.script_accounts``
+  （可多次，按顺序深合并，如实例 config.yaml 再叠 config.local.yaml）> 空。
+  条目写 ``platform:account_id`` 或纯 ``account_id`` 都认；匹配直接复用限速闸的 ``_match_list``
+  （仓库不在旁边时用内置的同口径副本）。输出只报名单条数，不回显账号。
+
 用法（173 上在临时目录里跑，跑完删目录）::
 
     python preview_sent_by_backfill.py --instance-root D:\\chengjie-instances\\zhiliao
     python preview_sent_by_backfill.py --db path\\to\\unified_inbox.db --json
+    python preview_sent_by_backfill.py --instance-root ... --config <实例>\\config.local.yaml
 """
 from __future__ import annotations
 
@@ -53,7 +61,7 @@ SEND_DECISIONS = frozenset({"send", "sent", "auto_send", "autosend", "auto", "re
 
 RULES = {
     "R1_agent_claimed": ("agent", "agent_sends.claimed_mid 精确指向该消息（坐席发送认领）"),
-    "R2_script_account": ("script", "会话账号在脚本测试号名单内（Morgan 确认 6834…252 为脚本测试）"),
+    "R2_script_account": ("script", "会话账号在脚本测试号名单内（Morgan 确认的脚本测试号；名单同限速闸）"),
     "R3_draft_sent_ai": ("ai", "reply_drafts 已投递(sent_at)且 decided_by 为空/自动类，同会话时间差≤窗口"),
     "R3_draft_sent_agent": ("agent", "reply_drafts 已投递(sent_at)且 decided_by 为坐席 id，同会话时间差≤窗口"),
     "R4_autoreply_audit": ("ai", "autoreply_audit 发送类 decision，同会话时间差≤窗口（协议自动回复）"),
@@ -63,6 +71,89 @@ RULES = {
 }
 
 _IDENT_RX = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+SCRIPT_ACCOUNTS_ENV = "CHENGJIE_SCRIPT_SENDER_ACCOUNTS"
+
+
+def _builtin_match_list(items: Iterable, *cands: str) -> bool:
+    """限速闸 ``send_rate_gate._match_list`` 的同口径副本（仓库不在旁边时用；测试保证两者一致）。"""
+    for it in items or []:
+        s = str(it or "").strip()
+        if not s:
+            continue
+        for c in cands:
+            c = str(c or "").strip()
+            if c and (s == c or (len(s) >= 5 and s in c) or (len(c) >= 5 and c in s)):
+                return True
+    return False
+
+
+def _builtin_script_accounts(config) -> list:
+    """限速闸 ``send_rate_gate.script_accounts`` 的同口径副本：环境变量 > 配置 > 空。"""
+    raw = os.environ.get(SCRIPT_ACCOUNTS_ENV)
+    if raw is not None:
+        return [x.strip() for x in raw.split(",") if x.strip()]
+    try:
+        node = ((config or {}).get("compliance") or {}).get("send_rate_gate") or {}
+        v = node.get("script_accounts") if isinstance(node, dict) else None
+        if isinstance(v, str):
+            v = v.split(",")
+        return [str(x).strip() for x in (v or []) if str(x or "").strip()]
+    except Exception:
+        return []
+
+
+def _gate_funcs():
+    """优先复用限速闸本体（同仓库时），否则内置副本。返回 (script_accounts, match_list, 来源)。"""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.isfile(os.path.join(root, "src", "compliance", "send_rate_gate.py")):
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        try:
+            from src.compliance import send_rate_gate as g
+            return g.script_accounts, g._match_list, "send_rate_gate"
+        except Exception:
+            pass
+    return _builtin_script_accounts, _builtin_match_list, "builtin"
+
+
+def _deep_merge(a: dict, b: dict) -> dict:
+    out = dict(a)
+    for k, v in (b or {}).items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def load_config(paths: Sequence[str]) -> dict:
+    """按顺序读 YAML 并深合并（只取配置结构，不改文件）。"""
+    cfg: dict = {}
+    for pth in paths or []:
+        import yaml  # 惰性：不给 --config 就不需要 PyYAML
+        with open(pth, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if isinstance(data, dict):
+            cfg = _deep_merge(cfg, data)
+    return cfg
+
+
+def resolve_script_accounts(cli: Optional[str] = None, config: Optional[dict] = None) -> Tuple[list, str]:
+    """脚本测试号名单 + 来源（cli / env / config / none）。与限速闸同一读法，显式命令行优先。"""
+    if cli is not None:
+        return [x.strip() for x in str(cli).split(",") if x.strip()], "cli"
+    reader, _m, _src = _gate_funcs()
+    lst = list(reader(config if isinstance(config, dict) else {}))
+    if os.environ.get(SCRIPT_ACCOUNTS_ENV) is not None:
+        return lst, "env"
+    return lst, ("config" if lst else "none")
+
+
+def is_script_conversation(platform: str, account_id: str, accounts: Sequence[str], match=None) -> bool:
+    """会话账号是否在名单里：``platform:account_id`` 与纯 ``account_id`` 两种写法都认（同限速闸）。"""
+    acct = str(account_id or "").strip()
+    if not acct or not accounts:
+        return False
+    m = match or _gate_funcs()[1]
+    return bool(m(accounts, f"{platform or ''}:{acct}", acct))
 
 
 def _guard_sql(sql: str) -> str:
@@ -169,11 +260,14 @@ def preview(conn, *, audit_conn=None, script_accounts: Sequence[str] = DEFAULT_S
             put(mid, "R1_agent_claimed")
     else:
         res["notes"].append("agent_sends.claimed_mid 不存在，R1 跳过")
-    # R2
+    # R2（名单两种写法都认，匹配口径同限速闸）
     sa = [str(a).strip() for a in script_accounts if str(a).strip()]
+    res["script_accounts_n"] = len(sa)
     if sa and "conversations" in tables:
-        ph = ",".join("?" for _ in sa)
-        conv_ids = {r[0] for r in q(conn, f"SELECT conversation_id FROM conversations WHERE account_id IN ({ph})", sa)}
+        match = _gate_funcs()[1]
+        conv_ids = {str(cid) for cid, plat, acct in
+                    q(conn, "SELECT conversation_id, platform, account_id FROM conversations")
+                    if is_script_conversation(str(plat or ""), str(acct or ""), sa, match)}
         for cid in conv_ids:
             for _t, mid in m.by_conv.get(cid, []):
                 put(mid, "R2_script_account")
@@ -229,6 +323,9 @@ def _fmt(db: str, r: dict) -> str:
     for k, v in r["by_rule"].items():
         lines.append(f"  {k:<22} → {v['sent_by']:<6} {v['count']:>8}   依据：{v['basis']}")
     lines.append(f"  按取值汇总：{r['by_value']}")
+    if "script_accounts_n" in r:
+        lines.append(f"  脚本测试号名单 {r['script_accounts_n']} 条（来源 {r.get('script_accounts_source', '-')}，"
+                     f"匹配 {r.get('matcher', '-')}）")
     if r.get("draft_deciders"):
         lines.append(f"  reply_drafts 已投递 decided_by 分布：{r['draft_deciders']}")
     if r.get("autoreply_decisions"):
@@ -243,7 +340,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--db", action="append", default=[], help="收件箱库（可多次）")
     ap.add_argument("--instance-root", default="", help="实例根目录，自动找 data/**/*inbox*.db")
     ap.add_argument("--audit-db", default="", help="autoreply_audit.db；缺省在 <root>/data/config/ 下找")
-    ap.add_argument("--script-accounts", default=os.environ.get("CHENGJIE_SCRIPT_SENDER_ACCOUNTS", ""))
+    ap.add_argument("--script-accounts", default=None,
+                    help="脚本测试号，逗号分隔；platform:account_id 或 account_id。缺省同限速闸：环境变量 > --config")
+    ap.add_argument("--config", action="append", default=[],
+                    help="实例配置 YAML（可多次，按顺序深合并），读 compliance.send_rate_gate.script_accounts")
     ap.add_argument("--window", type=float, default=DEFAULT_WINDOW_SEC)
     ap.add_argument("--days", type=float, default=0.0, help="只看最近 N 天（0=全量）")
     ap.add_argument("--json", action="store_true")
@@ -255,6 +355,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                 if a.instance_root else "")
     audit_conn = open_ro(audit_path) if audit_path and os.path.exists(audit_path) else None
     since = time.time() - a.days * 86400 if a.days > 0 else 0.0
+    accounts, acc_src = resolve_script_accounts(a.script_accounts, load_config(a.config))
     out = {}
     for db in dbs:
         try:
@@ -267,7 +368,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 out[db] = {"skipped": "无 messages.sent_by"}
                 continue
             out[db] = preview(conn, audit_conn=audit_conn, window=a.window, since_ts=since,
-                              script_accounts=[s for s in a.script_accounts.split(",") if s.strip()])
+                              script_accounts=accounts)
+            out[db]["script_accounts_source"] = acc_src
+            out[db]["matcher"] = _gate_funcs()[2]
         finally:
             conn.close()
     if audit_conn is not None:
