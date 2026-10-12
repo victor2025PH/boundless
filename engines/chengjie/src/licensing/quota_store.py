@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS license_char_topup (
     note       TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+-- 代运营工作区第一段（2026-10-08）：各工作区从实例总池切出的配额（第五段才生效；0=不单独限）
+CREATE TABLE IF NOT EXISTS workspace_quotas (
+    workspace_id  TEXT PRIMARY KEY,
+    monthly_chars INTEGER NOT NULL DEFAULT 0,
+    max_accounts  INTEGER NOT NULL DEFAULT 0,
+    max_seats     INTEGER NOT NULL DEFAULT 0,
+    updated_at    REAL NOT NULL DEFAULT 0
+);
 """
 
 
