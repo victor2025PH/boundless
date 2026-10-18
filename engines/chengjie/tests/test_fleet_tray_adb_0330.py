@@ -47,6 +47,16 @@ def test_iss_system_adb_never_overwrites_existing():
     assert prep.index("NeedSystemAdb();") < prep.index("StopOurAgent()")
 
 
+def test_installer_never_kill_server_and_logs_to_fixed_path():
+    assert "kill-server" not in ISS and "& $adb" not in ISS
+    stop = ISS.split("procedure StopBundledAdb")[1].split("function PrepareToInstall")[0]
+    assert "Stop-Process" not in stop and "taskkill" not in stop
+    log = ISS.split("procedure ChatXInstallLog")[1].split("function NeedSystemAdb")[0]
+    assert "{commonappdata}\\ChatX" in log and "\\install.log" in log and "SaveStringToFile" in log
+    fn = ISS.split("function NeedSystemAdb")[1].split("end;\n\nfunction")[0]
+    assert "ChatXInstallLog('system adb present" in fn
+
+
 def test_build_setup_pins_room_a_baseline():
     assert PS1.isascii()
     for n, h in PINS.items():

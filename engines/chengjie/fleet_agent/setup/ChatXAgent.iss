@@ -78,7 +78,8 @@ Source: "{#SetupDir}\fleet-node.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; Phone-room adb. The directory always contains README.txt; adb.exe is optional
 ; (dropped in before the build, see platform-tools\README.txt). Missing files are skipped.
 ; restartreplace: a locked adb.exe must not abort the silent install.
-; StopBundledAdb (PrepareToInstall) releases that lock first, and only for this copy.
+; 0.3.30: no adb process is stopped and the adb server is never shut down. A running or locked copy
+; is replaced after the next reboot (restartreplace); StopBundledAdb only logs it to C:\ProgramData\ChatX\install.log.
 ; Versioned binaries are excluded from ignoreversion so an unchanged adb.exe is not overwritten.
 Source: "{#PlatformToolsDir}\*"; DestDir: "{app}\platform-tools"; Flags: ignoreversion restartreplace recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "adb.exe,AdbWinApi.dll,AdbWinUsbApi.dll"
 Source: "{#PlatformToolsDir}\adb.exe"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
@@ -212,6 +213,17 @@ begin
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+procedure ChatXInstallLog(const Line: String);
+var
+  dir: String;
+begin
+  { Fixed location, outside the locked fleet state dir: C:\ProgramData\ChatX\install.log }
+  Log(Line);
+  dir := ExpandConstant('{commonappdata}\ChatX');
+  ForceDirectories(dir);
+  SaveStringToFile(dir + '\install.log', GetDateTimeString('yyyy-mm-dd hh:nn:ss', '-', ':') + ' [setup {#AppVersion}] ' + Line + #13#10, True);
+end;
+
 function NeedSystemAdb(): Boolean;
 var
   h: String;
@@ -228,10 +240,10 @@ begin
       except
         h := 'unreadable';
       end;
-      Log('system adb present, not overwritten: C:\platform-tools\adb.exe sha256=' + h);
+      ChatXInstallLog('system adb present, not overwritten: C:\platform-tools\adb.exe sha256=' + h);
     end
     else
-      Log('system adb absent: installing room-a baseline into C:\platform-tools');
+      ChatXInstallLog('system adb absent: installing room-a baseline into C:\platform-tools');
   end;
   Result := not SysAdbPresent;
 end;
@@ -262,16 +274,19 @@ var
   ResultCode: Integer;
   adb, cmd: String;
 begin
-  { Never on a live-stream host. Match this copy only; other adb.exe processes stay. }
-  if IsLiveStreamHost() then
+  { 0.3.30: the adb server is never shut down and no adb process is stopped (live-stream host or not).
+    A running or locked app-dir platform-tools\adb.exe is left as is; the [Files] restartreplace
+    flag replaces it after the next reboot. This only records the state. }
+  adb := ExpandConstant('{app}\platform-tools\adb.exe');
+  if not FileExists(adb) then
     Exit;
-  adb := PsLiteral(ExpandConstant('{app}\platform-tools\adb.exe'));
   cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + PsModuleFix +
-    '$ErrorActionPreference=''Continue'';' +
-    '$adb=''' + adb + ''';' +
-    'if (Test-Path -LiteralPath $adb) { & $adb kill-server; Start-Sleep -Seconds 1 };' +
-    'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $adb } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"';
-  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    '$adb=''' + PsLiteral(adb) + ''';' +
+    'if (@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $adb }).Count -gt 0) { exit 3 }; exit 0"';
+  if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 3) then
+    ChatXInstallLog('bundled adb in use, not stopped; restartreplace replaces it after reboot if it changed: ' + adb)
+  else
+    ChatXInstallLog('bundled adb not running: ' + adb);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

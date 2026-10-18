@@ -128,11 +128,12 @@ def test_setup_apply_verifies_then_schedules_silent_install(tmp_path):
 
 
 def _assert_bundled_adb_stop(text: str) -> None:
-    """The generated script stops only {app}\\platform-tools\\adb.exe, after the live-stream exit."""
+    """0.3.30: the generated script never kill-servers or stops adb; it only notes a running bundled copy."""
     assert text.isascii()
-    assert text.index("live-stream.flag") < text.index("kill-server") < text.index("Start-Process")
-    assert text.rindex("exit 2") < text.index("kill-server")
-    assert "& $adb kill-server" in text
+    assert "kill-server" not in text
+    assert not [ln for ln in text.splitlines() if "Stop-Process" in ln and "$adb" in ln]
+    assert text.index("live-stream.flag") < text.index("bundled adb in use") < text.index("Start-Process")
+    assert text.rindex("exit 2") < text.index("bundled adb in use")
     assert "$_.ExecutablePath -eq $adb" in text
     assert "\\platform-tools\\adb.exe" in text
     for bad in ("taskkill", "/IM", "Stop-Process -Name", "Get-Process", "$_.Name",
@@ -174,8 +175,8 @@ def test_setup_script_stops_bundled_adb_by_full_path_and_watches_health(tmp_path
     res0, text0 = _schedule(off, _payload(health_timeout_sec=0))
     assert res0["rollback_after_sec"] == 0
     assert "last_heartbeat.json" not in text0 and "Start-Job" not in text0
-    assert "kill-server" in text0 and "Relaunch-Agent 'setup exit non-zero'" in text0
-    assert text0.rindex("exit 2") < text0.index("kill-server")
+    assert "kill-server" not in text0 and "Relaunch-Agent 'setup exit non-zero'" in text0
+    assert text0.rindex("exit 2") < text0.index("bundled adb in use")
 
 
 def test_installer_stops_bundled_adb_before_copy_and_relaunches_on_failure():
@@ -198,7 +199,8 @@ def test_installer_stops_bundled_adb_before_copy_and_relaunches_on_failure():
     for block in (live, stop, relaunch, deinit):
         block.encode("ascii")
     assert "CHATX_FLEET_LIVE_STREAM" in live and "live-stream.flag" in live
-    assert stop.index("IsLiveStreamHost()") < stop.index("kill-server")
+    assert "kill-server" not in iss and "Stop-Process" not in stop
+    assert "restartreplace" in stop and "ChatXInstallLog(" in stop
     assert "platform-tools\\adb.exe" in stop and "$_.ExecutablePath -eq $adb" in stop
     for bad in ("taskkill", "/IM", "Get-ChildItem", "Get-Process", "$_.Name", "Stop-Process -Name"):
         assert bad not in stop, bad

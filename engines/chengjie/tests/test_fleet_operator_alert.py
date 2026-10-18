@@ -332,7 +332,7 @@ def test_agent_heartbeat_observes_without_putting_serial_on_the_alert(tmp_path, 
     assert seen[0]["phones"][0]["wallpaper_no"] == "12"
     assert seen[0]["phones"][0]["reason"] == "offline"
     assert SERIAL not in _blob(seen[0])
-    assert agent_mod.AGENT_VERSION == "0.3.29"
+    assert agent_mod.AGENT_VERSION == "0.3.30"
 
 
 def test_agent_execute_counts_phone_failures_and_ignores_rejects(tmp_path, monkeypatch):
@@ -554,7 +554,7 @@ def test_session0_uses_the_console_user_and_does_not_count_a_task_kick(monkeypat
 
     iss = Path(__file__).resolve().parents[1] / "fleet_agent" / "setup" / "ChatXAgent.iss"
     text = iss.read_text(encoding="utf-8")
-    assert 'AppVersion "0.3.29"' in text
+    assert 'AppVersion "0.3.30"' in text
     assert "install-panel" in text
     assert "ChatX Fleet Panel" in text
     assert "ChatXFleetPanel" in text

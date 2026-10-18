@@ -410,16 +410,10 @@ def build_setup_script(setup: Path, sha256: str, pid: int, state_dir: Path, *,
         "}",
         "try { $got = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash } catch { Relaunch-Agent 'sha256 unreadable'; exit 1 }",
         "if ($got.ToLower() -ne $want) { Relaunch-Agent 'sha256 mismatch'; exit 1 }",
-        # Full path only. Never match adb by image name; other adb.exe copies may be legitimate.
-        # kill-server and the process stop are separate: a missing server must not skip the stop.
+        # 0.3.30: the adb server is never shut down and adb is never stopped. Full path only, log-only:
+        # a running or locked bundled adb is left alone; the installer's restartreplace swaps it after reboot.
         "try {",
-        "  if (Test-Path -LiteralPath $adb) {",
-        "    & $adb kill-server",
-        "    Start-Sleep -Seconds 1",
-        "  }",
-        "} catch {}",
-        "try {",
-        "  Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $adb } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+        "  if (@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $adb }).Count -gt 0) { Note ('bundled adb in use, left running: ' + $adb) }",
         "} catch {}",
         f"$argList = @({arg_list})",
         "$t0 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()",
