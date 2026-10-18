@@ -596,7 +596,7 @@ def test_ack_scrubs_raw_serial_from_phone_task_errors(st):
 # ── 节点 ──────────────────────────────────────────────────────────────────────
 def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
-    assert AGENT_VERSION == "0.3.30"
+    assert AGENT_VERSION == "0.3.31"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     # Hostname-independent: the dispatch guard blocks seat 173 / 176 / live hosts by name, so on
     # GANZHI-176 the agent rejected these tasks. Pin a neutral room PC name.

@@ -318,7 +318,7 @@ def test_agent_advertises_v2_and_runs_warmup(st, tmp_path, monkeypatch):
     from tests.test_fleet_control import _FakeNet
     from tests.test_fleet_phone_flows import FakeAdb
 
-    assert AGENT_VERSION == "0.3.30"
+    assert AGENT_VERSION == "0.3.31"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
     # Hostname-independent: the dispatch guard blocks seat 173 / 176 / live hosts by name, so on
     # GANZHI-176 the agent rejected these tasks. Pin a neutral room PC name.

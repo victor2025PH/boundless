@@ -21,7 +21,7 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.30"
+  #define AppVersion "0.3.31"
 #endif
 #ifndef PlatformToolsDir
   #define PlatformToolsDir "..\platform-tools"
