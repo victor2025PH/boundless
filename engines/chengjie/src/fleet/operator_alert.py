@@ -67,6 +67,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "recovered": "已恢复：{items}",
         "hide_hint": "关闭或最小化后留在右下角托盘（双击托盘图标可再打开）；有新的异常会自动弹出来",
         "tray_btn": "收到托盘",
+        "menu_show": "显示",
+        "menu_exit": "退出",
         "refresh_hint": "名单会自动更新",
         "reason_offline": "离线",
         "reason_unauthorized": "未授权",
@@ -108,6 +110,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "recovered": "Recovered: {items}",
         "hide_hint": "Closing or minimizing keeps this in the tray (double-click the tray icon to reopen). It pops up again on new problems.",
         "tray_btn": "Hide to tray",
+        "menu_show": "Show",
+        "menu_exit": "Exit",
         "refresh_hint": "This list updates automatically",
         "reason_offline": "Offline",
         "reason_unauthorized": "Unauthorized",
@@ -305,6 +309,17 @@ $notify.Visible = $true
 $notify.Icon = [System.Drawing.SystemIcons]::Warning
 $notify.Text = 'ChatX'
 
+function Show-Panel {
+  $form.Show()
+  $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+  $form.Activate()
+}
+
+$trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$menuShow = $trayMenu.Items.Add('Show')
+$menuExit = $trayMenu.Items.Add('Exit')
+$notify.ContextMenuStrip = $trayMenu
+
 function Update-View {
   try {
     $snap = Read-Utf8Json $Snapshot
@@ -324,6 +339,8 @@ function Update-View {
     if ($title.Length -gt 63) { $notify.Text = $title.Substring(0, 63) } else { $notify.Text = $title }
     $btn.Text = Txt $snap $script:lang 'toggle'
     $trayBtn.Text = Txt $snap $script:lang 'tray_btn'
+    $menuShow.Text = Txt $snap $script:lang 'menu_show'
+    $menuExit.Text = Txt $snap $script:lang 'menu_exit'
     $hint.Text = Txt $snap $script:lang 'hide_hint'
     $list.Items.Clear()
     $pcText = ''
@@ -450,10 +467,18 @@ $form.add_Resize({
   if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) { $form.Hide() }
 })
 
-$notify.add_DoubleClick({
-  $form.Show()
-  $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
-  $form.Activate()
+$notify.add_DoubleClick({ Show-Panel })
+
+$notify.add_MouseClick({
+  param($sender, $e)
+  if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Show-Panel }
+})
+
+$menuShow.add_Click({ Show-Panel })
+
+$menuExit.add_Click({
+  $script:quitting = $true
+  $form.Close()
 })
 
 $timer = New-Object System.Windows.Forms.Timer

@@ -20,3 +20,18 @@ def test_tray_button_strings_both_languages():
     pack = zh or packs[0]
     assert pack["tray_btn"] == "收到托盘" if zh else packs[0]["zh"]["tray_btn"] == "收到托盘"
     assert packs[0]["en"]["tray_btn"] == "Hide to tray"
+
+
+def test_tray_menu_show_exit_and_single_click_restore():
+    s = oa.PANEL_SCRIPT
+    assert "System.Windows.Forms.ContextMenuStrip" in s
+    assert "$notify.ContextMenuStrip = $trayMenu" in s
+    assert "$menuShow.add_Click({ Show-Panel })" in s
+    assert "$menuExit.add_Click({" in s and "$script:quitting = $true" in s
+    assert "MouseButtons]::Left) { Show-Panel }" in s
+    # close still hides to tray unless quitting
+    assert "$e.Cancel = $true" in s
+    assert oa.STRINGS["zh"]["menu_show"] == "\u663e\u793a"
+    assert oa.STRINGS["zh"]["menu_exit"] == "\u9000\u51fa"
+    assert oa.STRINGS["en"]["menu_show"] == "Show"
+    assert oa.STRINGS["en"]["menu_exit"] == "Exit"
