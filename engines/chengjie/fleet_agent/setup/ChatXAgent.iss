@@ -26,6 +26,16 @@
 #ifndef PlatformToolsDir
   #define PlatformToolsDir "..\platform-tools"
 #endif
+; 1.0.10: room-a baseline SHA256 of the bundled adb files (build_setup.ps1 refuses any other copy).
+#ifndef AdbExeSha256
+  #define AdbExeSha256 "b4a6b455702684652cccf7b46258b29e653538904359a58fd4931cf3ef286b3f"
+#endif
+#ifndef AdbWinApiSha256
+  #define AdbWinApiSha256 "c1d653030b4bde65d3e07e4d0b0979e17be56df1436cdd15528630f27808050d"
+#endif
+#ifndef AdbWinUsbApiSha256
+  #define AdbWinUsbApiSha256 "0710e894d9b40f71a670c13c694079d564c92c1279da382cfe4850983aaebe1b"
+#endif
 
 #define AppName "智拓群控节点"
 #define AppPublisher "ChatX"
@@ -82,9 +92,11 @@ Source: "{#SetupDir}\fleet-node.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; is replaced after the next reboot (restartreplace); StopBundledAdb only logs it to C:\ProgramData\ChatX\install.log.
 ; Versioned binaries are excluded from ignoreversion so an unchanged adb.exe is not overwritten.
 Source: "{#PlatformToolsDir}\*"; DestDir: "{app}\platform-tools"; Flags: ignoreversion restartreplace recursesubdirs createallsubdirs skipifsourcedoesntexist; Excludes: "adb.exe,AdbWinApi.dll,AdbWinUsbApi.dll"
-Source: "{#PlatformToolsDir}\adb.exe"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
-Source: "{#PlatformToolsDir}\AdbWinApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
-Source: "{#PlatformToolsDir}\AdbWinUsbApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
+; 1.0.10: a target copy whose SHA256 already equals the baseline is skipped, so an unchanged
+; (possibly running) adb is not registered in PendingFileRenameOperations.
+Source: "{#PlatformToolsDir}\adb.exe"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist; Check: BundledAdbChanged('adb.exe', '{#AdbExeSha256}')
+Source: "{#PlatformToolsDir}\AdbWinApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist; Check: BundledAdbChanged('AdbWinApi.dll', '{#AdbWinApiSha256}')
+Source: "{#PlatformToolsDir}\AdbWinUsbApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist; Check: BundledAdbChanged('AdbWinUsbApi.dll', '{#AdbWinUsbApiSha256}')
 ; 0.3.30: system adb in C:\platform-tools (room-a baseline, SHA256 pinned in build_setup.ps1).
 ; Only when C:\platform-tools\adb.exe is absent. An existing copy (possibly running) is never
 ; overwritten; NeedSystemAdb logs its SHA256 to the setup log instead.
@@ -246,6 +258,28 @@ begin
       ChatXInstallLog('system adb absent: installing room-a baseline into C:\platform-tools');
   end;
   Result := not SysAdbPresent;
+end;
+
+function BundledAdbChanged(const Name, Expected: String): Boolean;
+var
+  dest, h: String;
+begin
+  { 1.0.10: copy (and, when locked, register restartreplace) only if the app-dir copy is
+    missing or differs from the baseline. An identical file is left alone and logged. }
+  Result := True;
+  dest := ExpandConstant('{app}\platform-tools\') + Name;
+  if not FileExists(dest) then
+    Exit;
+  try
+    h := GetSHA256OfFile(dest);
+  except
+    h := '';
+  end;
+  if (h <> '') and (CompareText(h, Expected) = 0) then
+  begin
+    Result := False;
+    ChatXInstallLog('bundled ' + Name + ' unchanged (sha256 matches baseline), not copied, no restart replace: ' + dest);
+  end;
 end;
 
 function IsLiveStreamHost(): Boolean;

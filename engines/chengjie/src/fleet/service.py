@@ -102,7 +102,7 @@ def build_panel_task_xml(state_dir: Path) -> str:
     command = _xml_text(args[0])
     rest = _xml_text(subprocess.list2cmdline(args[1:]))
     return (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<?xml version="1.0" encoding="UTF-16"?>\n'
         '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
         "  <Principals>\n"
         '    <Principal id="Interactive">\n'
@@ -133,6 +133,28 @@ def build_panel_task_xml(state_dir: Path) -> str:
         "  </Actions>\n"
         "</Task>\n"
     )
+
+
+def write_panel_task_xml(state_dir: Path) -> Path:
+    """Write panel_task.xml as UTF-16 LE with a BOM, matching its declaration.
+
+    1.0.10 (room-d 2026-10-19): ``schtasks /Create /XML`` rejected the old
+    UTF-8 file with "The task XML is malformed. (1,40) unable to switch the
+    encoding", so the ChatX Fleet Panel logon task was never registered and the
+    installer exited 1. The same INTERACTIVE + LogonTrigger task saved as
+    UTF-16 registers fine from an ssh session 0, so the session was not the cause.
+    """
+    p = panel_task_xml_path(state_dir)
+    p.write_bytes(build_panel_task_xml(state_dir).encode("utf-16"))
+    return p
+
+
+def read_panel_task_xml(path: Path) -> str:
+    """Decode panel_task.xml written by any version (UTF-16 with BOM, or older UTF-8)."""
+    data = Path(path).read_bytes()
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16")
+    return data.decode("utf-8-sig")
 
 
 def build_panel_logon_create(state_dir: Path, *, task_name: str = PANEL_TASK_NAME) -> List[str]:
@@ -299,7 +321,7 @@ def install_panel_logon(state_dir: Path, *, run: RunFn = _run,
         return {"ok": True, "kind": "skipped", "task_name": task_name, "steps": []}
     try:
         _ensure_panel_script(state_dir)
-        panel_task_xml_path(state_dir).write_text(build_panel_task_xml(state_dir), encoding="utf-8")
+        write_panel_task_xml(state_dir)
     except Exception as e:
         logger.warning("[service] panel script was not written: %s", type(e).__name__)
         return {"ok": False, "kind": "schtasks", "task_name": task_name, "steps": [], "out": type(e).__name__}
@@ -713,7 +735,7 @@ def supervise(make_agent: Callable[[], object], stop: Optional[threading.Event] 
 __all__ = [
     "TASK_NAME", "PANEL_TASK_NAME", "SYSTEMD_UNIT", "is_frozen", "service_workdir", "agent_command",
     "build_schtasks_create", "build_schtasks_run", "build_schtasks_delete", "build_schtasks_query",
-    "build_panel_logon_create", "build_panel_task_xml", "build_panel_run_key", "build_panel_run_key_delete",
+    "build_panel_logon_create", "build_panel_task_xml", "write_panel_task_xml", "read_panel_task_xml", "build_panel_run_key", "build_panel_run_key_delete",
     "write_panel_run_key", "ensure_panel_run_key",
     "build_task_state_query", "build_systemd_unit", "install_service", "install_panel_logon", "uninstall_service",
     "service_status", "supervise", "acquire_single_instance", "single_instance_name", "SingleInstance",

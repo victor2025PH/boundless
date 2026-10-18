@@ -1487,11 +1487,11 @@ def parse_schtasks_account(text: str) -> str:
 def _panel_task_account(state_dir: Path) -> str:
     xml_account = ""
     try:
-        from .service import PANEL_TASK_XML_NAME
+        from .service import PANEL_TASK_XML_NAME, read_panel_task_xml
 
         xml_account = parse_panel_task_account(
-            (state_dir / PANEL_TASK_XML_NAME).read_text(encoding="utf-8")
-            if isinstance(state_dir, Path) else (Path(state_dir) / PANEL_TASK_XML_NAME).read_text(encoding="utf-8")
+            read_panel_task_xml(state_dir / PANEL_TASK_XML_NAME)
+            if isinstance(state_dir, Path) else read_panel_task_xml(Path(state_dir) / PANEL_TASK_XML_NAME)
         )
     except (OSError, UnicodeError):
         xml_account = ""
