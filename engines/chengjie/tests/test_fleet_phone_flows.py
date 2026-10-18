@@ -598,6 +598,9 @@ def test_agent_caps_default_off_and_run_social_flow(st, tmp_path, monkeypatch):
     from src.fleet.agent import AGENT_VERSION, AgentConfig, NodeAgent
     assert AGENT_VERSION == "0.3.30"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
+    # Hostname-independent: the dispatch guard blocks seat 173 / 176 / live hosts by name, so on
+    # GANZHI-176 the agent rejected these tasks. Pin a neutral room PC name.
+    monkeypatch.setattr("src.fleet.agent.host_name", lambda: "ROOM-TEST-PC")
     bare = AgentConfig(tmp_path / "bare")
     bare.data.update({"controller_url": "http://127.0.0.1:1", "instances": []})
     bare_agent = NodeAgent(bare, http=lambda *a, **k: (200, {}), app_version="t")

@@ -337,6 +337,9 @@ def test_agent_heartbeat_observes_without_putting_serial_on_the_alert(tmp_path, 
 
 def test_agent_execute_counts_phone_failures_and_ignores_rejects(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_mod, "is_live_stream_host", lambda state_dir=None: False)
+    # Hostname-independent: the dispatch guard blocks seat 173 / 176 / live hosts by name, so on
+    # GANZHI-176 the agent rejected these tasks. Pin a neutral room PC name.
+    monkeypatch.setattr("src.fleet.agent.host_name", lambda: "ROOM-TEST-PC")
     cfg = agent_mod.AgentConfig(tmp_path / "fleet")
     cfg.data["operator_alert_enabled"] = True
     cfg.data["operator_alert_fail_streak"] = 2

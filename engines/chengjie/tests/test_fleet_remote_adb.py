@@ -427,6 +427,15 @@ def test_agent_enable_phone_adb_persists_and_is_idempotent(tmp_path, monkeypatch
 
     monkeypatch.setattr("src.fleet.detect.is_live_stream_host", lambda state_dir=None: False)
     monkeypatch.setattr(adb_bundle, "bundled_adb_candidates", lambda: (str(adb),))
+    # The real state-dir ACL lock needs an elevated, ProgramData-like parent; tmp_path is neither,
+    # so lock_state_dir raised StateDirLockError. The stub only creates the dir; ACLs are covered by test_fleet_enroll_v2.
+    monkeypatch.setattr("src.fleet.agent.lock_state_dir", lambda p, *a, **k: Path(p).mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr("src.fleet.identity.lock_state_dir", lambda p, *a, **k: Path(p).mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr("src.fleet.agent.assign_owner_admins", lambda *a, **k: None)
+    monkeypatch.setattr("src.fleet.identity.assign_owner_admins", lambda *a, **k: None)
+    # Hostname-independent: the dispatch guard blocks seat 173 / 176 / live hosts by name, so on
+    # GANZHI-176 the agent rejected these tasks. Pin a neutral room PC name.
+    monkeypatch.setattr("src.fleet.agent.host_name", lambda: "ROOM-TEST-PC")
     monkeypatch.setattr(adb_bundle.subprocess, "run", run)
     # Not tmp_path itself: conftest keeps files open there, so Windows cannot
     # rename that directory (WinError 5). A child directory can be locked in place.

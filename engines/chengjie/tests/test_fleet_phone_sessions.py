@@ -320,6 +320,9 @@ def test_agent_advertises_v2_and_runs_warmup(st, tmp_path, monkeypatch):
 
     assert AGENT_VERSION == "0.3.30"
     monkeypatch.setenv("CHATX_FLEET_STATE_DIR", str(tmp_path / "state"))
+    # Hostname-independent: the dispatch guard blocks seat 173 / 176 / live hosts by name, so on
+    # GANZHI-176 the agent rejected these tasks. Pin a neutral room PC name.
+    monkeypatch.setattr("src.fleet.agent.host_name", lambda: "ROOM-TEST-PC")
     client = _client(st)
     cfg = AgentConfig(tmp_path / "state")
     cfg.data.update({"controller_url": "http://127.0.0.1:1", "instances": [], "phone_flows_enabled": True})
