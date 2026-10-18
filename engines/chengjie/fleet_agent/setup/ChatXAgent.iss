@@ -44,8 +44,9 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=admin
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+SetupLogging=yes
 UninstallDisplayName={#AppName}
 VersionInfoVersion={#AppVersion}
 CloseApplications=no
@@ -83,6 +84,12 @@ Source: "{#PlatformToolsDir}\*"; DestDir: "{app}\platform-tools"; Flags: ignorev
 Source: "{#PlatformToolsDir}\adb.exe"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
 Source: "{#PlatformToolsDir}\AdbWinApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
 Source: "{#PlatformToolsDir}\AdbWinUsbApi.dll"; DestDir: "{app}\platform-tools"; Flags: restartreplace skipifsourcedoesntexist
+; 0.3.30: system adb in C:\platform-tools (room-a baseline, SHA256 pinned in build_setup.ps1).
+; Only when C:\platform-tools\adb.exe is absent. An existing copy (possibly running) is never
+; overwritten; NeedSystemAdb logs its SHA256 to the setup log instead.
+Source: "{#PlatformToolsDir}\adb.exe"; DestDir: "C:\platform-tools"; Flags: onlyifdoesntexist uninsneveruninstall skipifsourcedoesntexist; Check: NeedSystemAdb
+Source: "{#PlatformToolsDir}\AdbWinApi.dll"; DestDir: "C:\platform-tools"; Flags: onlyifdoesntexist uninsneveruninstall skipifsourcedoesntexist; Check: NeedSystemAdb
+Source: "{#PlatformToolsDir}\AdbWinUsbApi.dll"; DestDir: "C:\platform-tools"; Flags: onlyifdoesntexist uninsneveruninstall skipifsourcedoesntexist; Check: NeedSystemAdb
 
 [InstallDelete]
 Type: files; Name: "{autoprograms}\Fleet node status.lnk"
@@ -113,6 +120,8 @@ var
   AgentWasStopped: Boolean;
   SetupFinishedOk: Boolean;
   AgentRelaunched: Boolean;
+  SysAdbChecked: Boolean;
+  SysAdbPresent: Boolean;
 
 function CmdParam(const Prefix: String): String;
 var
@@ -203,6 +212,30 @@ begin
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+function NeedSystemAdb(): Boolean;
+var
+  h: String;
+begin
+  { Decided once, before the first file is copied, so the three files go together. }
+  if not SysAdbChecked then
+  begin
+    SysAdbChecked := True;
+    SysAdbPresent := FileExists('C:\platform-tools\adb.exe');
+    if SysAdbPresent then
+    begin
+      try
+        h := GetSHA256OfFile('C:\platform-tools\adb.exe');
+      except
+        h := 'unreadable';
+      end;
+      Log('system adb present, not overwritten: C:\platform-tools\adb.exe sha256=' + h);
+    end
+    else
+      Log('system adb absent: installing room-a baseline into C:\platform-tools');
+  end;
+  Result := not SysAdbPresent;
+end;
+
 function IsLiveStreamHost(): Boolean;
 var
   env: String;
@@ -245,6 +278,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   NeedsRestart := False;
+  NeedSystemAdb();
   StopOurAgent();
   AgentWasStopped := True;
   StopBundledAdb();

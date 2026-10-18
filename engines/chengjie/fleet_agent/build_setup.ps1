@@ -71,13 +71,19 @@ if (-not $Iscc -or -not (Test-Path -LiteralPath $Iscc)) {
   exit 2
 }
 
-$pt = Join-Path $here "platform-tools\adb.exe"
-if (Test-Path -LiteralPath $pt) {
-  Write-Host "[setup] bundling platform-tools from $pt"
-} else {
-  Write-Host "[setup] platform-tools\adb.exe is not staged. The setup still builds."
-  Write-Host "[setup] Phone-room nodes need it. See fleet_agent\platform-tools\README.txt"
+# 0.3.30: adb is required and must be the room-a baseline (room-a C:\platform-tools, checked 2026-10-18).
+$adbPins = [ordered]@{
+  'adb.exe' = 'b4a6b455702684652cccf7b46258b29e653538904359a58fd4931cf3ef286b3f'
+  'AdbWinApi.dll' = 'c1d653030b4bde65d3e07e4d0b0979e17be56df1436cdd15528630f27808050d'
+  'AdbWinUsbApi.dll' = '0710e894d9b40f71a670c13c694079d564c92c1279da382cfe4850983aaebe1b'
 }
+foreach ($n in $adbPins.Keys) {
+  $f = Join-Path $here "platform-tools\$n"
+  if (-not (Test-Path -LiteralPath $f)) { throw "missing fleet_agent\platform-tools\$n (stage the room-a baseline first)" }
+  $h = Get-SetupSha256 $f
+  if ($h -ne $adbPins[$n]) { throw "fleet_agent\platform-tools\$n sha256 $h does not match the room-a baseline" }
+}
+Write-Host "[setup] platform-tools matches the room-a baseline (3 files)"
 $ver = "0.3.0"
 $agentPy = Join-Path $engine "src\fleet\agent.py"
 $hit = Select-String -Path $agentPy -Pattern 'AGENT_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1

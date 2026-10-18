@@ -69,6 +69,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "tray_btn": "收到托盘",
         "menu_show": "显示",
         "menu_exit": "退出",
+        "exit_confirm": "确定退出现场待办吗？",
         "refresh_hint": "名单会自动更新",
         "reason_offline": "离线",
         "reason_unauthorized": "未授权",
@@ -112,6 +113,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "tray_btn": "Hide to tray",
         "menu_show": "Show",
         "menu_exit": "Exit",
+        "exit_confirm": "Exit the room to-do panel?",
         "refresh_hint": "This list updates automatically",
         "reason_offline": "Offline",
         "reason_unauthorized": "Unauthorized",
@@ -307,6 +309,9 @@ $form.Controls.Add($trayBtn)
 $notify = New-Object System.Windows.Forms.NotifyIcon
 $notify.Visible = $true
 $notify.Icon = [System.Drawing.SystemIcons]::Warning
+$nodeIco = Join-Path (Join-Path $env:ProgramFiles 'ChatX Agent') 'fleet-node.ico'
+if (Test-Path -LiteralPath $nodeIco) { try { $notify.Icon = New-Object System.Drawing.Icon($nodeIco) } catch {} }
+$script:exitAsk = 'Exit?'
 $notify.Text = 'ChatX'
 
 function Show-Panel {
@@ -341,6 +346,7 @@ function Update-View {
     $trayBtn.Text = Txt $snap $script:lang 'tray_btn'
     $menuShow.Text = Txt $snap $script:lang 'menu_show'
     $menuExit.Text = Txt $snap $script:lang 'menu_exit'
+    $script:exitAsk = Txt $snap $script:lang 'exit_confirm'
     $hint.Text = Txt $snap $script:lang 'hide_hint'
     $list.Items.Clear()
     $pcText = ''
@@ -477,6 +483,8 @@ $notify.add_MouseClick({
 $menuShow.add_Click({ Show-Panel })
 
 $menuExit.add_Click({
+  $ans = [System.Windows.Forms.MessageBox]::Show($script:exitAsk, $form.Text, [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+  if ($ans -ne [System.Windows.Forms.DialogResult]::Yes) { return }
   $script:quitting = $true
   $form.Close()
 })

@@ -85,6 +85,12 @@ def ocr_collect_flags() -> list:
     return flags
 
 
+def ocr_exclude_flags() -> list:
+    """--no-ocr: keep the OCR stack out even if a module leaks into the build venv."""
+    print("--no-ocr: rapidocr_onnxruntime / onnxruntime / cv2 excluded")
+    return [f for mod in ("rapidocr_onnxruntime", "onnxruntime", "cv2") for f in ("--exclude-module", mod)]
+
+
 def assert_phone_flows_startup() -> None:
     """Refuse to package an agent whose PhoneFlows constructor drops state_dir.
 
@@ -128,6 +134,7 @@ def sha256(p: Path) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--clean", action="store_true")
+    ap.add_argument("--no-ocr", action="store_true", help="never bundle rapidocr/onnxruntime/cv2 (clean venv build)")
     ap.add_argument("--base-url", default="https://bd2026.cc/downloads/fleet/", help="manifest.url 的前缀")
     ap.add_argument("--skip-build", action="store_true", help="只重算 sha256 / manifest（已有 exe）")
     args = ap.parse_args()
@@ -147,7 +154,7 @@ def main() -> int:
                "--name", NAME, "--paths", str(ENGINE), "--hidden-import", "yaml",
                "--add-data", ui_map_add_data(),
                "--add-data", like_templates_add_data(),
-               *ocr_collect_flags(),
+               *(ocr_exclude_flags() if args.no_ocr else ocr_collect_flags()),
                "--distpath", str(DIST), "--workpath", str(HERE / "build"), "--specpath", str(HERE / "build"),
                str(HERE / "entry.py")]
         print("→", " ".join(cmd))
