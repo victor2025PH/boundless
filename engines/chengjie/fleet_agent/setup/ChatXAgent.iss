@@ -21,7 +21,10 @@
   #define DistDir "..\dist"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.29"
+  #define AppVersion "0.3.30"
+#endif
+#ifndef SetupVersion
+  #define SetupVersion "1.0.9"
 #endif
 #ifndef PlatformToolsDir
   #define PlatformToolsDir "..\platform-tools"
@@ -47,7 +50,9 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayName={#AppName}
-VersionInfoVersion={#AppVersion}
+; Installer package version (file properties of ChatXAgentSetup.exe); the agent version stays AppVersion.
+VersionInfoVersion={#SetupVersion}
+VersionInfoProductVersion={#AppVersion}
 CloseApplications=no
 
 [UninstallRun]
