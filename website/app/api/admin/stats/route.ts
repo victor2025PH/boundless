@@ -482,9 +482,27 @@ export async function GET(req: NextRequest) {
   const dlClicks: Record<string, number> = {};
   const dlFaq: Record<string, number> = {};
   const dlBySid: Record<string, { reach: boolean; clicked: boolean }> = {};
+  // ── @ChatX_bot 广告归因：按来源码 src 串起 start → 下载页点击 → 安装包请求 ──
+  type SrcRow = { starts: number; firstStarts: number; clicks: number; redirects: number };
+  const bySrc: Record<string, SrcRow> = {};
+  const srcRow = (s: string) => (bySrc[s] ??= { starts: 0, firstStarts: 0, clicks: 0, redirects: 0 });
   for (const e of winEvents) {
     const ev = String(e.event ?? "");
     const sid = String(e.sid ?? "");
+    if (ev === "chatx_bot_start") {
+      const r = srcRow(propStr(e, "src") || "organic");
+      r.starts++;
+      if ((e.props as Record<string, unknown> | null)?.first === true) r.firstStarts++;
+      continue;
+    }
+    if (ev === "download_redirect") {
+      srcRow(propStr(e, "src") || "organic").redirects++;
+      continue;
+    }
+    if (ev === "chatx_download_click") {
+      const s = propStr(e, "src");
+      if (s) srcRow(s).clicks++;
+    }
     if (ev === "download_menu_click") {
       const c = propStr(e, "client") || "?";
       dlEntryMenu[c] = (dlEntryMenu[c] ?? 0) + 1;
@@ -525,6 +543,17 @@ export async function GET(req: NextRequest) {
     .map(([q, n]) => ({ q, n }))
     .sort((a, b) => b.n - a.n)
     .slice(0, 8);
+  const chatxSources = Object.entries(bySrc)
+    .map(([src, r]) => ({ src, ...r, rate: pct(r.clicks, r.starts) }))
+    .sort((a, b) => b.starts - a.starts || b.clicks - a.clicks)
+    .slice(0, 30);
+  const chatxBot = {
+    starts: chatxSources.reduce((n, r) => n + r.starts, 0),
+    firstStarts: chatxSources.reduce((n, r) => n + r.firstStarts, 0),
+    clicks: chatxSources.reduce((n, r) => n + r.clicks, 0),
+    redirects: chatxSources.reduce((n, r) => n + r.redirects, 0),
+    sources: chatxSources,
+  };
   const downloads = {
     entry: { menu: dlEntryMenu, hub: dlEntryHub },
     clients: dlClients,
@@ -534,6 +563,7 @@ export async function GET(req: NextRequest) {
       rate: pct(dlConverted, dlSessions),
     },
     faqTop: dlFaqTop,
+    chatxBot,
   };
 
   // ── 获客归因：会话级「来源 → 留资」转化 ──

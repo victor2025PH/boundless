@@ -76,6 +76,13 @@ interface Stats {
     funnel: { sessions: number; converted: number; rate: number };
     faqTop: { q: string; n: number }[];
     series?: { pv: number[]; clicks: number[] };
+    chatxBot?: {
+      starts: number;
+      firstStarts: number;
+      clicks: number;
+      redirects: number;
+      sources: { src: string; starts: number; firstStarts: number; clicks: number; redirects: number; rate: number }[];
+    };
   };
   /** 龙珠彩蛋：事件漏斗 + 存储层权威计数 */
   dragon?: {
@@ -1841,6 +1848,43 @@ export default function AdminPage() {
                                 <span className="shrink-0 font-medium text-amber-300">{f.n}</span>
                               </div>
                             ))}
+                          </div>
+                        )}
+                        {stats.downloads.chatxBot && stats.downloads.chatxBot.sources.length > 0 && (
+                          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+                            <div className="mb-2 flex items-center justify-between text-[11px] text-slate-400">
+                              <span>@ChatX_bot 广告来源（/start → 下载）</span>
+                              <span>
+                                start <span className="text-cyan-300">{stats.downloads.chatxBot.starts}</span>
+                                {" · "}首触 <span className="text-slate-300">{stats.downloads.chatxBot.firstStarts}</span>
+                                {" · "}下载 <span className="text-emerald-300">{stats.downloads.chatxBot.clicks}</span>
+                                {" · "}包请求 <span className="text-amber-300">{stats.downloads.chatxBot.redirects}</span>
+                              </span>
+                            </div>
+                            <table className="w-full text-[11px]">
+                              <thead>
+                                <tr className="text-left text-slate-500">
+                                  <th className="py-1 font-normal">src</th>
+                                  <th className="py-1 text-right font-normal">start</th>
+                                  <th className="py-1 text-right font-normal">首触</th>
+                                  <th className="py-1 text-right font-normal">下载</th>
+                                  <th className="py-1 text-right font-normal">包</th>
+                                  <th className="py-1 text-right font-normal">转化</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {stats.downloads.chatxBot.sources.map((r) => (
+                                  <tr key={r.src} className="border-t border-slate-800/60 text-slate-300">
+                                    <td className="py-1 font-mono">{r.src}</td>
+                                    <td className="py-1 text-right">{r.starts}</td>
+                                    <td className="py-1 text-right">{r.firstStarts}</td>
+                                    <td className="py-1 text-right text-emerald-300">{r.clicks}</td>
+                                    <td className="py-1 text-right text-amber-300">{r.redirects}</td>
+                                    <td className="py-1 text-right font-medium text-cyan-300">{r.rate}%</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           </div>
                         )}
                         {stats.downloads.series && (

@@ -10,20 +10,30 @@ import { ANALYTICS_DIR } from "./data-dir";
 const LOG = process.env.ANALYTICS_LOG || path.join(ANALYTICS_DIR, "events.jsonl");
 
 export async function trackTg(event: string, props?: Record<string, unknown>): Promise<void> {
+  return trackServer(event, props, "tg", "telegram-bot");
+}
+
+/** 任意服务端落账（非 bot 侧也可用，如 /dl 分流入口）：path/ua 标明来源。 */
+export async function trackServer(
+  event: string,
+  props?: Record<string, unknown>,
+  srcPath = "server",
+  ua = "server"
+): Promise<void> {
   try {
     const rec = {
       t: new Date().toISOString(),
       event: String(event).slice(0, 64),
       props: props ?? null,
       sid: "",
-      path: "tg",
+      path: srcPath,
       ref: "",
       utm: "",
-      ua: "telegram-bot",
+      ua,
     };
     await mkdir(path.dirname(LOG), { recursive: true });
     await appendFile(LOG, JSON.stringify(rec) + "\n");
   } catch {
-    /* never fail bot flow over tracking */
+    /* never fail request flow over tracking */
   }
 }
