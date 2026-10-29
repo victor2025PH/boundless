@@ -258,15 +258,26 @@ def build_swap_task_commands(cmd: List[str], *, task_name: str = SWAP_TASK_NAME)
 
 
 def _spawn_detached(cmd: List[str]) -> Any:
-    kw: Dict[str, Any] = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    """Detach upgrade/setup work without opening Windows ``nul``.
+
+    Some locked-down Windows hosts (incl. MICROSO-*) raise ``FileNotFoundError: [Errno 2] ... 'nul'``
+    when ``subprocess.DEVNULL`` opens the DOS device. Use closed PIPEs on Windows instead; keep
+    DEVNULL only on POSIX where ``/dev/null`` is reliable.
+    """
     if os.name == "nt":
         last = None
         for c in build_swap_task_commands(cmd):
-            last = subprocess.run(c, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+            # stdin=PIPE avoids opening ``nul``; capture_output already pipes stdout/stderr.
+            last = subprocess.run(c, stdin=subprocess.PIPE, capture_output=True, text=True, timeout=60)
             if last.returncode != 0:
                 raise RuntimeError(f"{c[1]} rc={last.returncode}: {(last.stderr or last.stdout).strip()[:200]}")
         return last
-    kw["start_new_session"] = True
+    kw: Dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "start_new_session": True,
+    }
     return subprocess.Popen(cmd, **kw)
 
 
