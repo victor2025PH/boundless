@@ -13,6 +13,7 @@ import pytest
 from src.inbox.store import InboxStore
 from src.integrations.whatsapp_rpa.phone_acceptance import (
     EvidenceLog,
+    RecordingDevice,
     SshAdbPhoneDevice,
     cold_texts,
     compare_prefill,
@@ -140,9 +141,110 @@ def test_ssh_adb_never_uses_local_adb_or_server_commands():
     assert "hub176" in argv
     assert argv[-1].startswith("adb -s SERIAL_A")
     assert "kill-server" not in argv[-1]
-    for blocked in (["kill-server"], ["start-server"], ["connect", "1.2.3.4:5555"]):
+    for blocked in (["kill-server"], ["start-server"], ["connect", "1.2.3.4:5555"], ["install", "app.apk"]):
         with pytest.raises(ValueError):
             ssh_adb_argv("hub176", "SERIAL_A", blocked)
+
+
+def _pair_chat_ui_xml() -> str:
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node bounds="[0,0][1080,2400]">
+    <node resource-id="com.whatsapp:id/conversation_contact_name" text="+63 993 355 6049" bounds="[180,96][760,168]" />
+    <node resource-id="com.whatsapp:id/back" text="&lt;" bounds="[12,88][108,184]" />
+    <node text="消息和通话已进行端到端加密，只有此对话中的成员可以查看" bounds="[180,420][900,520]" />
+    <node resource-id="com.whatsapp:id/message_text" text="较方便?" bounds="[36,1400][340,1520]" />
+    <node resource-id="com.whatsapp:id/message_text" text="上一句" bounds="[700,1580][1024,1700]" />
+    <node resource-id="com.whatsapp:id/message_text" text="你好，早上好，在忙吗" bounds="[36,1760][780,1900]" />
+    <node resource-id="com.whatsapp:id/input_attach_button" content-desc="D" bounds="[980,2204][1064,2300]" />
+    <node resource-id="com.whatsapp:id/entry" text="你好，早上好，在忙吗" bounds="[140,2196][920,2324]" />
+  </node>
+</hierarchy>
+"""
+
+
+def test_ui_tree_reads_entry_text_and_splits_bubbles_by_bounds():
+    from src.integrations.whatsapp_rpa.phone_acceptance import screen_from_ui_xml
+
+    sentence = "你好，早上好，在忙吗"
+    screen = screen_from_ui_xml(_pair_chat_ui_xml().encode("utf-8"))
+    assert screen is not None
+    assert screen.source == "uiautomator"
+    assert screen.composer == sentence
+    assert composer_matches(screen.composer, sentence)
+    assert "D" not in screen.composer
+    assert header_matches(screen.header, phone=REAL_PHONE)
+    assert screen.outgoing == ["上一句"]
+    assert "<" not in screen.outgoing
+    assert all("加密" not in line for line in screen.outgoing)
+    assert screen.incoming == ["较方便?", sentence]
+    assert screen_from_ui_xml(b"<hierarchy><node text='no entry'/></hierarchy>") is None
+
+
+@pytest.mark.asyncio
+async def test_device_prefers_ui_dump_and_saves_ocr_boxes_on_fallback(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import SshAdbPhoneDevice, screen_from_ui_xml
+
+    png = _png(32, 32)
+    xml = _pair_chat_ui_xml().encode("utf-8")
+    calls = []
+
+    def runner(argv):
+        remote = argv[-1]
+        calls.append(remote)
+        assert "kill-server" not in remote
+        assert "start-server" not in remote
+        assert " connect" not in f" {remote}"
+        if "uiautomator" in remote and "dump" in remote:
+            assert remote.startswith("adb -s SERIAL_A shell ")
+            return 0, b"UI hierchary dumped to: /sdcard/wa_ui.xml\n", ""
+        if "cat" in remote and "wa_ui.xml" in remote:
+            return 0, xml, ""
+        if "rm" in remote and "wa_ui.xml" in remote:
+            return 0, b"", ""
+        if "screencap" in remote:
+            return 0, png, ""
+        return 0, b"", ""
+
+    ocr_calls = {"n": 0}
+
+    def ocr(_image):
+        ocr_calls["n"] += 1
+        return PhoneScreen(composer="不应该走到 OCR")
+
+    device = SshAdbPhoneDevice("hub176", "SERIAL_A", ocr, runner=runner)
+    screen = await device.read_screen(png)
+    assert screen.composer == "你好，早上好，在忙吗"
+    assert screen.source == "uiautomator"
+    assert ocr_calls["n"] == 0
+    assert any("shell uiautomator dump /sdcard/wa_ui.xml" in call for call in calls)
+    assert any("shell cat /sdcard/wa_ui.xml" in call for call in calls)
+    assert screen_from_ui_xml(xml).composer == screen.composer
+
+    def fail_dump(argv):
+        remote = argv[-1]
+        if "uiautomator" in remote:
+            return 1, b"", "dumped failed"
+        return 0, b"", ""
+
+    boxes = [{"text": "你好，早上好，在忙吗", "box": [140, 2200, 780, 2310]},
+             {"text": "D", "box": [990, 2216, 1048, 2294]}]
+
+    def ocr_with_boxes(_image):
+        parsed = lines_to_screen(boxes, 1080, 2400)
+        parsed.ocr_lines = boxes
+        parsed.source = "ocr"
+        return parsed
+
+    fallback = SshAdbPhoneDevice("hub176", "SERIAL_A", ocr_with_boxes, runner=fail_dump)
+    wrapped = RecordingDevice(fallback, EvidenceLog(tmp_path / "ocr"), "a")
+    saved = await wrapped.read_screen(png)
+    assert saved.source == "ocr"
+    assert saved.composer == "你好，早上好，在忙吗"
+    stored = json.loads(next((tmp_path / "ocr").glob("*.ocr.json")).read_text(encoding="utf-8"))
+    assert stored["source"] == "ocr"
+    assert stored["ocr_lines"] == boxes
+    assert "D" not in stored["composer"]
 
 
 def test_prefill_requires_the_chinese_text_not_the_placeholder():

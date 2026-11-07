@@ -24,12 +24,14 @@ from src.integrations.whatsapp_rpa.phone_notify import parse_wa_notifications
 from src.integrations.whatsapp_rpa.phone_send import (
     PhoneScreen,
     composer_matches,
+    is_screen_chrome,
     screen_is_rate_limited,
 )
 
 logger = logging.getLogger("wa_phone_acceptance")
 
 _FORBIDDEN_ADB = frozenset({"kill-server", "start-server", "connect"})
+_ALLOWED_ADB = frozenset({"shell", "exec-out", "pull"})
 TOKEN_ENV_NAMES = ("WA_DECIDE_TOKEN", "BOUNDLESS_BUS_TOKEN")
 
 
@@ -42,6 +44,8 @@ def ssh_adb_argv(host: str, serial: str, adb_args: Sequence[str]) -> List[str]:
     tokens: List[str] = []
     for arg in adb_args:
         tokens.extend(str(arg).split())
+    if not tokens or tokens[0] not in _ALLOWED_ADB:
+        raise ValueError("adb command must be shell, exec-out, or pull")
     for token in tokens:
         if token in _FORBIDDEN_ADB:
             raise ValueError(f"forbidden adb command: {token}")
@@ -250,7 +254,14 @@ def make_ppocr_reader(base_url: str, post_json: Optional[Callable[..., Dict[str,
             data = _post_json(url, payload, timeout=timeout, headers=None)
         lines = list((data or {}).get("lines") or [])
         width, height = png_size(png)
-        return lines_to_screen(lines, width, height)
+        screen = lines_to_screen(lines, width, height)
+        screen.ocr_lines = [
+            {"text": str(line.get("text") or ""), "box": list(line.get("box") or [])}
+            for line in lines
+            if isinstance(line, dict)
+        ]
+        screen.source = "ocr"
+        return screen
 
     return read
 
@@ -424,6 +435,9 @@ class EvidenceLog:
             "outgoing": list(screen.outgoing or []),
             "last_incoming": screen.last_incoming,
             "notes": list(getattr(screen, "notes", []) or []),
+            "incoming": list(getattr(screen, "incoming", []) or []),
+            "source": str(getattr(screen, "source", "") or ""),
+            "ocr_lines": list(getattr(screen, "ocr_lines", []) or []),
         }
         if extra:
             ocr.update(safe_log_fields(extra, self.secrets))
@@ -490,8 +504,118 @@ def subprocess_runner(argv: Sequence[str]) -> tuple:
     return proc.returncode, proc.stdout or b"", (proc.stderr or b"").decode("utf-8", "replace")
 
 
+_UI_XML_PATH = "/sdcard/wa_ui.xml"
+_TITLE_KEYS = (
+    "conversation_contact_name",
+    "contact_name",
+    "toolbar_title",
+    "action_bar_title",
+)
+_CHEVRON = {"<", "‹", "＜", ">"}
+
+
+def _xml_payload(raw: bytes) -> bytes:
+    if not raw:
+        return b""
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    start = raw.find(b"<")
+    return raw[start:] if start >= 0 else b""
+
+
+def _bounds(value: str):
+    import re
+    match = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", str(value or "").strip())
+    if not match:
+        return None
+    return tuple(int(match.group(index)) for index in range(1, 5))
+
+
+def _is_entry(resource_id: str) -> bool:
+    return str(resource_id or "").lower().endswith("/entry")
+
+
+def _is_title(resource_id: str) -> bool:
+    rid = str(resource_id or "").lower()
+    if "conversations_row" in rid:
+        return False
+    return any(key in rid for key in _TITLE_KEYS)
+
+
+def _is_message(resource_id: str) -> bool:
+    return "message_text" in str(resource_id or "").lower()
+
+
+def screen_from_ui_xml(raw: bytes) -> Optional[PhoneScreen]:
+    """从 uiautomator 的 UI 树读精确文字。读不到输入框节点就返回 None，调用方改走 OCR。
+
+    输入框是 ``com.whatsapp:id/entry`` 的 text，不把旁边的图标算进去。
+    顶栏用 ``conversation_contact_name`` 这类节点。气泡只用 ``message_text``，
+    靠 bounds 分左右。加密提示和单独的「<」不是气泡。
+    """
+    import xml.etree.ElementTree as ET
+
+    payload = _xml_payload(raw)
+    if not payload:
+        return None
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return None
+    width = 0
+    titles: List[str] = []
+    entry: Optional[str] = None
+    entry_bottom = -1
+    bubbles: List[tuple] = []
+    for node in root.iter():
+        bounds = _bounds(node.get("bounds") or "")
+        if bounds and bounds[2] > width:
+            width = bounds[2]
+        rid = node.get("resource-id") or ""
+        text = str(node.get("text") or "")
+        if _is_entry(rid):
+            bottom = bounds[3] if bounds else 0
+            if entry is None or bottom >= entry_bottom:
+                entry = text
+                entry_bottom = bottom
+            continue
+        shown = text.strip() or str(node.get("content-desc") or "").strip()
+        if _is_title(rid) and shown:
+            titles.append(shown)
+            continue
+        if not _is_message(rid) or not shown or not bounds:
+            continue
+        if shown in _CHEVRON or is_screen_chrome(shown):
+            continue
+        bubbles.append((bounds[1], bounds, shown))
+    if entry is None:
+        return None
+    if width <= 0:
+        width = 1080
+    incoming: List[str] = []
+    outgoing: List[str] = []
+    for _top, bounds, shown in sorted(bubbles, key=lambda item: item[0]):
+        left = float(bounds[0])
+        right_gap = float(width) - float(bounds[2])
+        if right_gap < left:
+            outgoing.append(shown)
+        elif left < right_gap:
+            incoming.append(shown)
+    return PhoneScreen(
+        header=" ".join(titles),
+        composer=entry,
+        outgoing=outgoing,
+        incoming=incoming,
+        last_incoming=incoming[-1] if incoming else "",
+        source="uiautomator",
+    )
+
+
 class SshAdbPhoneDevice:
-    """通过 ssh 在远端执行 adb。测试注入 runner，不会真的连上主机。"""
+    """通过 ssh 在远端执行 adb。测试注入 runner，不会真的连上主机。
+
+    读屏先 ``uiautomator dump`` 再 ``cat`` UI 树。树里没有输入框时才用 OCR。
+    """
 
     def __init__(self, host: str, serial: str, read_screen_fn: Callable[[bytes], Any],
                  runner: Optional[Callable[[Sequence[str]], tuple]] = None) -> None:
@@ -547,11 +671,33 @@ class SshAdbPhoneDevice:
         text = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out)
         return parse_wa_notifications(text)
 
+    async def dump_ui_xml(self) -> bytes:
+        """先清掉旧文件，再 dump，再 cat。dump 失败时不拿上一轮的 XML。"""
+        await self._run(["shell", "rm", "-f", _UI_XML_PATH])
+        code, _out, _err = await self._run(
+            ["shell", "uiautomator", "dump", _UI_XML_PATH],
+        )
+        if code != 0:
+            return b""
+        code, out, _err = await self._run(["shell", "cat", _UI_XML_PATH])
+        if code != 0 or not out:
+            return b""
+        if isinstance(out, str):
+            return out.encode("utf-8")
+        return bytes(out)
+
     async def read_screen(self, png: bytes) -> PhoneScreen:
+        parsed = screen_from_ui_xml(await self.dump_ui_xml())
+        if parsed is not None:
+            return parsed
         screen = self.read_screen_fn(png)
         if hasattr(screen, "__await__"):
             screen = await screen
-        return screen if isinstance(screen, PhoneScreen) else PhoneScreen()
+        if not isinstance(screen, PhoneScreen):
+            screen = PhoneScreen()
+        if not screen.source:
+            screen.source = "ocr"
+        return screen
 
 
 def _parse_wm_size(text: str) -> tuple:

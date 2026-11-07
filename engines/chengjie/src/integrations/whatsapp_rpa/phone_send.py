@@ -191,6 +191,8 @@ class PhoneScreen:
     incoming: List[str] = field(default_factory=list)
     last_incoming: str = ""
     notes: List[str] = field(default_factory=list)
+    ocr_lines: List[dict] = field(default_factory=list)
+    source: str = ""
 
 
 class PhoneDevice(Protocol):
