@@ -123,26 +123,117 @@ def _ai_client_ready(ai_client) -> bool:
     return bool(getattr(ai_client, "_oa_client", None) or getattr(ai_client, "client", None))
 
 
-async def build_inprocess_decide(config_path: Path, data_dir: Path, inbox):
-    """进程内调用 decide_whatsapp。按主进程的方式装好 DeepSeek，失败就停。
+_OVERLAY_REPLACE = {"ai.models", "ai.task_routes"}
 
-    不启动 Telegram、关怀或旧 RPA。
+
+def _read_yaml_mapping(path: Path) -> dict:
+    import yaml
+    with open(path, "r", encoding="utf-8") as handle:
+        loaded = yaml.safe_load(handle) or {}
+    if not isinstance(loaded, dict):
+        raise SystemExit(f"配置不是一份映射，验收停止：{path}")
+    return loaded
+
+
+def _merge_overlay(base: dict, overlay: dict, replace: set, prefix: str = "") -> None:
+    for key, value in overlay.items():
+        path = f"{prefix}{key}"
+        if path not in replace and isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_overlay(base[key], value, replace, path + ".")
+        else:
+            base[key] = value
+
+
+class AcceptanceConfig:
+    """验收用的只读配置。不调用 ConfigManager.load，因此不校验 Telegram。"""
+
+    def __init__(self, config_path: Path, data: dict) -> None:
+        self.config_path = Path(config_path)
+        self.config = data
+
+    def get_ai_config(self) -> dict:
+        section = self.config.get("ai") or {}
+        return section if isinstance(section, dict) else {}
+
+    def get_skills_config(self) -> dict:
+        section = self.config.get("skills") or {}
+        return section if isinstance(section, dict) else {}
+
+    def get_intent_config(self) -> dict:
+        section = self.config.get("intent") or {}
+        return section if isinstance(section, dict) else {}
+
+    def get_templates_config(self) -> dict:
+        section = self.config.get("templates") or {}
+        return section if isinstance(section, dict) else {}
+
+    def get_personas_config(self) -> dict:
+        path = self.config_path.parent / "personas.yaml"
+        if not path.exists():
+            inline = self.config.get("personas") or {}
+            return inline if isinstance(inline, dict) else {}
+        try:
+            return _read_yaml_mapping(path)
+        except SystemExit:
+            raise
+        except Exception as exc:
+            raise SystemExit(f"人设文件读不出来，验收停止：{path} ({exc})") from exc
+
+    def get_personas_file_path(self) -> Path:
+        return self.config_path.parent / "personas.yaml"
+
+
+def load_acceptance_config(config_path: Path, data_dir: Path) -> AcceptanceConfig:
+    """只读主配置和同目录 config.local.yaml。不写盘，不跑主进程的校验。"""
+    path = Path(config_path)
+    if not path.is_file():
+        raise SystemExit(f"配置文件不存在，验收停止：{path}")
+    try:
+        data = _read_yaml_mapping(path)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        raise SystemExit(f"配置读不出来，验收停止：{path} ({exc})") from exc
+    overlay_path = path.parent / "config.local.yaml"
+    if overlay_path.is_file():
+        try:
+            overlay = _read_yaml_mapping(overlay_path)
+        except SystemExit:
+            raise
+        except Exception as exc:
+            raise SystemExit(f"凭证 overlay 读不出来，验收停止：{overlay_path} ({exc})") from exc
+        _merge_overlay(data, overlay, _OVERLAY_REPLACE)
+    ai = data.get("ai")
+    if not isinstance(ai, dict):
+        raise SystemExit("配置里没有 ai 段，验收停止。验收只读取 AI（DeepSeek）和人设，不校验 Telegram")
+    key = str(ai.get("api_key") or "").strip()
+    if not key or key == "YOUR_AI_API_KEY" or key.upper().startswith("YOUR_"):
+        raise SystemExit("AI 客户端初始化失败，验收停止。请检查配置里的 DeepSeek（ai.provider / ai.base_url / ai.api_key）")
+    try:
+        probe = float(ai.get("boot_probe_timeout_sec", 6))
+    except (TypeError, ValueError):
+        probe = 6.0
+    if probe <= 0 or probe > 8:
+        ai["boot_probe_timeout_sec"] = 6.0
+    memory = data.setdefault("memory", {})
+    if isinstance(memory, dict):
+        memory["db_path"] = str(Path(data_dir) / "acceptance_memory.db")
+    return AcceptanceConfig(path, data)
+
+
+async def build_inprocess_decide(config_path: Path, data_dir: Path, inbox):
+    """进程内调用 decide_whatsapp。只装 AI 和人设，失败就停。
+
+    不调用 ConfigManager.load，因此不会校验 Telegram phone_number，
+    也不跑主进程里那些会写盘的迁移。不启动 Telegram、关怀或旧 RPA。
     """
     from types import SimpleNamespace
 
     from src.ai.ai_client import AIClient
     from src.integrations.whatsapp_rpa.phone_loop import decide_whatsapp
     from src.skills.skill_manager import SkillManager
-    from src.utils.config_manager import ConfigManager
 
-    manager = ConfigManager(str(config_path))
-    loaded = await manager.load()
-    if not loaded:
-        raise SystemExit(f"配置没有载入，验收停止：{config_path}")
-    cfg = manager.config if isinstance(getattr(manager, "config", None), dict) else {}
-    memory = cfg.setdefault("memory", {})
-    if isinstance(memory, dict):
-        memory["db_path"] = str(Path(data_dir) / "acceptance_memory.db")
+    manager = load_acceptance_config(config_path, data_dir)
     ai_client = AIClient(manager)
     if not await ai_client.initialize() or not _ai_client_ready(ai_client):
         raise SystemExit("AI 客户端初始化失败，验收停止。请检查配置里的 DeepSeek（ai.provider / ai.base_url / ai.api_key）")
@@ -257,6 +348,13 @@ async def async_main(args, *, devices=None, decide_fn=None, ocr_reader=None) -> 
 
 
 async def _run_command(args, data, locks, *, devices=None, decide_fn=None, ocr_reader=None) -> dict:
+    """初始化只碰本地文件和本机锁。
+
+    dry-run、first-touch-cap、stop-test、convert-pending、rate-limit-check
+    不读 ``--config``，不连 OCR，也不连 ssh；这些都留到命令真正收发时。
+    只有 pair-chat 会装 AI。``--config`` 走只读加载，探针最长 8 秒。
+    ``--decide-url`` 在真正要回复时才发请求。
+    """
     del locks
     token = read_token() if getattr(args, "decide_url", "") else ""
     evidence = EvidenceLog(Path(args.evidence_dir), secrets=[token])

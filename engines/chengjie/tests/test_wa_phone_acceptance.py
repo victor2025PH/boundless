@@ -559,29 +559,63 @@ def test_device_lock_is_exclusive_per_serial(tmp_path: Path):
     busy.release()
 
 
+def _write_ai_only_config(directory: Path) -> Path:
+    path = directory / "config.yaml"
+    path.write_text(
+        "ai:\n"
+        "  provider: openai_compatible\n"
+        "  base_url: http://127.0.0.1:9/v1\n"
+        "  model: deepseek-flash\n"
+        "skills:\n"
+        "  enabled: []\n"
+        "personas:\n"
+        "  active: demo\n",
+        encoding="utf-8",
+    )
+    (directory / "config.local.yaml").write_text(
+        "ai:\n  api_key: sk-from-overlay\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_main_config_loader_still_requires_telegram(tmp_path: Path):
+    from src.utils.config_manager import ConfigManager
+
+    path = _write_ai_only_config(tmp_path)
+    manager = ConfigManager(str(path))
+    manager.config = {
+        "ai": {"api_key": "sk-from-overlay"},
+        "skills": {},
+    }
+    assert "telegram" not in manager.config
+    assert manager._validate_config() is False
+
+
 @pytest.mark.asyncio
-async def test_inprocess_decide_exits_when_the_ai_client_is_not_ready(tmp_path: Path, monkeypatch):
+async def test_acceptance_inits_ai_without_telegram(tmp_path: Path, monkeypatch):
     from scripts.wa_phone_loop_acceptance import build_inprocess_decide
 
-    class Cfg:
-        def __init__(self, path):
-            self.config = {"memory": {}, "ai": {"provider": "openai_compatible"}}
-
-        async def load(self):
-            return True
+    path = _write_ai_only_config(tmp_path)
+    seen = {}
 
     class IdleAI:
         def __init__(self, config):
+            seen["config"] = config
             self.client = None
             self._oa_client = None
 
         async def initialize(self):
             return False
 
-    monkeypatch.setattr("src.utils.config_manager.ConfigManager", Cfg)
     monkeypatch.setattr("src.ai.ai_client.AIClient", IdleAI)
     with pytest.raises(SystemExit, match="AI 客户端初始化失败"):
-        await build_inprocess_decide(tmp_path / "config.yaml", tmp_path, object())
+        await build_inprocess_decide(path, tmp_path / "data", object())
+    loaded = seen["config"]
+    assert "telegram" not in loaded.config
+    assert loaded.get_ai_config()["api_key"] == "sk-from-overlay"
+    assert loaded.get_ai_config()["model"] == "deepseek-flash"
+    assert loaded.config["personas"]["active"] == "demo"
 
     class ReadyAI(IdleAI):
         async def initialize(self):
@@ -590,6 +624,7 @@ async def test_inprocess_decide_exits_when_the_ai_client_is_not_ready(tmp_path: 
 
     class Skill:
         def __init__(self, manager, ai):
+            assert "telegram" not in manager.config
             self.ai = ai
 
         async def initialize(self):
@@ -597,7 +632,7 @@ async def test_inprocess_decide_exits_when_the_ai_client_is_not_ready(tmp_path: 
 
     monkeypatch.setattr("src.ai.ai_client.AIClient", ReadyAI)
     monkeypatch.setattr("src.skills.skill_manager.SkillManager", Skill)
-    decide = await build_inprocess_decide(tmp_path / "config.yaml", tmp_path, object())
+    decide = await build_inprocess_decide(path, tmp_path / "data", object())
     assert callable(decide)
 
 
