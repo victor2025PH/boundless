@@ -1,0 +1,23 @@
+# 测试机 overlay 示例。复制到该机自己的 config.local.yaml，不要写进出厂配置，
+# 也不要写进桌面版默认或生产实例。
+#
+# 出厂 whatsapp_rpa.enabled 保持 false。全自动只在这份测试 overlay 里打开。
+# autostart / proactive / 补扫默认仍关：进程起来不会自己扫手机。
+# 真机验证用 scripts/wa_rpa_live_smoke.py，必须带 --confirm 才会发一条。
+whatsapp_rpa:
+  enabled: true
+  reply_mode: auto
+  autostart: false
+  stop_gate_enabled: true
+  open_thread_check: false
+  open_thread_check_enabled: false
+  proactive:
+    enabled: false
+  service:
+    autostart: false
+  accounts:
+    - account_id: wa_test
+      enabled: true
+      adb_serial: "REPLACE_WITH_DEVICE_SERIAL"
+      reply_mode: auto
+      use_business_app: false
