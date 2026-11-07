@@ -263,6 +263,25 @@ class WhatsAppRpaService:
     def trigger_once(self) -> None:
         self._trigger_evt.set()
 
+    async def _run_send_cycle(self, path: str) -> Dict[str, Any]:
+        """一轮发送。
+
+        path=phone 时只跑号码闭环，不碰 runner.run_once、主动续聊、自动通过好友。
+        path=legacy 时走原来的 dump 轮询，并在同一轮里做自动通过和旧续聊入队。
+        """
+        if path == "phone":
+            return await self._run_phone_tick()
+        result = await self._runner.run_once()
+        try:
+            await self._maybe_run_auto_accept()
+        except Exception:
+            logger.debug("wa auto_accept 失败", exc_info=True)
+        try:
+            await self._maybe_enqueue_proactive()
+        except Exception:
+            logger.debug("wa proactive enqueue 失败", exc_info=True)
+        return result
+
     async def _run_phone_tick(self) -> Dict[str, Any]:
         """号码闭环的一轮。没挂上收件箱就停在这一轮，不退回 dump 发送。"""
         if self._phone_runtime is None:
@@ -332,15 +351,15 @@ class WhatsAppRpaService:
                     break
                 continue
 
-            # 号码闭环打开时，不再走 dump 轮询，也不再用「0=不封顶」的旧日上限。
-            _use_phone_loop = False
+            # 号码闭环与旧 dump 轮询二选一，见 send_path。打开新开关时旧路径完全不发。
             try:
-                from src.integrations.whatsapp_rpa.phone_loop import phone_loop_enabled
-                _use_phone_loop = phone_loop_enabled(self._merged_cfg)
+                from src.integrations.whatsapp_rpa.phone_loop import send_path
+                _send_path = send_path(self._merged_cfg)
             except Exception:
-                _use_phone_loop = False
+                _send_path = "legacy"
+            _use_phone_loop = _send_path == "phone"
 
-            # daily_cap 守门（业务日上限：0=不限 / outbound.unlimited_mode 归 0）
+            # 旧路径的 daily_cap：0=不限。号码闭环不读这个数，冷启动限额在 phone ledger。
             _cap = 0 if _use_phone_loop else _business_cap(self._merged_cfg.get("daily_cap"))
             if _cap > 0:
                 _stats = self._state.run_stats(24.0)
@@ -364,10 +383,7 @@ class WhatsAppRpaService:
             _serial = self._merged_cfg.get("adb_serial") or ""
             try:
                 async with get_device_lock(_serial):
-                    if _use_phone_loop:
-                        result = await self._run_phone_tick()
-                    else:
-                        result = await self._runner.run_once()
+                    result = await self._run_send_cycle(_send_path)
                 self._last_run = result
                 step = result.get("step", "")
                 had_peer = bool(result.get("peer_text"))
@@ -392,18 +408,8 @@ class WhatsAppRpaService:
                 self._consecutive_fail += 1
                 empty_streak += 1
 
-            if not _use_phone_loop:
-                # 自动接受联系人申请
-                try:
-                    await self._maybe_run_auto_accept()
-                except Exception:
-                    logger.debug("wa auto_accept 失败", exc_info=True)
-
-                # P15-b: 主动续聊（沉默唤醒）
-                try:
-                    await self._maybe_enqueue_proactive()
-                except Exception:
-                    logger.debug("wa proactive enqueue 失败", exc_info=True)
+            # 自动通过好友和旧的沉默续聊会自己点手机。号码闭环打开时这里不再调用。
+            # 它们已经挪进 _run_send_cycle 的 legacy 分支。
 
             # P12-A: pending 自动过期（每小时最多一次）
             try:
@@ -797,7 +803,18 @@ class WhatsAppRpaService:
     # ── P4-B: 手动发送队列 ────────────────────────────────────────────────
 
     def enqueue_send(self, chat_key: str, peer_name: str, text: str) -> int:
-        """入队一条主动发送任务并立即唤醒 runner 进入下一轮（避免等到下一个 interval）。"""
+        """入队一条旧路径的主动发送，并立刻唤醒 runner。
+
+        号码闭环打开时拒绝入队。这条队列只会被 dump 轮询弹出，
+        放进去就会在关掉新开关后被旧路径发出。返回 0 表示没进队列。
+        """
+        try:
+            from src.integrations.whatsapp_rpa.phone_loop import send_path
+            if send_path(self._merged_cfg) == "phone":
+                logger.info("[wa_phone] 号码闭环已打开，拒绝写入旧发送队列")
+                return 0
+        except Exception:
+            logger.debug("wa enqueue_send 路径判断失败", exc_info=True)
         item_id = self._state.enqueue_send(
             chat_key=chat_key, peer_name=peer_name, text=text)
         # 唤醒 runner 立刻 pop（与 LINE service 对称：入队即触发，降投递延迟）——

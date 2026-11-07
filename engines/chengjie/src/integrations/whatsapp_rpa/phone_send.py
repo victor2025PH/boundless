@@ -16,11 +16,73 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+# 输入框里常见的系统提示。整行是提示时丢掉；正文里夹着提示时也剥掉再比。
+_COMPOSER_HINTS = (
+    "type a message",
+    "输入消息",
+    "写消息",
+    "发消息",
+    "双击以使用表情",
+    "点按以使用表情",
+    "tap to use emoji",
+)
+
+# WhatsApp 自己弹出的限速提示。看到就先停，不靠条数去掐正在聊的朋友。
+_RATE_LIMIT_MARKERS = (
+    "too many messages",
+    "sending messages too fast",
+    "try again later",
+    "couldn't send",
+    "could not send",
+    "发送过于频繁",
+    "发得太快",
+    "消息发得太快",
+    "请稍后再试",
+    "暂时无法发送",
+    "尝试次数过多",
+)
+
+
+def _is_hint_line(line: str) -> bool:
+    """整行是系统提示才丢掉。正文里出现「发消息」这三个字时保留。"""
+    cleaned = _norm(line).casefold()
+    if not cleaned:
+        return True
+    return any(cleaned == hint or cleaned.startswith(hint) for hint in _COMPOSER_HINTS)
+
+
+def _without_hints(line: str) -> str:
+    text = line
+    for hint in _COMPOSER_HINTS:
+        text = re.sub(re.escape(hint), " ", text, flags=re.IGNORECASE)
+    return _norm(text)
+
+
 def composer_matches(composer: str, expected: str) -> bool:
-    """输入框里的字必须和要发的全文一致。多字、少字都不发。"""
+    """要发的全文必须和输入框里的正文一致。系统提示可以多一行，字不能少、不能改。"""
     want = _norm(expected)
-    got = _norm(composer)
-    return bool(want) and got == want
+    if not want:
+        return False
+    raw_lines = str(composer or "").splitlines() or [str(composer or "")]
+    kept = []
+    for raw in raw_lines:
+        line = _norm(raw)
+        if line == want or _without_hints(line) == want:
+            return True
+        if _is_hint_line(line):
+            continue
+        kept.append(line)
+    return _norm(" ".join(kept)) == want
+
+
+def screen_blob(screen: "PhoneScreen") -> str:
+    parts = [screen.header, screen.composer, screen.last_incoming, *list(screen.outgoing or [])]
+    return "\n".join(str(part or "") for part in parts)
+
+
+def screen_is_rate_limited(screen: "PhoneScreen") -> bool:
+    blob = screen_blob(screen).casefold()
+    return any(marker.casefold() in blob for marker in _RATE_LIMIT_MARKERS)
 
 
 def bubble_visible(outgoing: List[str], expected: str) -> bool:
@@ -91,6 +153,14 @@ async def deliver_via_wa_me(
 
     await device.open_url(url)
     before = await device.read_screen(await device.screencap())
+    if screen_is_rate_limited(before):
+        try:
+            await device.press_back()
+        except Exception:
+            pass
+        return SendOutcome(
+            status="throttled", reason="wa_rate_limit", tapped=False, url=url,
+        )
     if not composer_matches(before.composer, body):
         try:
             await device.press_back()
@@ -126,9 +196,19 @@ def _ocr_line(png: bytes) -> str:
 
 
 def ocr_phone_screen(png: bytes) -> PhoneScreen:
-    """用本机 OCR 读顶栏、输入框和画面下半部的文字。
+    """用本机 Tesseract 读顶栏、输入框和画面下半部的文字。
 
     没装 OCR 或截图不是 PNG 时返回空画面。发送口看到空输入框会失败，不会盲发。
+
+    安装（推荐，不访问外网模型）：
+
+    - Debian/Ubuntu: ``sudo apt-get install -y tesseract-ocr tesseract-ocr-chi-sim``
+    - Python 包: ``pip install pytesseract Pillow``（本仓库的 line_rpa 截图识字已走这条）
+    - 检查: ``tesseract --list-langs`` 里要有 ``chi_sim``
+
+    中文界面短句用 chi_sim 够用。若顶栏人名经常认错，再把 ``read_screen_fn``
+    换成收件箱那套 PaddleOCR（``ppocr``）服务，不要改发送口本身。
+    不把识图请求发到云端视觉模型，避免发送前多一次外网依赖。
     """
     if not png or not png.startswith(b"\x89PNG\r\n\x1a\n"):
         return PhoneScreen()

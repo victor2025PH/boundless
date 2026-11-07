@@ -399,17 +399,107 @@ async def test_care_and_wake_use_the_same_sender(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_conversion_manual_and_keyword_write_outreach(tmp_path: Path):
+async def test_conversion_keyword_waits_for_seat(tmp_path: Path):
     device = _ready("收到")
     loop = _loop(tmp_path, device, reply_mode="off")
-    inbound = await loop.handle_inbound(phone=PHONE, text="我下单了")
-    assert inbound["deal"]["ok"] is True
-    assert inbound["deal"]["stage"] == "deal"
-    manual = loop.mark_deal(PHONE, source="manual", note="坐席标记", amount=12, by="sarah")
+    inbound = await loop.handle_inbound(phone=PHONE, text="我下单了，另外我付款了房租")
+    assert inbound["conversion"]["status"] == "pending_confirm"
+    assert loop.inbox.count_active_deals(inbound["conversation_id"]) == 0
+    again = await loop.handle_inbound(phone=PHONE, text="已付款")
+    assert again["conversion"]["fresh"] is False
+    manual = loop.mark_deal(PHONE, source="manual", note="坐席确认", amount=12, by="sarah")
     assert manual["ok"] is True
+    assert manual["stage"] == "deal"
+    assert loop.inbox.count_active_deals(inbound["conversation_id"]) == 1
     logged = loop.inbox.list_outreach_recent(days=30, limit=20, now=1_700_000_100.0)
-    assert {row["status"] for row in logged} >= {"converted"}
+    statuses = {row["status"] for row in logged}
+    assert "pending_confirm" in statuses
+    assert "converted" in statuses
     assert device.taps == 0
+
+
+@pytest.mark.asyncio
+async def test_established_chat_ignores_hourly_cap(tmp_path: Path):
+    device = _ready("你好呀")
+    loop = _loop(tmp_path, device, hourly_cap=1, daily_cap=1)
+    first = await loop.handle_inbound(phone=PHONE, text="在吗", display_name="Ann")
+    device.screen = PhoneScreen(header=PHONE, composer="你好呀")
+    device.after = PhoneScreen(header=PHONE, outgoing=["你好呀"])
+    second = await loop.handle_inbound(phone=PHONE, text="再聊一句", display_name="Ann")
+    assert first["send"]["status"] == "sent"
+    assert second["send"]["status"] == "sent"
+    assert device.taps == 2
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_banner_pauses_without_counting_as_failed(tmp_path: Path):
+    device = FakeDevice(PhoneScreen(
+        header=PHONE, composer="你好呀\n发送过于频繁，请稍后再试",
+    ))
+    loop = _loop(tmp_path, device, rate_limit_pause_sec=600)
+    cid = client_msg_id("reply", PHONE, "你好呀", "fast")
+    first = await loop.send_prepared(
+        phone=PHONE, text="你好呀", source="reply", client_msg_id=cid,
+    )
+    device.screen = PhoneScreen(header=PHONE, composer="你好呀")
+    device.after = PhoneScreen(header=PHONE, outgoing=["你好呀"])
+    second = await loop.send_prepared(
+        phone=PHONE, text="你好呀", source="reply", client_msg_id=cid,
+    )
+    assert first["status"] == "throttled"
+    assert first["reason"] == "wa_rate_limit"
+    assert second["status"] == "throttled"
+    assert second["reason"] == "device_pause"
+    assert device.taps == 0
+    assert composer_matches("你好呀\n输入消息", "你好呀")
+    assert composer_matches("你好呀\n双击以使用表情符号", "你好呀")
+    assert not composer_matches("输入消息", "你好呀")
+    assert not composer_matches("你好", "你好呀")
+
+
+@pytest.mark.asyncio
+async def test_phone_switch_blocks_legacy_send_path(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_loop import send_path
+    from src.integrations.whatsapp_rpa.service import WhatsAppRpaService
+
+    assert send_path({}) == "legacy"
+    assert send_path({"phone_loop": {"enabled": True}}) == "phone"
+    svc = WhatsAppRpaService(
+        config_manager=SimpleNamespace(config={}, config_path=str(tmp_path / "config.yaml")),
+        skill_manager=None,
+        wa_cfg={"account_id": "wa_test", "phone_loop": {"enabled": True}},
+    )
+    called = {"run_once": 0, "proactive": 0, "accept": 0, "phone": 0}
+
+    async def _run_once():
+        called["run_once"] += 1
+        return {"ok": True, "step": "sent", "peer_text": "x"}
+
+    async def _proactive():
+        called["proactive"] += 1
+
+    async def _accept():
+        called["accept"] += 1
+
+    async def _phone():
+        called["phone"] += 1
+        return {"ok": True, "step": "phone_loop", "peer_text": "hi"}
+
+    svc._runner.run_once = _run_once
+    svc._maybe_enqueue_proactive = _proactive
+    svc._maybe_run_auto_accept = _accept
+    svc._run_phone_tick = _phone
+    result = await svc._run_send_cycle("phone")
+    assert result["step"] == "phone_loop"
+    assert called == {"run_once": 0, "proactive": 0, "accept": 0, "phone": 1}
+    assert svc.enqueue_send("wa:Bob", "Bob", "yo") == 0
+    assert svc.list_send_queue(include_done=True) == []
+
+    legacy = await svc._run_send_cycle("legacy")
+    assert legacy["step"] == "sent"
+    assert called["run_once"] == 1
+    assert called["proactive"] == 1
+    assert called["accept"] == 1
 
 
 def test_notification_parser_reads_sender_without_dump():

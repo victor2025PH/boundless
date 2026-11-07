@@ -67,6 +67,17 @@ def phone_loop_enabled(cfg: Optional[Dict[str, Any]]) -> bool:
     return bool(block.get("enabled", False))
 
 
+def send_path(cfg: Optional[Dict[str, Any]]) -> str:
+    """当前允许哪一条发送路径真的出手。
+
+    ``phone``：只走号码闭环（wa.me + 截图核对）。此时不得再调用
+    ``WhatsAppRpaRunner.run_once``、旧的主动续聊入队、自动通过好友，
+    也不得把文字放进旧的 dump 发送队列。
+    ``legacy``：维持原来的界面层级轮询。号码闭环不注册、不发送。
+    """
+    return "phone" if phone_loop_enabled(cfg) else "legacy"
+
+
 def register_phone_loop(loop: "WaPhoneLoop") -> None:
     if loop.enabled:
         _LOOPS[str(loop.account_id)] = loop
@@ -298,8 +309,7 @@ class WaPhoneLoop:
         }
         keyword = text_is_conversion(body, self._convert_keywords())
         if keyword:
-            deal = self.mark_deal(e164, source="keyword", note=keyword)
-            result["deal"] = deal
+            result["conversion"] = self.flag_conversion(e164, keyword)
         if text_is_stop(body, self._stop_keywords()):
             self.ledger.stop(e164, reason="inbound_stop", sample=body, now=now)
             result["stopped"] = True
@@ -363,15 +373,21 @@ class WaPhoneLoop:
         if source == "first_touch" and self.ledger.has_first_touch(e164):
             self.ledger.finish_touch(e164, "skipped")
             return {**base, "status": "skipped", "reason": "already_touched", "retry": False}
-        caps = self.caps()
-        hour_count = self.ledger.count_sent_since(now - 3600)
-        day_count = self.ledger.count_sent_since(now - 86400)
-        if hour_count >= caps["hourly_cap"] or day_count >= caps["daily_cap"]:
-            which = "hourly_cap" if hour_count >= caps["hourly_cap"] else "daily_cap"
-            return {**base, "status": "capped", "reason": which, "retry": True}
+        if self.ledger.pause_until() > now:
+            return {**base, "status": "throttled", "reason": "device_pause", "retry": True}
+        # 对方回过消息就不按条数封顶。从没回过的冷启动才吃上限。
+        # 画面上出现 WhatsApp 的频繁提示时，两种会话都先停一段时间。
+        cold = not self._peer_has_replied(e164)
+        if cold:
+            caps = self.caps()
+            hour_count = self.ledger.count_sent_since(now - 3600, cold_only=True)
+            day_count = self.ledger.count_sent_since(now - 86400, cold_only=True)
+            if hour_count >= caps["hourly_cap"] or day_count >= caps["daily_cap"]:
+                which = "hourly_cap" if hour_count >= caps["hourly_cap"] else "daily_cap"
+                return {**base, "status": "capped", "reason": which, "retry": True}
         slot = self.ledger.reserve(
             client_msg_id=client_msg_id, phone=e164, account_id=self.account_id,
-            source=source, now=now,
+            source=source, now=now, cold=cold,
         )
         if slot.get("duplicate"):
             previous = (slot.get("row") or {}).get("status") or "duplicate"
@@ -383,6 +399,14 @@ class WaPhoneLoop:
         outcome = await deliver_via_wa_me(
             self.device, e164, body, dry_run=bool(is_dry),
         )
+        if outcome.status == "throttled":
+            self.ledger.release(client_msg_id)
+            pause = self._pause_seconds()
+            self.ledger.set_pause(now + pause, outcome.reason)
+            return {
+                **base, "status": "throttled", "reason": outcome.reason,
+                "retry": True, "tapped": False, "delivered": False,
+            }
         self.ledger.finish(
             client_msg_id, outcome.status, error=outcome.reason, now=now,
         )
@@ -472,6 +496,53 @@ class WaPhoneLoop:
                 break
         return out
 
+    def flag_conversion(self, phone: str, keyword: str) -> Dict[str, Any]:
+        """关键词只记待确认，不写成交。坐席点确认才走 mark_deal。"""
+        e164 = normalize_e164(phone)
+        cid = conversation_id(self.account_id, e164)
+        if not e164 or not cid:
+            return {"ok": False, "reason": "phone_unresolved"}
+        now = float(self._now())
+        fresh = self.ledger.mark_pending_deal(
+            e164, conversation_id=cid, keyword=keyword, now=now,
+        )
+        if fresh:
+            self._note_outreach(cid, "conversion", "pending_confirm", keyword, now)
+        return {
+            "ok": True,
+            "status": "pending_confirm",
+            "keyword": keyword,
+            "conversation_id": cid,
+            "fresh": fresh,
+        }
+
+    def _peer_has_replied(self, phone: str) -> bool:
+        cid = conversation_id(self.account_id, phone)
+        if not cid or not hasattr(self.inbox, "list_recent_messages"):
+            return False
+        try:
+            try:
+                rows = self.inbox.list_recent_messages(
+                    cid, limit=40, include_deleted=False,
+                )
+            except TypeError:
+                rows = self.inbox.list_recent_messages(cid, limit=40)
+        except Exception:
+            return False
+        for row in rows or []:
+            if str(row.get("direction") or "") in {"in", "inbound"}:
+                return True
+        return False
+
+    def _pause_seconds(self) -> float:
+        try:
+            seconds = float(self.cfg.get("rate_limit_pause_sec") or 1800)
+        except (TypeError, ValueError):
+            seconds = 1800
+        if seconds <= 0:
+            seconds = 1800
+        return seconds
+
     def mark_deal(
         self,
         phone: str,
@@ -487,20 +558,17 @@ class WaPhoneLoop:
             return {"ok": False, "reason": "phone_unresolved"}
         self._ensure_conversation(cid, e164, e164, float(self._now()))
         if source != "manual":
-            try:
-                if int(self.inbox.count_active_deals(cid)) > 0:
-                    return {"ok": True, "reason": "already_recorded", "conversation_id": cid}
-            except Exception:
-                pass
+            return self.flag_conversion(e164, str(note or source))
         try:
             from src.inbox.journey_stage import record_deal
             deal = record_deal(
                 self.inbox, cid, amount=float(amount or 0), note=str(note or ""),
-                recorded_by=str(by or source), source=source,
+                recorded_by=str(by or source), source="manual",
             )
         except Exception:
             logger.debug("[wa_phone] record_deal 失败", exc_info=True)
             return {"ok": False, "reason": "record_deal_failed", "conversation_id": cid}
+        self.ledger.confirm_pending_deal(e164)
         self._note_outreach(
             cid, "conversion", "converted", str(note or source)[:80], float(self._now()),
         )

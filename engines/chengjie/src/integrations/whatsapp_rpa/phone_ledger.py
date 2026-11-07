@@ -1,7 +1,8 @@
-"""真机发送的电脑侧账本：拒收、首触、限额、client_msg_id。
+"""真机发送的电脑侧账本：拒收、首触、冷启动限额、client_msg_id。
 
-对话正文在收件箱 messages。这张库只记「能不能发、发过没有」，
-避免同一条消息点两次发送，也避免 daily_cap=0 被当成不封顶。
+对话正文在收件箱 messages。这张库只记「能不能发、发过没有」。
+每小时、每天的条数只统计冷启动（对方还没回过）。已经有来往的回复不占这个额度。
+配成 0 也不会变成不封顶，而是落回默认的 20/80。
 """
 
 from __future__ import annotations
@@ -35,6 +36,19 @@ CREATE TABLE IF NOT EXISTS sends (
     source TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL,
     error TEXT NOT NULL DEFAULT '',
+    ts REAL NOT NULL,
+    cold INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS device_pause (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    until_ts REAL NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS deal_pending (
+    phone TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL DEFAULT '',
+    keyword TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending_confirm',
     ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sends_ts ON sends(ts);
@@ -49,10 +63,20 @@ CREATE TABLE IF NOT EXISTS touch_queue (
 
 
 def resolve_caps(cfg: Optional[Dict[str, Any]]) -> Dict[str, int]:
-    """每小时、每天上限。0、负数、缺省都落回保守默认，绝不表示不封顶。"""
+    """冷启动的每小时、每天上限。0、负数、缺省都落回 20/80，绝不表示不封顶。
+
+    已经有对方来信的会话不使用这组数字。
+    ``first_touch_hourly_cap`` / ``first_touch_daily_cap`` 优先于旧键名。
+    """
     raw = cfg or {}
-    hourly = _positive_int(raw.get("hourly_cap"), DEFAULT_HOURLY_CAP)
-    daily = _positive_int(raw.get("daily_cap"), DEFAULT_DAILY_CAP)
+    hourly = _positive_int(
+        raw.get("first_touch_hourly_cap", raw.get("hourly_cap")),
+        DEFAULT_HOURLY_CAP,
+    )
+    daily = _positive_int(
+        raw.get("first_touch_daily_cap", raw.get("daily_cap")),
+        DEFAULT_DAILY_CAP,
+    )
     return {"hourly_cap": hourly, "daily_cap": daily}
 
 
@@ -76,6 +100,12 @@ class PhoneLedger:
         self._conn.execute("PRAGMA journal_mode=WAL")
         with self._lock:
             self._conn.executescript(_DDL)
+            try:
+                self._conn.execute(
+                    "ALTER TABLE sends ADD COLUMN cold INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass
             self._conn.commit()
 
     def close(self) -> None:
@@ -119,13 +149,66 @@ class PhoneLedger:
             )
             self._conn.commit()
 
-    def count_sent_since(self, since_ts: float) -> int:
+    def count_sent_since(self, since_ts: float, *, cold_only: bool = False) -> int:
+        sql = "SELECT COUNT(*) AS n FROM sends WHERE status='sent' AND ts>=?"
+        if cold_only:
+            sql += " AND cold=1"
+        with self._lock:
+            row = self._conn.execute(sql, (float(since_ts),)).fetchone()
+        return int(row["n"] if row else 0)
+
+    def pause_until(self) -> float:
         with self._lock:
             row = self._conn.execute(
-                "SELECT COUNT(*) AS n FROM sends WHERE status='sent' AND ts>=?",
-                (float(since_ts),),
+                "SELECT until_ts FROM device_pause WHERE id=1"
             ).fetchone()
-        return int(row["n"] if row else 0)
+        return float(row["until_ts"] if row else 0)
+
+    def set_pause(self, until_ts: float, reason: str = "") -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO device_pause(id, until_ts, reason) VALUES(1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET until_ts=excluded.until_ts, "
+                "reason=excluded.reason",
+                (float(until_ts), str(reason or "")[:120]),
+            )
+            self._conn.commit()
+
+    def pending_deal(self, phone: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM deal_pending WHERE phone=?", (phone,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def mark_pending_deal(self, phone: str, *, conversation_id: str, keyword: str,
+                          now: Optional[float] = None) -> bool:
+        """写入待确认。已经在待确认里则不再插一行。返回是否新写入。"""
+        ts = float(now if now is not None else time.time())
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT status FROM deal_pending WHERE phone=?", (phone,),
+            ).fetchone()
+            if existing is not None and str(existing["status"]) == "pending_confirm":
+                return False
+            self._conn.execute(
+                "INSERT INTO deal_pending(phone, conversation_id, keyword, status, ts)"
+                " VALUES(?,?,?,'pending_confirm',?) "
+                "ON CONFLICT(phone) DO UPDATE SET keyword=excluded.keyword, "
+                "status='pending_confirm', ts=excluded.ts, "
+                "conversation_id=excluded.conversation_id",
+                (phone, conversation_id, str(keyword or "")[:80], ts),
+            )
+            self._conn.commit()
+        return True
+
+    def confirm_pending_deal(self, phone: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE deal_pending SET status='confirmed' WHERE phone=?",
+                (phone,),
+            )
+            self._conn.commit()
 
     def get_send(self, client_msg_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -135,7 +218,7 @@ class PhoneLedger:
         return dict(row) if row else None
 
     def reserve(self, *, client_msg_id: str, phone: str, account_id: str,
-                source: str, now: Optional[float] = None) -> Dict[str, Any]:
+                source: str, now: Optional[float] = None, cold: bool = False) -> Dict[str, Any]:
         """占坑。同一 id 已存在则原样返回，调用方不得再点发送。"""
         ts = float(now if now is not None else time.time())
         with self._lock:
@@ -145,12 +228,21 @@ class PhoneLedger:
             if existing is not None:
                 return {"reserved": False, "duplicate": True, "row": dict(existing)}
             self._conn.execute(
-                "INSERT INTO sends(client_msg_id, phone, account_id, source, status, error, ts)"
-                " VALUES(?,?,?,?, 'reserved', '', ?)",
-                (client_msg_id, phone, account_id, source, ts),
+                "INSERT INTO sends(client_msg_id, phone, account_id, source, status, error, ts, cold)"
+                " VALUES(?,?,?,?, 'reserved', '', ?, ?)",
+                (client_msg_id, phone, account_id, source, ts, 1 if cold else 0),
             )
             self._conn.commit()
         return {"reserved": True, "duplicate": False, "row": None}
+
+    def release(self, client_msg_id: str) -> None:
+        """放掉尚未真正发出的占坑，让冷却结束后同一条还能再试。"""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM sends WHERE client_msg_id=? AND status='reserved'",
+                (client_msg_id,),
+            )
+            self._conn.commit()
 
     def finish(self, client_msg_id: str, status: str, *,
                error: str = "", now: Optional[float] = None) -> None:
