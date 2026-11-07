@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS sends (
     status TEXT NOT NULL,
     error TEXT NOT NULL DEFAULT '',
     ts REAL NOT NULL,
-    cold INTEGER NOT NULL DEFAULT 0
+    cold INTEGER NOT NULL DEFAULT 0,
+    content_key TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS device_pause (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -100,12 +101,14 @@ class PhoneLedger:
         self._conn.execute("PRAGMA journal_mode=WAL")
         with self._lock:
             self._conn.executescript(_DDL)
-            try:
-                self._conn.execute(
-                    "ALTER TABLE sends ADD COLUMN cold INTEGER NOT NULL DEFAULT 0"
-                )
-            except sqlite3.OperationalError:
-                pass
+            for statement in (
+                "ALTER TABLE sends ADD COLUMN cold INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE sends ADD COLUMN content_key TEXT NOT NULL DEFAULT ''",
+            ):
+                try:
+                    self._conn.execute(statement)
+                except sqlite3.OperationalError:
+                    pass
             self._conn.commit()
 
     def close(self) -> None:
@@ -217,8 +220,21 @@ class PhoneLedger:
             ).fetchone()
         return dict(row) if row else None
 
+    def has_sent_content(self, content_key: str) -> bool:
+        """同一句话已经发出去过。失败且没点发送的记录不算。"""
+        key = str(content_key or "").strip()
+        if not key:
+            return False
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM sends WHERE content_key=? AND status='sent' LIMIT 1",
+                (key,),
+            ).fetchone()
+        return row is not None
+
     def reserve(self, *, client_msg_id: str, phone: str, account_id: str,
-                source: str, now: Optional[float] = None, cold: bool = False) -> Dict[str, Any]:
+                source: str, now: Optional[float] = None, cold: bool = False,
+                content_key: str = "") -> Dict[str, Any]:
         """占坑。同一 id 已存在则原样返回，调用方不得再点发送。"""
         ts = float(now if now is not None else time.time())
         with self._lock:
@@ -228,9 +244,9 @@ class PhoneLedger:
             if existing is not None:
                 return {"reserved": False, "duplicate": True, "row": dict(existing)}
             self._conn.execute(
-                "INSERT INTO sends(client_msg_id, phone, account_id, source, status, error, ts, cold)"
-                " VALUES(?,?,?,?, 'reserved', '', ?, ?)",
-                (client_msg_id, phone, account_id, source, ts, 1 if cold else 0),
+                "INSERT INTO sends(client_msg_id, phone, account_id, source, status, error, ts, cold, content_key)"
+                " VALUES(?,?,?,?, 'reserved', '', ?, ?, ?)",
+                (client_msg_id, phone, account_id, source, ts, 1 if cold else 0, str(content_key or "")),
             )
             self._conn.commit()
         return {"reserved": True, "duplicate": False, "row": None}

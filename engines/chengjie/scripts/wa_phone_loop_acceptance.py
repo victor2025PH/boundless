@@ -76,6 +76,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -278,6 +279,7 @@ def make_loop(args, inbox, device, ledger_path: Path, account: str, decide):
         },
         ledger_path=ledger_path,
         persona_id=str(getattr(args, "persona_id", "") or ""),
+        run_id=str(getattr(args, "run_id", "") or ""),
     )
 
 
@@ -326,6 +328,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 async def async_main(args, *, devices=None, decide_fn=None, ocr_reader=None) -> dict:
+    if not getattr(args, "run_id", ""):
+        args.run_id = uuid.uuid4().hex[:12]
     data = Path(args.data_dir)
     data.mkdir(parents=True, exist_ok=True)
     serials = []

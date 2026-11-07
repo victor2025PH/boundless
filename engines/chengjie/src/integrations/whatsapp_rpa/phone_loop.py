@@ -99,6 +99,11 @@ def client_msg_id(source: str, phone: str, text: str, anchor: str = "") -> str:
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
+def sent_content_key(source: str, phone: str, text: str) -> str:
+    """同一来源、号码、正文的稳定号。不带 run id，用来认出已经发出去的那条。"""
+    return client_msg_id("sent", phone, text, source)
+
+
 def text_is_stop(text: str, keywords: tuple = _STOP_KEYWORDS) -> bool:
     """明确拒收才停。弱抱怨（「有点烦」）不停，避免误伤正常聊天。"""
     body = str(text or "").strip()
@@ -203,6 +208,7 @@ class WaPhoneLoop:
         ledger_path: Optional[Path] = None,
         persona_id: str = "",
         now_fn: Optional[Callable[[], float]] = None,
+        run_id: str = "",
     ) -> None:
         self.account_id = str(account_id or "").strip() or "default"
         self.inbox = inbox
@@ -210,6 +216,7 @@ class WaPhoneLoop:
         self.decide_fn = decide_fn
         self.cfg = dict(cfg or {})
         self.persona_id = str(persona_id or self.cfg.get("persona_id") or "")
+        self.run_id = str(run_id or "").strip()
         self._now = now_fn or time.time
         if ledger is not None:
             self.ledger = ledger
@@ -218,6 +225,13 @@ class WaPhoneLoop:
             self.ledger = PhoneLedger(path)
         self.enabled = bool(self.cfg.get("enabled", False))
         self._taps: List[str] = []
+
+    def scoped_msg_id(self, source: str, phone: str, text: str, anchor: str = "") -> str:
+        """同一次运行里的消息号。换一次运行就换号，失败没点出去的可以重试。"""
+        tag = str(anchor or "")
+        if self.run_id:
+            tag = f"{tag}|{self.run_id}"
+        return client_msg_id(source, phone, text, tag)
 
     def caps(self) -> Dict[str, int]:
         return resolve_caps(self.cfg)
@@ -341,7 +355,7 @@ class WaPhoneLoop:
             phone=e164,
             text=reply,
             source="reply",
-            client_msg_id=client_msg_id("reply", e164, reply, msg_id or body),
+            client_msg_id=self.scoped_msg_id("reply", e164, reply, msg_id or body),
             display_name=display_name,
         )
         result["send"] = sent
@@ -385,9 +399,17 @@ class WaPhoneLoop:
             if hour_count >= caps["hourly_cap"] or day_count >= caps["daily_cap"]:
                 which = "hourly_cap" if hour_count >= caps["hourly_cap"] else "daily_cap"
                 return {**base, "status": "capped", "reason": which, "retry": True}
+        content_key = ""
+        if self.run_id:
+            content_key = sent_content_key(source, e164, body)
+            if self.ledger.has_sent_content(content_key):
+                return {
+                    **base, "status": "sent", "reason": "duplicate",
+                    "delivered": True, "tapped": False, "retry": False,
+                }
         slot = self.ledger.reserve(
             client_msg_id=client_msg_id, phone=e164, account_id=self.account_id,
-            source=source, now=now, cold=cold,
+            source=source, now=now, cold=cold, content_key=content_key,
         )
         if slot.get("duplicate"):
             previous = (slot.get("row") or {}).get("status") or "duplicate"
@@ -456,7 +478,7 @@ class WaPhoneLoop:
                 phone=phone,
                 text=opener,
                 source="first_touch",
-                client_msg_id=client_msg_id("first_touch", phone, opener, "once"),
+                client_msg_id=self.scoped_msg_id("first_touch", phone, opener, "once"),
             )
             out.append(sent)
             if sent.get("status") == "capped":
@@ -488,7 +510,7 @@ class WaPhoneLoop:
                 phone=phone,
                 text=text,
                 source="silence",
-                client_msg_id=client_msg_id("silence", phone, text, day),
+                client_msg_id=self.scoped_msg_id("silence", phone, text, day),
                 display_name=str(row.get("display_name") or ""),
             )
             out.append(sent)

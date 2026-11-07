@@ -106,6 +106,60 @@ def png_size(png: bytes) -> tuple:
 
 # 输入栏只占屏幕最底部。再往上是聊天气泡，不能算进输入框。
 _COMPOSER_TOP = 0.90
+# 输入栏左右各 15% 是表情、附件、相机、发送按钮。
+# 02→03 的 005-a-read2 把右侧图标读成了字母「D」，和正文「你好，早上好，在忙吗」分成两个框。
+# 只丢掉「贴边、又窄、又离正文有一段空隙」的框。正文里的字母不因是字母被丢掉。
+_ICON_GUTTER = 0.15
+
+
+def _box_width(box: Sequence[float]) -> float:
+    return max(0.0, float(box[2]) - float(box[0]))
+
+
+def _horizontal_gap(left: Sequence[float], right: Sequence[float]) -> float:
+    """两框水平方向的空隙。重叠时是 0。"""
+    a0, a1 = float(left[0]), float(left[2])
+    b0, b1 = float(right[0]), float(right[2])
+    if a1 < b0:
+        return b0 - a1
+    if b1 < a0:
+        return a0 - b1
+    return 0.0
+
+
+def _without_input_icons(items: Sequence[tuple], width: float) -> List[tuple]:
+    """从输入栏文字框里去掉两侧图标。
+
+    来由：真机 pair-chat（evidence/pair0608_0203_4/005-a-read2.ocr.json）里，
+    要发的是「你好，早上好，在忙吗」，OCR 读成同一句再加一行「D」。
+    「D」的框在输入栏右侧，又小，和正文隔开一段，是附件或相机图标，不是句子里的字母。
+
+    同时满足下面三条才丢掉，缺一条就留着：
+    - 框中心落在屏幕左侧 15% 或右侧 15%（图标槽，不是打字区）
+    - 框宽小于屏幕宽度的 8%，并且不到同一栏里最宽正文的四分之一
+    - 和最宽正文框的水平空隙至少有屏幕宽度的 2%（贴着正文的拆字留下）
+    只有一个框时不动。不看文字是不是字母。
+    """
+    if width <= 0 or len(items) < 2:
+        return list(items)
+    widths = [_box_width(box) for _text, box in items]
+    main = max(range(len(widths)), key=lambda index: widths[index])
+    main_box = items[main][1]
+    main_width = widths[main]
+    kept: List[tuple] = []
+    for index, item in enumerate(items):
+        _text, box = item
+        if index == main:
+            kept.append(item)
+            continue
+        center_x = (float(box[0]) + float(box[2])) / 2.0
+        in_gutter = center_x < width * _ICON_GUTTER or center_x > width * (1.0 - _ICON_GUTTER)
+        narrow = widths[index] < width * 0.08 and widths[index] < main_width * 0.25
+        gap = _horizontal_gap(box, main_box)
+        if in_gutter and narrow and gap >= width * 0.02:
+            continue
+        kept.append(item)
+    return kept
 
 
 def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) -> PhoneScreen:
@@ -117,7 +171,7 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) ->
     from src.integrations.whatsapp_rpa.phone_send import is_screen_chrome
 
     header: List[str] = []
-    composer: List[str] = []
+    composer_items: List[tuple] = []
     incoming: List[str] = []
     outgoing: List[str] = []
     notes: List[str] = []
@@ -136,7 +190,7 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) ->
             if is_screen_chrome(text):
                 notes.append(text)
             else:
-                composer.append(text)
+                composer_items.append((text, box))
             continue
         if is_screen_chrome(text):
             notes.append(text)
@@ -149,6 +203,10 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) ->
             incoming.append(text)
         else:
             notes.append(text)
+    kept_composer = _without_input_icons(composer_items, float(width))
+    kept_ids = {id(item) for item in kept_composer}
+    notes.extend(item[0] for item in composer_items if id(item) not in kept_ids)
+    composer = [text for text, _box in kept_composer]
     return PhoneScreen(
         header=" ".join(header),
         composer="\n".join(composer),
@@ -623,7 +681,6 @@ def variant_phone(base: str, index: int) -> str:
 
 async def run_first_touch_cap(loop: Any, phone: str, texts: Sequence[str], cap: int,
                               evidence: EvidenceLog) -> Dict[str, Any]:
-    from src.integrations.whatsapp_rpa.phone_loop import client_msg_id
     loop.cfg["hourly_cap"] = int(cap)
     loop.cfg["daily_cap"] = max(int(cap), int(loop.cfg.get("daily_cap") or cap))
     loop.cfg["first_touch_hourly_cap"] = int(cap)
@@ -633,7 +690,7 @@ async def run_first_touch_cap(loop: Any, phone: str, texts: Sequence[str], cap: 
         target = variant_phone(phone, index)
         item = await loop.send_prepared(
             phone=target, text=text, source="first_touch",
-            client_msg_id=client_msg_id("first_touch", target, text, f"cap-{index}"),
+            client_msg_id=loop.scoped_msg_id("first_touch", target, text, f"cap-{index}"),
         )
         item["phone"] = target
         sent.append(item)
@@ -651,7 +708,6 @@ async def run_first_touch_cap(loop: Any, phone: str, texts: Sequence[str], cap: 
 
 
 async def run_stop_test(loop: Any, phone: str, text: str, evidence: EvidenceLog) -> Dict[str, Any]:
-    from src.integrations.whatsapp_rpa.phone_loop import client_msg_id
     await open_peer_chat(loop.device, phone)
     from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
     ready = await wait_for_chat(loop.device, phone, expected="")
@@ -663,7 +719,7 @@ async def run_stop_test(loop: Any, phone: str, text: str, evidence: EvidenceLog)
     inbound = await loop.handle_inbound(phone=phone, text=text, display_name=phone)
     follow = await loop.send_prepared(
         phone=phone, text="还在吗", source="reply",
-        client_msg_id=client_msg_id("reply", normalize_e164(phone), "还在吗", "stop-follow"),
+        client_msg_id=loop.scoped_msg_id("reply", normalize_e164(phone), "还在吗", "stop-follow"),
     )
     ok = bool(inbound.get("stopped")) and follow.get("status") == "stopped" and follow.get("tapped") is not True
     return evidence.finish({
@@ -728,11 +784,10 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
         loop, own, peer, label = seats[index % 2]
         other = "B" if label == "A" else "A"
         if index == 0:
-            from src.integrations.whatsapp_rpa.phone_loop import client_msg_id
             baselines[other] = await snapshot_incoming(loops[other].device, own)
             item = await loop.send_prepared(
                 phone=peer, text=seed, source="acceptance",
-                client_msg_id=client_msg_id("acceptance", normalize_e164(peer), seed, "seed"),
+                client_msg_id=loop.scoped_msg_id("acceptance", normalize_e164(peer), seed, "seed"),
                 display_name=peer,
             )
             item["turn"] = index

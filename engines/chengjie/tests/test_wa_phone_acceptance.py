@@ -332,6 +332,34 @@ async def test_pair_chat_stops_when_the_first_send_fails(tmp_path: Path):
     assert device_b.taps == 0
 
 
+def test_pair0608_read2_drops_the_camera_icon_not_letters_in_the_text():
+    """005-a-read2.ocr.json：输入框是「你好，早上好，在忙吗」再加一行「D」。
+
+    「D」落在右侧 15% 的图标槽，框窄，并且和正文隔开。附件或相机被认成字母。
+    同一句里如果字就在正文框中，或者拆出来的字贴着正文，都要留下。
+    """
+    sentence = "你好，早上好，在忙吗"
+    screen = lines_to_screen([
+        {"text": sentence, "box": [140, 2200, 780, 2310]},
+        {"text": "D", "box": [990, 2216, 1048, 2294]},
+    ], 1080, 2400)
+    assert screen.composer == sentence
+    assert composer_matches(screen.composer, sentence)
+    assert "D" not in screen.composer
+    assert "D" in screen.notes
+
+    glued = lines_to_screen([
+        {"text": sentence + "D", "box": [140, 2200, 860, 2310]},
+    ], 1080, 2400)
+    assert glued.composer == sentence + "D"
+
+    adjacent = lines_to_screen([
+        {"text": sentence, "box": [140, 2200, 940, 2310]},
+        {"text": "D", "box": [948, 2216, 1004, 2294]},
+    ], 1080, 2400)
+    assert "D" in adjacent.composer
+
+
 def test_composer_bar_excludes_history_and_heard_ignores_old_left_bubbles():
     seed = "你好，我在做聊天链路验收"
     screen = lines_to_screen([

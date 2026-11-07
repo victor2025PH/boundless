@@ -71,9 +71,11 @@ class FakeDevice:
         return list(self.notifications)
 
 
-def _loop(tmp_path: Path, device: FakeDevice, **cfg) -> WaPhoneLoop:
+def _loop(tmp_path: Path, device: FakeDevice, ledger: Optional[PhoneLedger] = None,
+         run_id: str = "", **cfg) -> WaPhoneLoop:
     store = InboxStore(tmp_path / "inbox.db")
-    ledger = PhoneLedger(tmp_path / "ledger.db")
+    if ledger is None:
+        ledger = PhoneLedger(tmp_path / "ledger.db")
     calls = []
 
     async def decide(**kwargs):
@@ -88,6 +90,7 @@ def _loop(tmp_path: Path, device: FakeDevice, **cfg) -> WaPhoneLoop:
         cfg={"enabled": True, **cfg},
         ledger=ledger,
         now_fn=lambda: 1_700_000_000.0,
+        run_id=run_id,
     )
     loop.decide_calls = calls  # type: ignore[attr-defined]
     loop.inbox_path = store
@@ -225,6 +228,47 @@ async def test_composer_mismatch_fails_without_tap_or_retry(tmp_path: Path):
     assert first["reason"] == "composer_mismatch"
     assert second["reason"] == "duplicate"
     assert device.taps == 0
+
+
+@pytest.mark.asyncio
+async def test_new_run_retries_untapped_failure_but_blocks_a_sent_line(tmp_path: Path):
+    text = "你好，早上好，在忙吗"
+    ledger = PhoneLedger(tmp_path / "ledger.db")
+    missed = FakeDevice(PhoneScreen(header=PHONE, composer="不是这句"))
+    first = _loop(tmp_path, missed, ledger=ledger, run_id="run-a")
+    failed = await first.send_prepared(
+        phone=PHONE, text=text, source="acceptance",
+        client_msg_id=first.scoped_msg_id("acceptance", PHONE, text, "seed"),
+    )
+    assert failed["status"] == "failed"
+    assert failed["reason"] == "composer_mismatch"
+    assert failed["tapped"] is False
+
+    ready = FakeDevice(
+        PhoneScreen(header=PHONE, composer=text),
+        PhoneScreen(header=PHONE, outgoing=[text]),
+    )
+    second = _loop(tmp_path, ready, ledger=ledger, run_id="run-b")
+    sent = await second.send_prepared(
+        phone=PHONE, text=text, source="acceptance",
+        client_msg_id=second.scoped_msg_id("acceptance", PHONE, text, "seed"),
+    )
+    assert sent["status"] == "sent"
+    assert sent["client_msg_id"] != failed["client_msg_id"]
+    assert ready.taps == 1
+
+    again_device = FakeDevice(
+        PhoneScreen(header=PHONE, composer=text),
+        PhoneScreen(header=PHONE, outgoing=[text]),
+    )
+    third = _loop(tmp_path, again_device, ledger=ledger, run_id="run-c")
+    blocked = await third.send_prepared(
+        phone=PHONE, text=text, source="acceptance",
+        client_msg_id=third.scoped_msg_id("acceptance", PHONE, text, "seed"),
+    )
+    assert blocked["reason"] == "duplicate"
+    assert blocked["delivered"] is True
+    assert again_device.taps == 0
     assert composer_matches("你好呀", "你好呀")
     assert not composer_matches("你好呀。", "你好呀")
 
