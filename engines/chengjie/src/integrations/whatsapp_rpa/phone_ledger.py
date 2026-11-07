@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS touch_queue (
     status TEXT NOT NULL DEFAULT 'pending',
     ts REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS inbounds (
+    inbound_key TEXT PRIMARY KEY,
+    phone TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    replied INTEGER NOT NULL DEFAULT 0,
+    ts REAL NOT NULL
+);
 """
 
 
@@ -104,6 +111,7 @@ class PhoneLedger:
             for statement in (
                 "ALTER TABLE sends ADD COLUMN cold INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE sends ADD COLUMN content_key TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE sends ADD COLUMN body TEXT NOT NULL DEFAULT ''",
             ):
                 try:
                     self._conn.execute(statement)
@@ -264,7 +272,7 @@ class PhoneLedger:
 
     def reserve(self, *, client_msg_id: str, phone: str, account_id: str,
                 source: str, now: Optional[float] = None, cold: bool = False,
-                content_key: str = "") -> Dict[str, Any]:
+                content_key: str = "", body: str = "") -> Dict[str, Any]:
         """占坑。同一 id 已存在则原样返回，调用方不得再点发送。"""
         ts = float(now if now is not None else time.time())
         with self._lock:
@@ -274,12 +282,71 @@ class PhoneLedger:
             if existing is not None:
                 return {"reserved": False, "duplicate": True, "row": dict(existing)}
             self._conn.execute(
-                "INSERT INTO sends(client_msg_id, phone, account_id, source, status, error, ts, cold, content_key)"
-                " VALUES(?,?,?,?, 'reserved', '', ?, ?, ?)",
-                (client_msg_id, phone, account_id, source, ts, 1 if cold else 0, str(content_key or "")),
+                "INSERT INTO sends(client_msg_id, phone, account_id, source, status, error, ts, cold, content_key, body)"
+                " VALUES(?,?,?,?, 'reserved', '', ?, ?, ?, ?)",
+                (
+                    client_msg_id, phone, account_id, source, ts,
+                    1 if cold else 0, str(content_key or ""), str(body or "")[:500],
+                ),
             )
             self._conn.commit()
         return {"reserved": True, "duplicate": False, "row": None}
+
+    def note_inbound(self, phone: str, text: str, *, now: Optional[float] = None) -> Dict[str, Any]:
+        """记下一条入站。同一文本哈希只算一次，回复过就不再算未回复。"""
+        import hashlib
+        import re
+        norm = re.sub(r"\s+", "", str(text or ""))
+        key = hashlib.sha256(f"{phone}|{norm}".encode("utf-8")).hexdigest()[:40]
+        ts = float(now if now is not None else time.time())
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT replied FROM inbounds WHERE inbound_key=?", (key,),
+            ).fetchone()
+            if row is None:
+                self._conn.execute(
+                    "INSERT INTO inbounds(inbound_key, phone, body, replied, ts) VALUES(?,?,?,0,?)",
+                    (key, phone, str(text or "")[:500], ts),
+                )
+                self._conn.commit()
+                return {"key": key, "fresh": True, "unreplied": True}
+        return {"key": key, "fresh": False, "unreplied": int(row["replied"]) == 0}
+
+    def tracks_inbound(self, phone: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM inbounds WHERE phone=? LIMIT 1", (phone,),
+            ).fetchone()
+        return row is not None
+
+    def has_unreplied(self, phone: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM inbounds WHERE phone=? AND replied=0 LIMIT 1",
+                (phone,),
+            ).fetchone()
+        return row is not None
+
+    def mark_replied(self, phone: str, text: str) -> None:
+        import hashlib
+        import re
+        norm = re.sub(r"\s+", "", str(text or ""))
+        key = hashlib.sha256(f"{phone}|{norm}".encode("utf-8")).hexdigest()[:40]
+        with self._lock:
+            self._conn.execute(
+                "UPDATE inbounds SET replied=1 WHERE inbound_key=? AND phone=?",
+                (key, phone),
+            )
+            self._conn.commit()
+
+    def unsent_rows(self, phone: str) -> list:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM sends WHERE phone=? AND status NOT IN ('sent', 'dry_run') "
+                "ORDER BY ts DESC",
+                (phone,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def release(self, client_msg_id: str) -> None:
         """放掉尚未真正发出的占坑，让冷却结束后同一条还能再试。"""

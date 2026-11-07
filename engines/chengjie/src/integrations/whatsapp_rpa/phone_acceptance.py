@@ -377,47 +377,116 @@ def _fill_around(png: bytes, box: Sequence[float]) -> str:
     return ""
 
 
+def _edge_gap(upper: Sequence[float], lower: Sequence[float]) -> float:
+    return float(lower[1]) - float(upper[3])
+
+
+def _band_fill(png: bytes, upper: Sequence[float], lower: Sequence[float]) -> str:
+    """两行之间的底色。气泡色连着是同一条，露出聊天背景就是两条。"""
+    gap = _edge_gap(upper, lower)
+    if gap <= 2:
+        return "touch"
+    if not png or not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ""
+    try:
+        import io
+        from PIL import Image
+        image = Image.open(io.BytesIO(png)).convert("RGB")
+    except Exception:
+        return ""
+    width, height = image.size
+    pixels = image.load()
+    top = int(float(upper[3])) + 1
+    bottom = int(float(lower[1])) - 1
+    if bottom < top:
+        return "touch"
+    left = max(0, int(min(float(upper[0]), float(lower[0]))) - 4)
+    right = min(width - 1, int(max(float(upper[2]), float(lower[2]))) + 4)
+    green = white = other = 0
+    y = top
+    while y <= bottom and y < height:
+        x = left
+        while x <= right:
+            red, g, blue = pixels[x, y][:3]
+            if _is_own_green(red, g, blue):
+                green += 1
+            elif _is_peer_white(red, g, blue):
+                white += 1
+            else:
+                other += 1
+            x += 3
+        y += 2
+    if other >= 6 and other > green + white:
+        return "gap"
+    if green >= 4 and green >= white:
+        return "green"
+    if white >= 4 and white > green:
+        return "white"
+    return ""
+
+
+def _same_bubble(prev: dict, text: str, box: Sequence[float], side: str, png: bytes) -> bool:
+    """时间戳切开。底色间隙切开。没有截图时，只有贴得很近的折行才并。"""
+    if abs(float(box[0]) - float(prev["left"])) > _LEFT_SLACK:
+        return False
+    if side != prev["side"]:
+        return False
+    gap = _edge_gap(prev["box"], box)
+    fill = _band_fill(png, prev["box"], box)
+    if fill == "gap":
+        return False
+    if fill in {"green", "white", "touch"}:
+        return True
+    height = max(_box_height(prev["box"]), 1.0)
+    return gap <= max(8.0, height * 0.55)
+
+
 def _merge_bubbles(items: Sequence[tuple], width: float, png: bytes) -> tuple:
-    """把同一气泡的折行收成一条。左边缘 ±20px，行距 ≤ 2.2 倍行高，底色相同。"""
-    from src.integrations.whatsapp_rpa.phone_send import strip_bubble_tail
+    """折行收成一条。行间露出聊天背景，或遇到时间戳，就另起一个气泡。"""
+    from src.integrations.whatsapp_rpa.phone_send import composer_body, strip_bubble_tail
 
     incoming: List[str] = []
     outgoing: List[str] = []
+    transcript: List[dict] = []
     groups: List[dict] = []
+
+    def close() -> None:
+        if not groups:
+            return
+        group = groups[-1]
+        if group.get("closed"):
+            return
+        group["closed"] = True
+
     ordered = sorted(items, key=lambda item: (_box_cy(item[1]), float(item[1][0])))
     for text, box in ordered:
+        if text == "\x00time":
+            close()
+            continue
         side = _bubble_side(box, width, png)
-        color = _fill_around(png, box)
-        placed = False
-        if groups:
-            group = groups[-1]
-            prev = group["box"]
-            pitch = _box_height(prev)
-            dist = abs(_box_cy(box) - _box_cy(prev))
-            same_color = (not color or not group["color"] or color == group["color"])
-            if (
-                side == group["side"]
-                and same_color
-                and abs(float(box[0]) - float(group["left"])) <= _LEFT_SLACK
-                and dist <= pitch * _COMPOSER_PITCH
-            ):
-                group["lines"].append(text)
-                group["box"] = box
-                placed = True
-        if not placed:
-            groups.append({
-                "side": side, "color": color, "left": float(box[0]),
-                "box": box, "lines": [text],
-            })
+        if groups and not groups[-1].get("closed") and _same_bubble(groups[-1], text, box, side, png):
+            groups[-1]["lines"].append(text)
+            groups[-1]["box"] = box
+            groups[-1]["bottom"] = float(box[3])
+            continue
+        groups.append({
+            "side": side, "left": float(box[0]), "box": box,
+            "top": float(box[1]), "bottom": float(box[3]), "lines": [text],
+        })
     for group in groups:
         body = strip_bubble_tail("".join(group["lines"]))
-        if not body:
+        if len(composer_body(body)) < 2:
             continue
-        if group["side"] == "out":
+        row = {
+            "side": "out" if group["side"] == "out" else "in",
+            "text": body, "top": group["top"], "bottom": group["bottom"],
+        }
+        transcript.append(row)
+        if row["side"] == "out":
             outgoing.append(body)
         else:
             incoming.append(body)
-    return incoming, outgoing
+    return incoming, outgoing, transcript
 
 
 def _bubble_side(box: Sequence[float], width: float, png: bytes) -> str:
@@ -460,12 +529,11 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
     对方在左侧，己方在右侧，看文字框靠哪一边，不看中心点是否过半。
     输入框只取底部输入栏。时间、日期、勾号和加密提示不进气泡。
     """
-    from src.integrations.whatsapp_rpa.phone_send import is_screen_chrome
+    from src.integrations.whatsapp_rpa.phone_send import is_bubble_boundary, is_screen_chrome
 
     header: List[str] = []
     composer_items: List[tuple] = []
-    incoming: List[str] = []
-    outgoing: List[str] = []
+    boundaries: List[tuple] = []
     notes: List[str] = []
     if width <= 0 or height <= 0:
         return PhoneScreen()
@@ -483,6 +551,10 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
                 continue
             header.append(text)
             continue
+        if is_bubble_boundary(text):
+            boundaries.append(("\x00time", box))
+            notes.append(text)
+            continue
         if is_screen_chrome(text):
             notes.append(text)
             continue
@@ -492,7 +564,9 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
     composer = [text for text, _box in kept_composer]
     cluster_ids = {id(item) for item in cluster}
     bubbles = [item for item in composer_items if id(item) not in cluster_ids]
-    incoming, outgoing = _merge_bubbles(bubbles, float(width), png)
+    incoming, outgoing, transcript = _merge_bubbles(
+        list(bubbles) + list(boundaries), float(width), png,
+    )
     composer_left = float(cluster[0][1][0]) if cluster else 0.0
     # cluster is sorted by top, so the first box is the top line. Use the core left.
     if cluster:
@@ -505,6 +579,7 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
         incoming=incoming,
         last_incoming=incoming[-1] if incoming else "",
         notes=notes,
+        bubbles=transcript,
         ocr_lines=[
             {"text": str(line.get("text") or ""), "box": list(line.get("box") or [])}
             for line in lines or []
@@ -513,6 +588,30 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
         composer_left=composer_left,
         shot_size=[int(width), int(height)],
     )
+
+
+def peer_after_last_own(screen: Any) -> List[str]:
+    """只取最后一条己方气泡下面的对方气泡。单字和更短的孤立框丢掉。"""
+    from src.integrations.whatsapp_rpa.phone_send import composer_body
+
+    rows = list(getattr(screen, "bubbles", None) or [])
+    last_own = None
+    for row in rows:
+        if str(row.get("side") or "") == "out":
+            last_own = float(row.get("bottom") or 0)
+    if last_own is None:
+        return []
+    fresh: List[str] = []
+    for row in rows:
+        if str(row.get("side") or "") != "in":
+            continue
+        if float(row.get("top") or 0) < last_own - 4:
+            continue
+        text = str(row.get("text") or "").strip()
+        if len(composer_body(text)) < 2:
+            continue
+        fresh.append(text)
+    return fresh
 
 
 def new_left_bubbles(incoming: Sequence[str], baseline: Sequence[str]) -> List[str]:
@@ -1031,7 +1130,25 @@ class SshAdbPhoneDevice:
         self.ui_dump_status = "ok"
         return bytes(out)
 
+    async def scroll_to_latest(self) -> None:
+        """先上滑到最新消息，再点右下角的「↓」。读屏前调用，避免停在旧记录。"""
+        width, height = await self._device_size()
+        if width <= 0 or height <= 0:
+            return
+        x = max(1, int(width * 0.50))
+        y_from = max(1, int(height * 0.70))
+        y_to = max(1, int(height * 0.38))
+        await self._run(["shell", "input", "swipe", str(x), str(y_from), str(x), str(y_to), "180"])
+        await self._run([
+            "shell", "input", "tap",
+            str(max(1, int(width * 0.91))), str(max(1, int(height * 0.78))),
+        ])
+
     async def read_screen(self, png: bytes) -> PhoneScreen:
+        try:
+            await self.scroll_to_latest()
+        except Exception:
+            pass
         parsed = screen_from_ui_xml(await self.dump_ui_xml())
         if parsed is not None:
             parsed.ui_dump = self.ui_dump_status
@@ -1145,20 +1262,34 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
             "ok": False, "reason": ready.get("reason") or "header_mismatch",
             "text": "", "header": ready.get("header") or "",
         }
-    text = noted or ""
+    from src.integrations.whatsapp_rpa.phone_send import composer_body
+
+    screen = None
+    fresh: List[str] = []
+    for _ in range(2):
+        png = await device.screencap()
+        screen = await device.read_screen(png)
+        fresh = peer_after_last_own(screen)
+        if fresh:
+            break
+    if fresh:
+        text = "\n".join(fresh)
+        source = "screenshot"
+    elif noted and len(composer_body(noted)) >= 2:
+        text = noted
+        source = "notification"
+    else:
+        text = ""
+        source = ""
+    composer = str(getattr(screen, "composer", "") or "") if screen is not None else ""
     if not text:
-        for _ in range(2):
-            png = await device.screencap()
-            screen = await device.read_screen(png)
-            fresh = new_left_bubbles(getattr(screen, "incoming", None) or [], baseline)
-            text = "\n".join(fresh)
-            if text:
-                break
-    if not text:
-        return {"ok": False, "reason": "empty_text", "text": "", "header": ready.get("header") or ""}
+        return {
+            "ok": False, "reason": "empty_text", "text": "",
+            "header": ready.get("header") or "", "composer": composer,
+        }
     return {
         "ok": True, "text": text, "header": ready.get("header") or "",
-        "source": "notification" if noted else "screenshot",
+        "source": source, "composer": composer,
     }
 
 
@@ -1289,6 +1420,83 @@ async def run_rate_limit_check(device: Any, evidence: EvidenceLog) -> Dict[str, 
     })
 
 
+def _bubble_matches_unsent(loop: Any, phone: str, text: str) -> bool:
+    from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+    from src.integrations.whatsapp_rpa.phone_send import texts_close
+
+    rows = loop.ledger.unsent_rows(phone) if hasattr(loop.ledger, "unsent_rows") else []
+    keys = {
+        sent_content_key(source, phone, text)
+        for source in ("reply", "acceptance")
+    }
+    for row in rows:
+        if str(row.get("content_key") or "") in keys:
+            return True
+        body = str(row.get("body") or "")
+        if body and texts_close(body, text):
+            return True
+    return False
+
+
+async def reconcile_visible(loop: Any, peer: str) -> None:
+    """屏幕上已经有的己方气泡，把台账里没记成 sent 的改过来，不再补发。"""
+    from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+    from src.integrations.whatsapp_rpa.phone_send import texts_close
+
+    try:
+        await open_peer_chat(loop.device, peer)
+        screen = await loop.device.read_screen(await loop.device.screencap())
+    except Exception:
+        return
+    phone = normalize_e164(peer)
+    for bubble in list(getattr(screen, "outgoing", None) or []):
+        text = str(bubble or "").strip()
+        if len(text) < 2:
+            continue
+        for source in ("reply", "acceptance"):
+            loop.ledger.mark_content_sent(sent_content_key(source, phone, text))
+        for row in loop.ledger.unsent_rows(phone):
+            body = str(row.get("body") or "")
+            key = str(row.get("content_key") or "")
+            if body and texts_close(body, text):
+                loop.ledger.mark_content_sent(key or sent_content_key("reply", phone, text))
+            elif key and key == sent_content_key("reply", phone, text):
+                loop.ledger.mark_content_sent(key)
+
+
+async def settle_stale_draft(loop: Any, peer: str) -> Dict[str, Any]:
+    """没有新入站时，输入框里的旧草稿：和台账待发一致就发出，否则清空。"""
+    from src.integrations.whatsapp_rpa.phone_send import composer_body, send_confirmed
+
+    phone = normalize_e164(peer)
+    try:
+        screen = await loop.device.read_screen(await loop.device.screencap())
+    except Exception:
+        return {"status": "empty", "tapped": False}
+    draft = str(getattr(screen, "composer", "") or "")
+    if not composer_body(draft):
+        return {"status": "empty", "tapped": False}
+    if send_confirmed(screen, draft):
+        reconcile = getattr(loop.ledger, "mark_content_sent", None)
+        if reconcile is not None:
+            from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+            loop.ledger.mark_content_sent(sent_content_key("reply", phone, draft))
+        clear = getattr(loop.device, "clear_composer", None)
+        if clear is not None:
+            await clear()
+        return {"status": "sent", "reason": "already_visible", "tapped": False, "text": draft}
+    if _bubble_matches_unsent(loop, phone, draft):
+        sent = await loop.send_prepared(
+            phone=phone, text=composer_body(draft) or draft, source="reply",
+            client_msg_id=loop.scoped_msg_id("reply", phone, draft, "stale-draft"),
+        )
+        return sent
+    clear = getattr(loop.device, "clear_composer", None)
+    if clear is not None:
+        await clear()
+    return {"status": "cleared", "tapped": False, "text": draft}
+
+
 async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
                         turns: int, seed: str, evidence: EvidenceLog) -> Dict[str, Any]:
     """A、B 交替。第 1 句由 A 发给 B，之后每人先收对方的信再回复。
@@ -1299,6 +1507,8 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
     loops = {"A": loop_a, "B": loop_b}
     results = []
     baselines: Dict[str, List[str]] = {"A": [], "B": []}
+    await reconcile_visible(loop_a, phone_b)
+    await reconcile_visible(loop_b, phone_a)
     for index in range(int(turns)):
         loop, own, peer, label = seats[index % 2]
         other = "B" if label == "A" else "A"
@@ -1341,6 +1551,14 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
             heard["ok"] = False
             results.append(heard)
             if heard.get("reason") == "empty_text":
+                settled = await settle_stale_draft(loop, peer)
+                if settled.get("status") == "sent":
+                    results[-1] = {
+                        "turn": index, "seat": label, "status": "sent",
+                        "reason": settled.get("reason") or "draft_sent",
+                        "tapped": bool(settled.get("tapped")),
+                        "delivered": True,
+                    }
                 continue
             break
         baselines[label] = list(baselines.get(label, [])) + [str(heard.get("text") or "")]

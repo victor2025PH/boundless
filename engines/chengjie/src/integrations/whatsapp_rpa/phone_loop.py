@@ -354,6 +354,15 @@ class WaPhoneLoop:
         if mode == "off":
             result["reply"] = "off"
             return result
+        noted = self.ledger.note_inbound(e164, body, now=now)
+        if not noted.get("unreplied"):
+            result["reply"] = "skipped"
+            result["reason"] = "already_replied"
+            result["send"] = {
+                "status": "skipped", "reason": "already_replied",
+                "tapped": False, "delivered": False,
+            }
+            return result
         draft = await self.decide_fn(
             account_id=self.account_id,
             phone=e164,
@@ -391,6 +400,8 @@ class WaPhoneLoop:
         }
         if len(sends) == 1:
             result["send"] = sends[0]
+        if any(row.get("status") == "sent" for row in sends):
+            self.ledger.mark_replied(e164, body)
         return result
 
     async def send_prepared(
@@ -439,9 +450,18 @@ class WaPhoneLoop:
                     **base, "status": "sent", "reason": "duplicate",
                     "delivered": True, "tapped": False, "retry": False,
                 }
+        if (
+            source == "reply"
+            and self.ledger.tracks_inbound(e164)
+            and not self.ledger.has_unreplied(e164)
+        ):
+            return {
+                **base, "status": "skipped", "reason": "no_new_inbound",
+                "tapped": False, "retry": False, "delivered": False,
+            }
         slot = self.ledger.reserve(
             client_msg_id=client_msg_id, phone=e164, account_id=self.account_id,
-            source=source, now=now, cold=cold, content_key=content_key,
+            source=source, now=now, cold=cold, content_key=content_key, body=body,
         )
         if slot.get("duplicate"):
             previous = (slot.get("row") or {}).get("status") or "duplicate"

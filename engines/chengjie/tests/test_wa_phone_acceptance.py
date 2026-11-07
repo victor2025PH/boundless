@@ -288,9 +288,9 @@ async def test_killed_ui_dump_is_tried_once_then_ocr(tmp_path: Path):
     assert first.ui_dump == "killed"
     assert sum(1 for call in calls if "uiautomator" in call) == 1
     await device.tap_send()
-    key_at = next(i for i, call in enumerate(calls) if "keyevent" in call and "111" in call)
-    size_at = next(i for i, call in enumerate(calls) if "wm" in call and "size" in call)
-    tap_at = next(i for i, call in enumerate(calls) if "input" in call and "tap" in call)
+    key_at = max(i for i, call in enumerate(calls) if "keyevent" in call and "111" in call)
+    size_at = min(i for i, call in enumerate(calls) if i > key_at and "wm" in call and "size" in call)
+    tap_at = min(i for i, call in enumerate(calls) if i > size_at and "input" in call and "tap" in call)
     assert key_at < size_at < tap_at
 
 
@@ -900,6 +900,13 @@ async def test_read_peer_text_returns_every_new_bubble(tmp_path: Path):
     screen = PhoneScreen(
         header=PHONE_A,
         incoming=["旧的一句", peer, "另一条新消息"],
+        bubbles=[
+            {"side": "in", "text": "旧的一句", "top": 700, "bottom": 748},
+            {"side": "out", "text": "早嘛，周日能睡到这会儿才起，挺舒服的吧。", "top": 800, "bottom": 860},
+            {"side": "in", "text": peer, "top": 900, "bottom": 980},
+            {"side": "in", "text": "o", "top": 990, "bottom": 1010},
+            {"side": "in", "text": "另一条新消息", "top": 1040, "bottom": 1090},
+        ],
     )
 
     class Quiet:
@@ -920,6 +927,143 @@ async def test_read_peer_text_returns_every_new_bubble(tmp_path: Path):
     )
     assert heard["ok"] is True
     assert heard["text"] == peer + "\n另一条新消息"
+    assert "o" not in heard["text"].split("\n")
+    assert "旧的一句" not in heard["text"]
+
+
+def test_timestamp_and_wallpaper_gap_split_two_bubbles():
+    """贴得很近的两句，中间是时间戳或聊天背景，就不能并成一条。"""
+    import io
+    from PIL import Image
+
+    image = Image.new("RGB", (720, 1600), (236, 229, 221))
+    for top, bottom in ((400, 448), (456, 504)):
+        for y in range(top, bottom):
+            for x in range(30, 420):
+                image.putpixel((x, y), (255, 255, 255))
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    png = buf.getvalue()
+    first = "早嘛，周日能睡到这会儿才起，挺舒服的吧。"
+    second = "对了，还没问你，平时怎么称呼你比较方便呀？"
+    screen = lines_to_screen([
+        {"text": first, "box": [36, 400, 400, 448]},
+        {"text": second, "box": [36, 456, 400, 504]},
+        {"text": "输入消息", "box": [111, 1500, 400, 1548]},
+    ], 720, 1600, png)
+    assert screen.incoming == [first, second]
+    marked = lines_to_screen([
+        {"text": first, "box": [36, 400, 400, 448]},
+        {"text": "7:28 ✓✓", "box": [300, 450, 420, 478]},
+        {"text": second, "box": [36, 470, 400, 518]},
+        {"text": "输入消息", "box": [111, 1500, 400, 1548]},
+    ], 720, 1600)
+    assert marked.incoming == [first, second]
+
+
+def test_placeholder_and_bottom_bubble_count_as_sent():
+    from src.integrations.whatsapp_rpa.phone_send import send_confirmed
+
+    sentence = "对了，还没问你，平时怎么称呼你比较方便呀？"
+    screen = lines_to_screen([
+        {"text": "对了，还没问你，平时怎么称呼", "box": [135, 1201, 643, 1232]},
+        {"text": "你比较方便呀？", "box": [132, 1243, 280, 1281]},
+        {"text": "发消息", "box": [111, 1500, 280, 1540]},
+    ], 720, 1600)
+    assert "发消息" in screen.composer
+    assert send_confirmed(screen, sentence) is True
+    assert send_confirmed(
+        PhoneScreen(composer="发消息", outgoing=[sentence[:8] + "完全另一句"]),
+        sentence,
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_same_inbound_cannot_send_twice_and_stale_draft_is_finished(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import settle_stale_draft
+
+    device = LinkPhone("a", PHONE_A, {})
+    store = InboxStore(tmp_path / "inbox.db")
+    ledger = PhoneLedger(tmp_path / "ledger.db")
+
+    async def decide(**kwargs):
+        return {"ok": True, "reply": "早嘛，周日能睡到这会儿才起，挺舒服的吧。"}
+
+    loop = WaPhoneLoop(
+        account_id="seat-a", inbox=store, device=device, decide_fn=decide,
+        cfg={"enabled": True}, ledger=ledger,
+        now_fn=lambda: 1_700_000_000.0, run_id="pair",
+    )
+    first = await loop.handle_inbound(phone=PHONE_B, text="在吗", display_name="03")
+    second = await loop.handle_inbound(phone=PHONE_B, text="在吗", display_name="03")
+    assert first["send"]["status"] == "sent"
+    assert second["reason"] == "already_replied"
+    assert second["send"]["tapped"] is False
+    assert device.taps == 1
+
+    draft = "嗯，被饿醒的，肚子先抗议了。你起这么早是有事还是也睡不着呀。"
+    ledger.reserve(
+        client_msg_id="draft-1", phone=PHONE_B, account_id="seat-a",
+        source="reply", content_key="pending-draft", body=draft,
+    )
+    ledger.finish("draft-1", "failed", error="bubble_missing")
+
+    class DraftPhone(LinkPhone):
+        def __init__(self):
+            super().__init__("b", PHONE_B, {})
+            self.cleared = False
+            self.screen = PhoneScreen(header=PHONE_A, composer=draft)
+
+        async def clear_composer(self) -> None:
+            self.cleared = True
+            self.screen = PhoneScreen(header=PHONE_A, composer="")
+
+        async def read_screen(self, png):
+            return self.screen
+
+        async def tap_send(self) -> None:
+            self.taps += 1
+            shown = self.screen.composer
+            self.screen = PhoneScreen(header=PHONE_A, composer="", outgoing=[shown])
+
+    other = DraftPhone()
+    other_loop = WaPhoneLoop(
+        account_id="seat-b", inbox=store, device=other, decide_fn=decide,
+        cfg={"enabled": True}, ledger=PhoneLedger(tmp_path / "b.db"),
+        now_fn=lambda: 1_700_000_000.0, run_id="b",
+    )
+    other_loop.ledger.reserve(
+        client_msg_id="draft-b", phone=PHONE_A, account_id="seat-b",
+        source="reply", content_key="k", body=draft,
+    )
+    other_loop.ledger.finish("draft-b", "failed", error="bubble_missing")
+    settled = await settle_stale_draft(other_loop, PHONE_A)
+    assert settled["status"] == "sent"
+    assert other.taps == 1
+
+    other.screen = PhoneScreen(header=PHONE_A, composer="这是一句不在台账里的草稿")
+    other.taps = 0
+    cleared = await settle_stale_draft(other_loop, PHONE_A)
+    assert cleared["status"] == "cleared"
+    assert other.cleared is True
+    assert other.taps == 0
+
+
+def test_scroll_to_latest_swipes_then_taps_the_down_button():
+    calls = []
+
+    def runner(argv):
+        calls.append(argv[-1])
+        if "wm size" in argv[-1]:
+            return 0, b"Physical size: 1080x2400\n", ""
+        return 0, b"", ""
+
+    device = SshAdbPhoneDevice("hub176", "SERIAL", lambda _png: PhoneScreen(), runner=runner)
+    import asyncio
+    asyncio.run(device.scroll_to_latest())
+    blob = "\n".join(calls)
+    assert "input swipe" in blob
+    assert "input tap" in blob
 
 
 @pytest.mark.asyncio

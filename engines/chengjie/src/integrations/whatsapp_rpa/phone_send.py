@@ -224,14 +224,43 @@ def composer_settled(composer: str, expected: str) -> bool:
     return composer_matches(composer, expected)
 
 
+def texts_close(observed: str, expected: str) -> bool:
+    """去空白后一致、互相包含，或相似度至少 0.9。"""
+    from difflib import SequenceMatcher
+    got = composer_body(observed)
+    want = composer_body(expected)
+    if not got or not want:
+        return False
+    if got == want or want in got or got in want:
+        return True
+    return SequenceMatcher(None, got, want).ratio() >= 0.9
+
+
+def is_bubble_boundary(text: str) -> bool:
+    """时间戳或单独的已读勾。它是上一个气泡的结束，不是下一句的开头。"""
+    raw = str(text or "").strip()
+    cleaned = re.sub(r"^[□■•·|\-\s]+|[□■•·|\-\s]+$", "", raw)
+    if not cleaned:
+        return False
+    if _DATE_LINE.match(cleaned) or _CLOCK_ANY.fullmatch(cleaned):
+        return True
+    return re.fullmatch(r"[\s\d:：.。√✓✔☑]+", cleaned) is not None and (
+        _CLOCK_ANY.search(cleaned) is not None or _CHECK_MARK.search(cleaned) is not None
+    )
+
+
 def send_confirmed(screen: "PhoneScreen", expected: str) -> bool:
-    """输入框已经空了，并且任一气泡里的文字和刚发的那句逐字一致。"""
+    """输入框不再是待发正文，底部己方气泡和待发对得上，才算已经发出。
+
+    占位「发消息」表示输入框已经空出来。底部气泡去空白后包含待发，
+    或相似度至少 0.9，都算这一句已经在屏幕上。
+    """
     if composer_matches(getattr(screen, "composer", ""), expected):
         return False
-    for text in list(getattr(screen, "outgoing", []) or []) + list(getattr(screen, "incoming", []) or []):
-        if composer_matches(text, expected):
-            return True
-    return False
+    outgoing = list(getattr(screen, "outgoing", []) or [])
+    incoming = list(getattr(screen, "incoming", []) or [])
+    bottom = outgoing[-1] if outgoing else (incoming[-1] if incoming else "")
+    return texts_close(bottom, expected)
 
 
 def bubble_visible(outgoing: List[str], expected: str) -> bool:
@@ -255,6 +284,7 @@ class PhoneScreen:
     last_incoming: str = ""
     notes: List[str] = field(default_factory=list)
     ocr_lines: List[dict] = field(default_factory=list)
+    bubbles: List[dict] = field(default_factory=list)
     composer_left: float = 0.0
     source: str = ""
     ui_dump: str = ""
