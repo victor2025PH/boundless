@@ -99,21 +99,38 @@ def same_name(a: str, b: str) -> bool:
 
 
 def header_matches(header: str, *, phone: str = "", sender: str = "") -> bool:
-    """顶栏必须对上号码或显示名全称。对不上就不能入库、不能发。"""
+    """顶栏必须对上号码或显示名全称。对不上就不能入库、不能发。
+
+    顶栏号码被省略号截断时，可见数字只要是完整号码的前缀或后缀也算对上。
+    没有省略号时，残段至少 6 位，避免一位数字误认。中间一段不算。
+    """
     shown = str(header or "").strip()
     if not shown:
         return False
-    want = normalize_e164(phone)
-    if want:
-        found = extract_phone(shown) or normalize_e164(shown)
-        if found == want:
-            return True
-        shown_digits = "".join(_DIGITS.findall(shown))
-        if want[1:] and want[1:] == shown_digits:
-            return True
+    if phone and _truncated_phone_matches(shown, phone):
+        return True
     if sender and same_name(shown, sender):
         return True
     return False
+
+
+def _truncated_phone_matches(shown: str, phone: str) -> bool:
+    want = normalize_e164(phone)
+    if not want:
+        return False
+    digits = "".join(_DIGITS.findall(shown))
+    full = want[1:]
+    if not digits or not full:
+        return False
+    if digits == full:
+        return True
+    if len(digits) >= len(full):
+        return False
+    truncated = any(mark in shown for mark in ("…", "...", "..", "⋯"))
+    minimum = 4 if truncated else 6
+    if len(digits) < minimum:
+        return False
+    return full.startswith(digits) or full.endswith(digits)
 
 
 def lookup_phone_by_name(store, account_id: str, name: str) -> str:

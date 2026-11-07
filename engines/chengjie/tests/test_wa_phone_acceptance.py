@@ -1,0 +1,336 @@
+"""真机验收脚本的模拟测试。不连 ssh，不点真机，不对外发送。"""
+
+from __future__ import annotations
+
+import json
+import struct
+import zlib
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
+import pytest
+
+from src.inbox.store import InboxStore
+from src.integrations.whatsapp_rpa.phone_acceptance import (
+    EvidenceLog,
+    SshAdbPhoneDevice,
+    cold_texts,
+    compare_prefill,
+    lines_to_screen,
+    make_http_decide,
+    make_ppocr_reader,
+    png_size,
+    redact_text,
+    run_convert_pending,
+    run_dry,
+    run_first_touch_cap,
+    run_pair_chat,
+    run_rate_limit_check,
+    run_stop_test,
+    safe_log_fields,
+    ssh_adb_argv,
+    variant_phone,
+)
+from src.integrations.whatsapp_rpa.phone_identity import header_matches
+from src.integrations.whatsapp_rpa.phone_ledger import PhoneLedger
+from src.integrations.whatsapp_rpa.phone_loop import WaPhoneLoop
+from src.integrations.whatsapp_rpa.phone_send import PhoneScreen
+
+PHONE_A = "+14155552671"
+PHONE_B = "+14155550000"
+
+
+def _png(width: int, height: int) -> bytes:
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + b"\x00\x00\x00" * width for _ in range(height))
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+
+class LinkPhone:
+    def __init__(self, name: str, own_phone: str, bus: dict):
+        self.name = name
+        self.own_phone = own_phone
+        self.bus = bus
+        self.taps = 0
+        self.urls = []
+        self.screen = PhoneScreen()
+        self.force_composer = None
+        self.rate = False
+
+    async def open_url(self, url: str) -> None:
+        self.urls.append(url)
+        parsed = urlparse(url)
+        digits = parsed.path.strip("/").split("/")[-1]
+        text = unquote(parse_qs(parsed.query).get("text", [""])[0])
+        self._bubble = text
+        header = digits[:6] + "…"
+        if self.rate:
+            composer = (text or "你好") + "\n发送过于频繁，请稍后再试"
+        elif self.force_composer is not None:
+            composer = self.force_composer
+        else:
+            composer = text
+        self.screen = PhoneScreen(header=header, composer=composer)
+
+    async def screencap(self) -> bytes:
+        return _png(100, 100)
+
+    async def read_screen(self, png: bytes) -> PhoneScreen:
+        return self.screen
+
+    async def tap_send(self) -> None:
+        self.taps += 1
+        other = "b" if self.name == "a" else "a"
+        self.bus.setdefault(other, []).append({
+            "sender": self.own_phone, "phone": self.own_phone, "text": self._bubble,
+        })
+        self.screen = PhoneScreen(header=self.screen.header, outgoing=[self._bubble], composer="")
+
+    async def press_back(self) -> None:
+        return None
+
+    async def poll_notifications(self):
+        items = list(self.bus.get(self.name, []))
+        self.bus[self.name] = []
+        return items
+
+
+def _loop(tmp_path: Path, device, account: str, decide_reply: str = "收到，继续"):
+    store = InboxStore(tmp_path / f"inbox-{account}.db")
+    ledger = PhoneLedger(tmp_path / f"ledger-{account}.db")
+
+    async def decide(*, account_id, phone, last_inbound, persona_id=""):
+        return {"ok": True, "reply": decide_reply}
+
+    loop = WaPhoneLoop(
+        account_id=account, inbox=store, device=device, decide_fn=decide,
+        cfg={"enabled": True, "hourly_cap": 2, "daily_cap": 80},
+        ledger=ledger, now_fn=lambda: 1_700_000_000.0,
+    )
+    return loop
+
+
+def test_truncated_header_matches_prefix_or_suffix_only():
+    assert header_matches("141555…", phone=PHONE_A)
+    assert header_matches("…2671", phone=PHONE_A)
+    assert not header_matches("5552", phone=PHONE_A)
+    assert not header_matches("415555", phone=PHONE_A)
+    assert header_matches("Ann", phone=PHONE_A, sender="Ann")
+
+
+def test_ssh_adb_never_uses_local_adb_or_server_commands():
+    argv = ssh_adb_argv("hub176", "SERIAL_A", ["exec-out", "screencap", "-p"])
+    assert argv[0] == "ssh"
+    assert "hub176" in argv
+    assert argv[-1].startswith("adb -s SERIAL_A")
+    assert "kill-server" not in argv[-1]
+    for blocked in (["kill-server"], ["start-server"], ["connect", "1.2.3.4:5555"]):
+        with pytest.raises(ValueError):
+            ssh_adb_argv("hub176", "SERIAL_A", blocked)
+
+
+def test_prefill_requires_the_chinese_text_not_the_placeholder():
+    assert compare_prefill("你好，这是验收", "你好，这是验收")["match"] is True
+    placeholder = compare_prefill("你好，这是验收", "输入消息")
+    assert placeholder["match"] is False
+    assert placeholder["placeholder_only"] is True
+    assert compare_prefill("你好，这是验收", "你好，这是验收\n输入消息")["match"] is True
+
+
+def test_ppocr_boxes_split_header_composer_and_bubbles():
+    png = _png(100, 200)
+    assert png_size(png) == (100, 200)
+    screen = lines_to_screen([
+        {"text": "141555…", "box": [10, 4, 40, 16]},
+        {"text": "在吗", "box": [4, 80, 30, 96]},
+        {"text": "你好", "box": [60, 100, 90, 116]},
+        {"text": "你好，这是验收", "box": [8, 180, 90, 196]},
+    ], 100, 200)
+    assert "141555" in screen.header
+    assert screen.composer == "你好，这是验收"
+    assert screen.last_incoming == "在吗"
+    assert screen.outgoing == ["你好"]
+    seen = {}
+
+    def post(url, payload, timeout=20.0, headers=None):
+        seen["url"] = url
+        assert "image_b64" in payload
+        assert headers is None or "Authorization" not in headers
+        return {"ok": True, "lines": [
+            {"text": "你好，这是验收", "box": [8, 180, 90, 196]},
+        ]}
+
+    reader = make_ppocr_reader("http://192.168.0.176:8766", post_json=post)
+    parsed = reader(png)
+    assert seen["url"] == "http://192.168.0.176:8766/v1/ocr"
+    assert parsed.composer == "你好，这是验收"
+
+
+def test_decide_log_does_not_keep_the_token():
+    secret = "super-secret-token"
+    assert secret not in redact_text(f"Authorization: Bearer {secret}", [secret])
+    logged = safe_log_fields(
+        {"event": "decide", "authorization": f"Bearer {secret}", "action": "draft"},
+        [secret],
+    )
+    assert "authorization" not in logged
+    assert secret not in json.dumps(logged)
+
+    captured = {}
+
+    def post(url, body, timeout=60.0, headers=None):
+        captured["headers"] = dict(headers or {})
+        captured["body"] = body
+        return {"action": "draft", "text": "你好呀"}
+
+    decide = make_http_decide("http://127.0.0.1:18799/api/replybus/decide", token=secret, post_json=post)
+
+    async def _call():
+        return await decide(account_id="seat-a", phone=PHONE_A, last_inbound="在吗")
+
+    import asyncio
+    result = asyncio.run(_call())
+    assert result["reply"] == "你好呀"
+    assert captured["headers"]["Authorization"] == f"Bearer {secret}"
+    assert captured["body"]["message"]["platform"] == "whatsapp"
+    assert secret not in json.dumps(safe_log_fields({"url": captured.get("url", "")}, [secret]))
+
+
+@pytest.mark.asyncio
+async def test_dry_run_checks_chinese_and_does_not_tap(tmp_path: Path):
+    bus = {}
+    device = LinkPhone("a", PHONE_A, bus)
+    evidence = EvidenceLog(tmp_path / "evidence")
+    loop = _loop(tmp_path, device, "seat-a")
+    report = await run_dry(loop, device, PHONE_B, "你好，这是验收", evidence)
+    assert report["ok"] is True
+    assert report["status"] == "dry_run"
+    assert device.taps == 0
+    assert "wa.me/14155550000" in device.urls[0]
+    saved = json.loads((tmp_path / "evidence" / "report.json").read_text(encoding="utf-8"))
+    assert saved["match"] is True
+    assert saved["expected"] == "你好，这是验收"
+    assert any(path.name.endswith(".ocr.json") for path in (tmp_path / "evidence").iterdir())
+
+    device.force_composer = "输入消息"
+    missed = await run_dry(loop, device, PHONE_B, "你好，这是验收", EvidenceLog(tmp_path / "bad"))
+    assert missed["ok"] is False
+    assert missed["placeholder_only"] is True
+    assert device.taps == 0
+
+
+@pytest.mark.asyncio
+async def test_pair_chat_two_phones_exchange(tmp_path: Path):
+    bus = {}
+    device_a = LinkPhone("a", PHONE_A, bus)
+    device_b = LinkPhone("b", PHONE_B, bus)
+    store = InboxStore(tmp_path / "inbox.db")
+
+    async def decide(*, account_id, phone, last_inbound, persona_id=""):
+        return {"ok": True, "reply": "收到，" + last_inbound[:4]}
+
+    def make(name, account, device):
+        return WaPhoneLoop(
+            account_id=account, inbox=store, device=device, decide_fn=decide,
+            cfg={"enabled": True, "hourly_cap": 20, "daily_cap": 80},
+            ledger=PhoneLedger(tmp_path / f"{name}.db"),
+            now_fn=lambda: 1_700_000_000.0,
+        )
+
+    report = await run_pair_chat(
+        make("a", "seat-a", device_a), make("b", "seat-b", device_b),
+        PHONE_A, PHONE_B, 2, "你好，我在做链路验收", EvidenceLog(tmp_path / "pair"),
+    )
+    assert report["ok"] is True
+    assert [row["status"] for row in report["turns"]] == ["sent", "sent"]
+    assert device_a.taps == 1
+    assert device_b.taps == 1
+    assert report["turns"][1]["source"] == "notification"
+
+
+@pytest.mark.asyncio
+async def test_cap_stop_convert_and_rate_limit(tmp_path: Path):
+    bus = {}
+    device = LinkPhone("a", PHONE_A, bus)
+    loop = _loop(tmp_path, device, "seat-a")
+    cap = await run_first_touch_cap(
+        loop, PHONE_B, ["验收冷启动一"], 1, EvidenceLog(tmp_path / "cap"),
+    )
+    assert cap["ok"] is True
+    assert [row["status"] for row in cap["results"]] == ["sent", "capped"]
+    assert device.taps == 1
+    assert variant_phone(PHONE_B, 0) != variant_phone(PHONE_B, 1)
+
+    stopped = await run_stop_test(loop, PHONE_A, "不要再发", EvidenceLog(tmp_path / "stop"))
+    assert stopped["ok"] is True
+    assert device.taps == 1
+
+    pending = await run_convert_pending(
+        loop, PHONE_A, "我下单了", EvidenceLog(tmp_path / "deal"), confirm=False,
+    )
+    assert pending["ok"] is True
+    assert pending["active_deals"] == 0
+
+    device.screen = PhoneScreen(header=PHONE_A, composer="发送过于频繁，请稍后再试")
+    rate = await run_rate_limit_check(device, EvidenceLog(tmp_path / "rate"))
+    assert rate["status"] == "throttled"
+    assert rate["tapped"] is False
+    assert cold_texts(["一句"], 2)[0] == "一句"
+
+
+def test_cli_dry_run_uses_injected_device(tmp_path: Path):
+    from scripts.wa_phone_loop_acceptance import async_main, parser
+    import asyncio
+    device = LinkPhone("a", PHONE_A, {})
+    args = parser().parse_args([
+        "dry-run",
+        "--data-dir", str(tmp_path / "data"),
+        "--evidence-dir", str(tmp_path / "evidence"),
+        "--adb-ssh-host", "hub176",
+        "--serial", "SERIAL_A",
+        "--ocr-url", "http://192.168.0.176:8766",
+        "--account", "seat-a",
+        "--phone", PHONE_B,
+        "--text", "你好，这是验收",
+    ])
+
+    async def decide(**kwargs):
+        raise AssertionError("dry-run 不应调用决定接口")
+
+    report = asyncio.run(async_main(args, devices={"a": device}, decide_fn=decide))
+    assert report["ok"] is True
+    assert device.taps == 0
+    text = Path("scripts/wa_phone_loop_acceptance.py").read_text(encoding="utf-8")
+    assert "WhatsAppRpaService" not in text
+    assert "TelegramClient" not in text
+
+
+@pytest.mark.asyncio
+async def test_ssh_device_runner_is_injected(tmp_path: Path):
+    png = _png(32, 32)
+    calls = []
+
+    def runner(argv):
+        calls.append(list(argv))
+        remote = argv[-1]
+        assert "kill-server" not in remote
+        assert "start-server" not in remote
+        if "screencap" in remote:
+            return 0, png, ""
+        if "wm" in remote and "size" in remote:
+            return 0, b"Physical size: 720x1600\n", ""
+        if "dumpsys" in remote:
+            return 0, "NotificationRecord pkg=com.whatsapp\n android.title=String (Ann)\n android.text=String (在吗)\n".encode(), ""
+        return 0, b"", ""
+
+    device = SshAdbPhoneDevice("hub176", "SERIAL_A", lambda image: PhoneScreen(header="141555…"), runner=runner)
+    shot = await device.screencap()
+    assert shot.startswith(b"\x89PNG")
+    assert calls[0][0] == "ssh"
+    assert "hub176" in calls[0]
+    notes = await device.poll_notifications()
+    assert notes[0]["text"] == "在吗"
+    await device.tap_send()
+    assert any("input tap" in call[-1] for call in calls)
