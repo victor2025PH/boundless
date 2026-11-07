@@ -102,6 +102,9 @@ class WhatsAppRpaService:
         self._template_pool: ProactiveTemplatePool = create_pool(_tpl_cfg)
         # P15-h: 加载历史模板回复数据（用于加权选择）
         self._load_template_history()
+        # 号码闭环默认不启用。bind_inbox 只保存引用，不改变 dump 轮询。
+        self._inbox: Any = None
+        self._phone_runtime: Any = None
 
     # ── 默认配置 ──────────────────────────────────────────────────────────
 
@@ -205,6 +208,10 @@ class WhatsAppRpaService:
     def effective_config(self) -> Dict[str, Any]:
         return dict(self._merged_cfg)
 
+    def bind_inbox(self, store: Any) -> None:
+        """挂上电脑收件箱。phone_loop 未启用时，这个引用不会被读。"""
+        self._inbox = store
+
     def set_contact_hooks(self, hooks: Any) -> None:
         """main.py 在 contacts 子系统 bootstrap 后调用，把 ContactHooks 注入 runner。"""
         self._runner.set_contact_hooks(hooks)
@@ -256,6 +263,53 @@ class WhatsAppRpaService:
     def trigger_once(self) -> None:
         self._trigger_evt.set()
 
+    async def _run_phone_tick(self) -> Dict[str, Any]:
+        """号码闭环的一轮。没挂上收件箱就停在这一轮，不退回 dump 发送。"""
+        if self._phone_runtime is None:
+            self._phone_runtime = self._build_phone_runtime()
+        if self._phone_runtime is None:
+            return {"ok": False, "step": "phone_loop_unwired", "peer_text": ""}
+        return await self._phone_runtime.run_once()
+
+    def _build_phone_runtime(self) -> Any:
+        if self._inbox is None:
+            logger.warning("[wa_phone] 已启用号码闭环，但没有收件箱，本轮不发送")
+            return None
+        from types import SimpleNamespace
+
+        from src.integrations.whatsapp_rpa.phone_loop import (
+            WaPhoneLoop,
+            decide_whatsapp,
+            register_phone_loop,
+        )
+        from src.integrations.whatsapp_rpa.phone_send import AdbPhoneDevice
+
+        cfg = dict(self._merged_cfg.get("phone_loop") or {})
+        app = SimpleNamespace(state=SimpleNamespace(
+            skill_manager=self._sm,
+            ai_client=getattr(self._sm, "ai_client", None),
+            inbox_store=self._inbox,
+            config_manager=self._cm,
+        ))
+
+        async def _decide(**kwargs: Any) -> Dict[str, Any]:
+            return await decide_whatsapp(app, **kwargs)
+
+        serial = str(self._merged_cfg.get("adb_serial") or "")
+        loop = WaPhoneLoop(
+            account_id=self.account_id,
+            inbox=self._inbox,
+            device=AdbPhoneDevice(serial),
+            decide_fn=_decide,
+            cfg=cfg,
+            ledger_path=self._state._path.with_name(
+                f"wa_phone_ledger_{self.account_id}.db"
+            ),
+            persona_id=str((self._merged_cfg.get("persona_ids") or [""])[0] or ""),
+        )
+        register_phone_loop(loop)
+        return loop
+
     @property
     def is_running(self) -> bool:
         return bool(self._task and not self._task.done())
@@ -278,8 +332,16 @@ class WhatsAppRpaService:
                     break
                 continue
 
+            # 号码闭环打开时，不再走 dump 轮询，也不再用「0=不封顶」的旧日上限。
+            _use_phone_loop = False
+            try:
+                from src.integrations.whatsapp_rpa.phone_loop import phone_loop_enabled
+                _use_phone_loop = phone_loop_enabled(self._merged_cfg)
+            except Exception:
+                _use_phone_loop = False
+
             # daily_cap 守门（业务日上限：0=不限 / outbound.unlimited_mode 归 0）
-            _cap = _business_cap(self._merged_cfg.get("daily_cap"))
+            _cap = 0 if _use_phone_loop else _business_cap(self._merged_cfg.get("daily_cap"))
             if _cap > 0:
                 _stats = self._state.run_stats(24.0)
                 _today_sent = int((_stats or {}).get("sent") or 0)
@@ -302,7 +364,10 @@ class WhatsAppRpaService:
             _serial = self._merged_cfg.get("adb_serial") or ""
             try:
                 async with get_device_lock(_serial):
-                    result = await self._runner.run_once()
+                    if _use_phone_loop:
+                        result = await self._run_phone_tick()
+                    else:
+                        result = await self._runner.run_once()
                 self._last_run = result
                 step = result.get("step", "")
                 had_peer = bool(result.get("peer_text"))
@@ -327,17 +392,18 @@ class WhatsAppRpaService:
                 self._consecutive_fail += 1
                 empty_streak += 1
 
-            # 自动接受联系人申请
-            try:
-                await self._maybe_run_auto_accept()
-            except Exception:
-                logger.debug("wa auto_accept 失败", exc_info=True)
+            if not _use_phone_loop:
+                # 自动接受联系人申请
+                try:
+                    await self._maybe_run_auto_accept()
+                except Exception:
+                    logger.debug("wa auto_accept 失败", exc_info=True)
 
-            # P15-b: 主动续聊（沉默唤醒）
-            try:
-                await self._maybe_enqueue_proactive()
-            except Exception:
-                logger.debug("wa proactive enqueue 失败", exc_info=True)
+                # P15-b: 主动续聊（沉默唤醒）
+                try:
+                    await self._maybe_enqueue_proactive()
+                except Exception:
+                    logger.debug("wa proactive enqueue 失败", exc_info=True)
 
             # P12-A: pending 自动过期（每小时最多一次）
             try:

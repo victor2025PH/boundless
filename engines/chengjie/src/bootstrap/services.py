@@ -8,6 +8,13 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def _bind_wa_inbox(assistant, svc) -> None:
+    """把收件箱交给 WhatsApp 服务。号码闭环默认关，这里不启动它。"""
+    store = getattr(assistant, "inbox_store", None)
+    if store is not None and hasattr(svc, "bind_inbox"):
+        svc.bind_inbox(store)
+
+
 def setup_contacts_subsystem(assistant):
     """装配 Contacts 跨平台子系统(feature flag 控制)并把 ContactHooks 注入
     LINE/Messenger/WhatsApp RPA 服务、注册进程级 intimacy provider 与 cap-alert。"""
@@ -328,6 +335,7 @@ def setup_rpa_services(assistant):
                         wa_cfg=_acc_cfg,
                         account_id=_aid,
                     )
+                    _bind_wa_inbox(assistant, svc)
                     assistant.whatsapp_rpa_services.append(svc)
                     assistant.logger.info("WhatsApp RPA 账号 [%s] 已构建 serial=%s", _aid, _acc.get("adb_serial"))
             else:
@@ -336,6 +344,7 @@ def setup_rpa_services(assistant):
                     skill_manager=assistant.skill_manager,
                     wa_cfg=_wa_cfg,
                 )
+                _bind_wa_inbox(assistant, svc)
                 assistant.whatsapp_rpa_services.append(svc)
                 assistant.logger.info("WhatsApp RPA 服务已构建（单账号）")
             assistant.whatsapp_rpa_service = assistant.whatsapp_rpa_services[0] if assistant.whatsapp_rpa_services else None
