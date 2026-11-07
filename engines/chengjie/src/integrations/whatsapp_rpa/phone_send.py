@@ -193,6 +193,7 @@ class PhoneScreen:
     notes: List[str] = field(default_factory=list)
     ocr_lines: List[dict] = field(default_factory=list)
     source: str = ""
+    ui_dump: str = ""
 
 
 class PhoneDevice(Protocol):
@@ -371,6 +372,9 @@ async def deliver_via_wa_me(
         return SendOutcome(status="dry_run", reason="dry_run", url=url)
 
     await device.open_url(url)
+    dismiss = getattr(device, "dismiss_keyboard", None)
+    if dismiss is not None:
+        await dismiss()
     ready = await wait_for_chat(device, phone, expected=body)
     if not ready.get("ready"):
         try:
@@ -469,9 +473,15 @@ class AdbPhoneDevice:
             return b""
         return data or b""
 
+    async def dismiss_keyboard(self) -> None:
+        from src.integrations.line_rpa import adb_helpers as adb
+
+        adb.input_keyevent(self._serial, "111")
+
     async def tap_send(self) -> None:
         from src.integrations.line_rpa import adb_helpers as adb
 
+        adb.input_keyevent(self._serial, "111")
         size = adb.screen_size(self._serial) or (720, 1600)
         sw, sh = int(size[0]), int(size[1])
         adb.input_tap(self._serial, int(sw * 0.94), int(sh * 0.956))

@@ -108,16 +108,61 @@ def png_size(png: bytes) -> tuple:
     return (width, height)
 
 
-# 输入栏只占屏幕最底部。再往上是聊天气泡，不能算进输入框。
-_COMPOSER_TOP = 0.90
-# 输入栏左右各 15% 是表情、附件、相机、发送按钮。
-# 02→03 的 005-a-read2 把右侧图标读成了字母「D」，和正文「你好，早上好，在忙吗」分成两个框。
-# 只丢掉「贴边、又窄、又离正文有一段空隙」的框。正文里的字母不因是字母被丢掉。
+# 键盘弹起时输入栏不在屏幕最底。核心行是最靠下的那行正文，
+# 只并入和它垂直连着的行。ceb233 真机：正文 [111,1428,474,1472]，
+# 其下「D」[507,1535,544,1572] 是键盘建议条或表情条上的图标。
+_COMPOSER_PITCH = 1.5
 _ICON_GUTTER = 0.15
 
 
 def _box_width(box: Sequence[float]) -> float:
     return max(0.0, float(box[2]) - float(box[0]))
+
+
+def _box_height(box: Sequence[float]) -> float:
+    return max(1.0, float(box[3]) - float(box[1]))
+
+
+def _box_cy(box: Sequence[float]) -> float:
+    return (float(box[1]) + float(box[3])) / 2.0
+
+
+def _is_body_line(box: Sequence[float]) -> bool:
+    """一行字，不是方块图标。真机那个「D」大约 37×37，不能当输入框核心。"""
+    width = _box_width(box)
+    height = _box_height(box)
+    return width >= 80 or width >= height * 2.5
+
+
+def _composer_cluster(items: Sequence[tuple]) -> List[tuple]:
+    """输入框只留最靠下那组正文，以及和它垂直连着的行。
+
+    行距用两行中心的垂直距离。超过核心行高的 1.5 倍就不是同一栏。
+    字高不到核心的六成、或超过 1.6 倍的孤立框也丢掉。
+    实测正文高 44px、中心在 1450；「D」中心在 1553，相距 103px，
+    大于 1.5×44=66，所以不并进「你好，早上好，在忙吗」。
+    """
+    if not items:
+        return []
+    bodies = [item for item in items if _is_body_line(item[1])]
+    core = max(bodies or list(items), key=lambda item: float(item[1][3]))
+    core_box = core[1]
+    core_h = _box_height(core_box)
+    core_cy = _box_cy(core_box)
+    kept = [core]
+    for item in items:
+        if item is core:
+            continue
+        box = item[1]
+        height = _box_height(box)
+        if height < core_h * 0.6 or height > core_h * 1.6:
+            continue
+        overlap = min(float(box[3]), float(core_box[3])) - max(float(box[1]), float(core_box[1]))
+        if overlap <= 0 and abs(_box_cy(box) - core_cy) > core_h * _COMPOSER_PITCH:
+            continue
+        kept.append(item)
+    kept.sort(key=lambda item: (float(item[1][1]), float(item[1][0])))
+    return kept
 
 
 def _horizontal_gap(left: Sequence[float], right: Sequence[float]) -> float:
@@ -190,15 +235,18 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) ->
         if cy < height * 0.16:
             header.append(text)
             continue
-        if cy > height * _COMPOSER_TOP:
-            if is_screen_chrome(text):
-                notes.append(text)
-            else:
-                composer_items.append((text, box))
-            continue
         if is_screen_chrome(text):
             notes.append(text)
             continue
+        composer_items.append((text, box))
+    cluster = _composer_cluster(composer_items)
+    kept_composer = _without_input_icons(cluster, float(width))
+    composer = [text for text, _box in kept_composer]
+    cluster_ids = {id(item) for item in cluster}
+    for item in composer_items:
+        if id(item) in cluster_ids:
+            continue
+        text, box = item
         left = float(box[0])
         right_gap = float(width) - float(box[2])
         if right_gap < left:
@@ -207,10 +255,6 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) ->
             incoming.append(text)
         else:
             notes.append(text)
-    kept_composer = _without_input_icons(composer_items, float(width))
-    kept_ids = {id(item) for item in kept_composer}
-    notes.extend(item[0] for item in composer_items if id(item) not in kept_ids)
-    composer = [text for text, _box in kept_composer]
     return PhoneScreen(
         header=" ".join(header),
         composer="\n".join(composer),
@@ -437,6 +481,7 @@ class EvidenceLog:
             "notes": list(getattr(screen, "notes", []) or []),
             "incoming": list(getattr(screen, "incoming", []) or []),
             "source": str(getattr(screen, "source", "") or ""),
+            "ui_dump": str(getattr(screen, "ui_dump", "") or ""),
             "ocr_lines": list(getattr(screen, "ocr_lines", []) or []),
         }
         if extra:
@@ -623,6 +668,7 @@ class SshAdbPhoneDevice:
         self.serial = serial
         self.read_screen_fn = read_screen_fn
         self.runner = runner or subprocess_runner
+        self.ui_dump_status = ""
 
     def _argv(self, adb_args: Sequence[str]) -> List[str]:
         return ssh_adb_argv(self.host, self.serial, adb_args)
@@ -643,7 +689,13 @@ class SshAdbPhoneDevice:
             raise RuntimeError(redact_text(err or "screencap failed", []))
         return out
 
+    async def dismiss_keyboard(self) -> None:
+        """ESC。预填会把键盘顶起来，建议条会挡住输入栏。"""
+        await self._run(["shell", "input", "keyevent", "111"])
+
     async def tap_send(self) -> None:
+        """先收起键盘，再按当前屏幕重新算发送按钮。"""
+        await self.dismiss_keyboard()
         code, out, err = await self._run(["shell", "wm", "size"])
         text = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out)
         width, height = _parse_wm_size(text)
@@ -672,23 +724,38 @@ class SshAdbPhoneDevice:
         return parse_wa_notifications(text)
 
     async def dump_ui_xml(self) -> bytes:
-        """先清掉旧文件，再 dump，再 cat。dump 失败时不拿上一轮的 XML。"""
+        """这批手机 dump 会被杀掉。失败只记一次，之后直接走 OCR。"""
+        if self.ui_dump_status and self.ui_dump_status != "ok":
+            return b""
         await self._run(["shell", "rm", "-f", _UI_XML_PATH])
-        code, _out, _err = await self._run(
+        code, out, err = await self._run(
             ["shell", "uiautomator", "dump", _UI_XML_PATH],
         )
-        if code != 0:
+        blob = out if isinstance(out, (bytes, bytearray)) else str(out or "").encode("utf-8")
+        err_text = err if isinstance(err, str) else ""
+        text = blob.decode("utf-8", "replace") + err_text
+        if code == 137 or "Killed" in text:
+            self.ui_dump_status = "killed"
             return b""
-        code, out, _err = await self._run(["shell", "cat", _UI_XML_PATH])
+        if code != 0:
+            self.ui_dump_status = f"exit:{code}"
+            return b""
+        code, out, err = await self._run(["shell", "cat", _UI_XML_PATH])
         if code != 0 or not out:
+            self.ui_dump_status = "empty"
             return b""
         if isinstance(out, str):
-            return out.encode("utf-8")
+            out = out.encode("utf-8")
+        if screen_from_ui_xml(out) is None:
+            self.ui_dump_status = "no-entry"
+            return b""
+        self.ui_dump_status = "ok"
         return bytes(out)
 
     async def read_screen(self, png: bytes) -> PhoneScreen:
         parsed = screen_from_ui_xml(await self.dump_ui_xml())
         if parsed is not None:
+            parsed.ui_dump = self.ui_dump_status
             return parsed
         screen = self.read_screen_fn(png)
         if hasattr(screen, "__await__"):
@@ -697,6 +764,7 @@ class SshAdbPhoneDevice:
             screen = PhoneScreen()
         if not screen.source:
             screen.source = "ocr"
+        screen.ui_dump = self.ui_dump_status
         return screen
 
 
@@ -723,6 +791,9 @@ async def preview_prefill(device: Any, phone: str, text: str, evidence: Evidence
 
     url = wa_me_url(phone, text)
     await device.open_url(url)
+    dismiss = getattr(device, "dismiss_keyboard", None)
+    if dismiss is not None:
+        await dismiss()
     ready = await wait_for_chat(device, phone, expected=text)
     compared = compare_prefill(text, str(ready.get("composer") or ""))
     confirmed = bool(ready.get("profile_confirmed"))

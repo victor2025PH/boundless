@@ -247,6 +247,50 @@ async def test_device_prefers_ui_dump_and_saves_ocr_boxes_on_fallback(tmp_path: 
     assert "D" not in stored["composer"]
 
 
+@pytest.mark.asyncio
+async def test_killed_ui_dump_is_tried_once_then_ocr(tmp_path: Path):
+    png = _png(32, 32)
+    calls = []
+
+    def runner(argv):
+        remote = argv[-1]
+        calls.append(remote)
+        if "uiautomator" in remote:
+            return 137, b"Killed\n", "Killed"
+        if "keyevent" in remote and "111" in remote:
+            return 0, b"", ""
+        if "wm" in remote and "size" in remote:
+            return 0, b"Physical size: 1080x2400\n", ""
+        if "input" in remote and "tap" in remote:
+            return 0, b"", ""
+        return 0, b"", ""
+
+    def ocr(_image):
+        screen = lines_to_screen([
+            {"text": "你好，早上好，在忙吗", "box": [111, 1428, 474, 1472]},
+            {"text": "D", "box": [507, 1535, 544, 1572]},
+        ], 1080, 2400)
+        screen.ocr_lines = [
+            {"text": "你好，早上好，在忙吗", "box": [111, 1428, 474, 1472]},
+            {"text": "D", "box": [507, 1535, 544, 1572]},
+        ]
+        screen.source = "ocr"
+        return screen
+
+    device = SshAdbPhoneDevice("hub176", "SERIAL_A", ocr, runner=runner)
+    first = await device.read_screen(png)
+    second = await device.read_screen(png)
+    assert first.composer == "你好，早上好，在忙吗"
+    assert second.composer == first.composer
+    assert first.ui_dump == "killed"
+    assert sum(1 for call in calls if "uiautomator" in call) == 1
+    await device.tap_send()
+    key_at = next(i for i, call in enumerate(calls) if "keyevent" in call and "111" in call)
+    size_at = next(i for i, call in enumerate(calls) if "wm" in call and "size" in call)
+    tap_at = next(i for i, call in enumerate(calls) if "input" in call and "tap" in call)
+    assert key_at < size_at < tap_at
+
+
 def test_prefill_requires_the_chinese_text_not_the_placeholder():
     assert compare_prefill("你好，这是验收", "你好，这是验收")["match"] is True
     placeholder = compare_prefill("你好，这是验收", "输入消息")
@@ -434,6 +478,30 @@ async def test_pair_chat_stops_when_the_first_send_fails(tmp_path: Path):
     assert device_b.taps == 0
 
 
+def test_ceb233_composer_drops_the_suggestion_icon_below_the_draft():
+    """ceb233 真机 OCR。正文 [111,1428,474,1472]，其下「D」[507,1535,544,1572]。
+
+    「D」在正文下方约 60px、水平居中，是键盘建议条或表情条，不是输入栏里的字。
+    折行如果还和正文垂直连着，仍然并进来。
+    """
+    sentence = "你好，早上好，在忙吗"
+    screen = lines_to_screen([
+        {"text": sentence, "box": [111, 1428, 474, 1472]},
+        {"text": "D", "box": [507, 1535, 544, 1572]},
+    ], 1080, 2400)
+    assert screen.composer == sentence
+    assert composer_matches(screen.composer, sentence)
+    assert "D" not in screen.composer
+
+    wrapped = lines_to_screen([
+        {"text": "你好，早上好，", "box": [111, 1428, 474, 1472]},
+        {"text": "在忙吗", "box": [111, 1484, 280, 1528]},
+        {"text": "D", "box": [507, 1600, 544, 1637]},
+    ], 1080, 2400)
+    assert composer_matches(wrapped.composer, sentence)
+    assert "D" not in wrapped.composer
+
+
 def test_pair0608_read2_drops_the_camera_icon_not_letters_in_the_text():
     """005-a-read2.ocr.json：输入框是「你好，早上好，在忙吗」再加一行「D」。
 
@@ -448,7 +516,6 @@ def test_pair0608_read2_drops_the_camera_icon_not_letters_in_the_text():
     assert screen.composer == sentence
     assert composer_matches(screen.composer, sentence)
     assert "D" not in screen.composer
-    assert "D" in screen.notes
 
     glued = lines_to_screen([
         {"text": sentence + "D", "box": [140, 2200, 860, 2310]},
