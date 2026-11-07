@@ -307,7 +307,76 @@ def _without_input_icons(items: Sequence[tuple], width: float) -> List[tuple]:
     return kept
 
 
-def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) -> PhoneScreen:
+def _is_own_green(red: int, green: int, blue: int) -> bool:
+    """己方气泡底色大约 #D9FDD3，比发送钮淡，绿只略高于红和蓝。"""
+    if green < 210 or red < 180 or blue < 170:
+        return False
+    if green < red or green < blue:
+        return False
+    if green - red > 70:
+        return False
+    return green - blue >= 8
+
+
+def _is_peer_white(red: int, green: int, blue: int) -> bool:
+    return min(red, green, blue) >= 245 and max(red, green, blue) - min(red, green, blue) <= 14
+
+
+def _fill_around(png: bytes, box: Sequence[float]) -> str:
+    """看文字框外侧一圈的底色。浅绿是己方，白是对方。看不清就返回空串。"""
+    if not png or not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ""
+    try:
+        import io
+        from PIL import Image
+        image = Image.open(io.BytesIO(png)).convert("RGB")
+    except Exception:
+        return ""
+    width, height = image.size
+    pixels = image.load()
+    left, top, right, bottom = (int(float(v)) for v in box[:4])
+    green = 0
+    white = 0
+    for pad in range(3, 12):
+        for x in range(max(0, left - pad), min(width, right + pad)):
+            for y in (top - pad, bottom + pad):
+                if y < 0 or y >= height:
+                    continue
+                red, g, blue = pixels[x, y][:3]
+                if _is_own_green(red, g, blue):
+                    green += 1
+                elif _is_peer_white(red, g, blue):
+                    white += 1
+        for y in range(max(0, top - pad), min(height, bottom + pad)):
+            for x in (left - pad, right + pad):
+                if x < 0 or x >= width:
+                    continue
+                red, g, blue = pixels[x, y][:3]
+                if _is_own_green(red, g, blue):
+                    green += 1
+                elif _is_peer_white(red, g, blue):
+                    white += 1
+    if green >= 12 and green > white:
+        return "green"
+    if white >= 12 and white > green:
+        return "white"
+    return ""
+
+
+def _bubble_side(box: Sequence[float], width: float, png: bytes) -> str:
+    """先看气泡底色，看不清再看左边缘。左边缘小于 0.12W 是对方。"""
+    fill = _fill_around(png, box)
+    if fill == "green":
+        return "out"
+    if fill == "white":
+        return "in"
+    if float(box[0]) < float(width) * 0.12:
+        return "in"
+    return "out"
+
+
+def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
+                    png: bytes = b"") -> PhoneScreen:
     """按 PP-OCR 的像素框把文字分成顶栏、输入框、对方气泡、己方气泡。
 
     对方在左侧，己方在右侧，看文字框靠哪一边，不看中心点是否过半。
@@ -343,14 +412,10 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) ->
         if id(item) in cluster_ids:
             continue
         text, box = item
-        left = float(box[0])
-        right_gap = float(width) - float(box[2])
-        if right_gap < left:
+        if _bubble_side(box, width, png) == "out":
             outgoing.append(text)
-        elif left < right_gap:
-            incoming.append(text)
         else:
-            notes.append(text)
+            incoming.append(text)
     return PhoneScreen(
         header=" ".join(header),
         composer="\n".join(composer),
@@ -394,7 +459,7 @@ def make_ppocr_reader(base_url: str, post_json: Optional[Callable[..., Dict[str,
             data = _post_json(url, payload, timeout=timeout, headers=None)
         lines = list((data or {}).get("lines") or [])
         width, height = png_size(png)
-        screen = lines_to_screen(lines, width, height)
+        screen = lines_to_screen(lines, width, height, png=png)
         screen.ocr_lines = [
             {"text": str(line.get("text") or ""), "box": list(line.get("box") or [])}
             for line in lines
@@ -901,6 +966,18 @@ def _parse_wm_size(text: str) -> tuple:
     return (int(match.group(1)), int(match.group(2)))
 
 
+async def _seed_already_visible(loop: Any, peer: str, seed: str) -> bool:
+    """这句已经在气泡里、输入框也空了。下一轮接着聊，不要再发一次。"""
+    try:
+        await open_peer_chat(loop.device, peer)
+    except Exception:
+        return False
+    from src.integrations.whatsapp_rpa.phone_send import send_confirmed, wait_for_chat
+    await wait_for_chat(loop.device, peer, expected="")
+    screen = await loop.device.read_screen(await loop.device.screencap())
+    return send_confirmed(screen, seed)
+
+
 async def open_peer_chat(device: Any, phone: str) -> str:
     """用 wa.me/{号码} 打开对端，保证不是点到列表第一行。"""
     url = wa_me_url(phone)
@@ -1127,6 +1204,22 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
         other = "B" if label == "A" else "A"
         if index == 0:
             baselines[other] = await snapshot_incoming(loops[other].device, own)
+            if await _seed_already_visible(loop, peer, seed):
+                from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+                peer_id = normalize_e164(peer)
+                loop.ledger.mark_content_sent(
+                    sent_content_key("acceptance", peer_id, seed),
+                )
+                baselines[other] = [
+                    line for line in baselines.get(other, [])
+                    if not composer_matches(line, seed)
+                ]
+                results.append({
+                    "turn": index, "seat": label, "status": "sent",
+                    "reason": "already_visible", "delivered": True, "tapped": False,
+                    "phone": peer_id,
+                })
+                continue
             item = await loop.send_prepared(
                 phone=peer, text=seed, source="acceptance",
                 client_msg_id=loop.scoped_msg_id("acceptance", normalize_e164(peer), seed, "seed"),

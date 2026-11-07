@@ -348,6 +348,47 @@ def test_green_send_button_is_mapped_from_the_screenshot():
     assert abs(point["tap"][1] - 2168) <= 3
 
 
+def _paint_bubbles() -> bytes:
+    import io
+    from PIL import Image, ImageDraw
+    image = Image.new("RGB", (720, 1500), (236, 229, 221))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((170, 710, 560, 810), fill=(0xD9, 0xFD, 0xD3))
+    draw.rectangle((30, 1360, 430, 1460), fill=(255, 255, 255))
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_own_bubble_is_green_even_when_its_center_is_left_of_center():
+    """02 发出的气泡 [197,739,519,776]，中心 x=358，在 720 宽的左半边。
+
+    底色是 #D9FDD3，不能当成对方。03 收到的是白底 [58,1388,377,1422]。
+    """
+    sentence = "你好，早上好，在忙吗"
+    own = [197, 739, 519, 776]
+    peer = [58, 1388, 377, 1422]
+    png = _paint_bubbles()
+    screen = lines_to_screen([
+        {"text": sentence, "box": own},
+        {"text": "在吗", "box": peer},
+        {"text": "输入消息", "box": [120, 1450, 400, 1490]},
+    ], 720, 1500, png=png)
+    assert screen.outgoing == [sentence]
+    assert screen.incoming == ["在吗"]
+    assert (own[0] + own[2]) / 2 < 720 / 2
+
+    pale = lines_to_screen([
+        {"text": sentence, "box": own},
+        {"text": "在吗", "box": peer},
+        {"text": "输入消息", "box": [120, 1450, 400, 1490]},
+    ], 720, 1500)
+    assert pale.outgoing == [sentence]
+    assert pale.incoming == ["在吗"]
+    assert own[0] >= 720 * 0.12
+    assert peer[0] < 720 * 0.12
+
+
 def test_prefill_requires_the_chinese_text_not_the_placeholder():
     assert compare_prefill("你好，这是验收", "你好，这是验收")["match"] is True
     placeholder = compare_prefill("你好，这是验收", "输入消息")
@@ -501,6 +542,52 @@ async def test_pair_chat_two_phones_exchange(tmp_path: Path):
     assert device_a.taps == 1
     assert device_b.taps == 1
     assert report["turns"][1]["source"] == "notification"
+
+
+@pytest.mark.asyncio
+async def test_visible_seed_is_marked_sent_and_not_sent_again(tmp_path: Path):
+    sentence = "你好，早上好，在忙吗"
+    bus = {}
+
+    class SeenPhone(LinkPhone):
+        async def open_url(self, url: str) -> None:
+            self.urls.append(url)
+            self.screen = PhoneScreen(
+                header=PHONE_B, composer="", outgoing=[sentence],
+            )
+
+    device_a = SeenPhone("a", PHONE_A, bus)
+    device_b = LinkPhone("b", PHONE_B, bus)
+    store = InboxStore(tmp_path / "inbox.db")
+    ledger = PhoneLedger(tmp_path / "ledger.db")
+    from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+    key = sent_content_key("acceptance", PHONE_B, sentence)
+    ledger.reserve(
+        client_msg_id="old-fail", phone=PHONE_B, account_id="seat-a",
+        source="acceptance", content_key=key,
+    )
+    ledger.finish("old-fail", "failed", error="bubble_missing")
+
+    def make(name, account, device, book):
+        return WaPhoneLoop(
+            account_id=account, inbox=store, device=device,
+            decide_fn=_no_decide, cfg={"enabled": True},
+            ledger=book, now_fn=lambda: 1_700_000_000.0, run_id="run-next",
+        )
+
+    async def _no_decide(**kwargs):
+        return {"ok": True, "reply": "收到"}
+
+    report = await run_pair_chat(
+        make("a", "seat-a", device_a, ledger),
+        make("b", "seat-b", device_b, PhoneLedger(tmp_path / "b.db")),
+        PHONE_A, PHONE_B, 1, sentence, EvidenceLog(tmp_path / "seen"),
+    )
+    assert report["turns"][0]["status"] == "sent"
+    assert report["turns"][0]["reason"] == "already_visible"
+    assert device_a.taps == 0
+    assert ledger.get_send("old-fail")["status"] == "sent"
+    assert ledger.has_sent_content(key) is True
 
 
 @pytest.mark.asyncio

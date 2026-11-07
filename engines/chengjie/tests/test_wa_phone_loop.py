@@ -352,6 +352,12 @@ async def test_retap_only_while_the_same_draft_is_still_in_the_box():
     assert missed.status == "failed"
     assert missed.reason == "bubble_missing"
     assert cleared.taps == 1
+
+    from src.integrations.whatsapp_rpa.phone_send import send_confirmed
+    landed = PhoneScreen(header=PHONE, composer="", incoming=[text])
+    assert send_confirmed(landed, text) is True
+    still = PhoneScreen(header=PHONE, composer=text, outgoing=[text])
+    assert send_confirmed(still, text) is False
     assert not bubble_visible(["另一句"], "你好呀")
 
 

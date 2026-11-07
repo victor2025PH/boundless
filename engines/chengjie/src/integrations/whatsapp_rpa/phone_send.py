@@ -171,6 +171,16 @@ def composer_settled(composer: str, expected: str) -> bool:
     return composer_matches(composer, expected)
 
 
+def send_confirmed(screen: "PhoneScreen", expected: str) -> bool:
+    """输入框已经空了，并且任一气泡里的文字和刚发的那句逐字一致。"""
+    if composer_matches(getattr(screen, "composer", ""), expected):
+        return False
+    for text in list(getattr(screen, "outgoing", []) or []) + list(getattr(screen, "incoming", []) or []):
+        if composer_matches(text, expected):
+            return True
+    return False
+
+
 def bubble_visible(outgoing: List[str], expected: str) -> bool:
     """发出后的截图里要能看到这句己方文字。"""
     want = _norm(expected)
@@ -388,14 +398,14 @@ async def deliver_via_wa_me(
 
     await device.tap_send()
     after = await device.read_screen(await device.screencap())
-    if bubble_visible(after.outgoing, body):
+    if send_confirmed(after, body):
         return SendOutcome(status="sent", reason="", tapped=True, url=url)
     # 原文还在输入框、也没有新气泡：这一下没点中发送按钮，重新定位再点一次。
     # 输入框已经空了就绝不补发，气泡可能只是没被读出来。
     if composer_matches(after.composer, body):
         await device.tap_send()
         after = await device.read_screen(await device.screencap())
-        if bubble_visible(after.outgoing, body):
+        if send_confirmed(after, body):
             return SendOutcome(status="sent", reason="", tapped=True, url=url)
     return SendOutcome(
         status="failed", reason="bubble_missing", tapped=True, url=url,

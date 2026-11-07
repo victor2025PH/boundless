@@ -220,6 +220,36 @@ class PhoneLedger:
             ).fetchone()
         return dict(row) if row else None
 
+    def mark_content_sent(self, content_key: str, *, now: Optional[float] = None) -> int:
+        """把这句话已经失败的记录改成 sent。已经是 sent 的不动。"""
+        key = str(content_key or "").strip()
+        if not key:
+            return 0
+        ts = float(now if now is not None else time.time())
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE sends SET status='sent', error='', ts=? "
+                "WHERE content_key=? AND status!='sent'",
+                (ts, key),
+            )
+            changed = int(cursor.rowcount or 0)
+            if changed:
+                self._conn.commit()
+                return changed
+            already = self._conn.execute(
+                "SELECT 1 FROM sends WHERE content_key=? AND status='sent' LIMIT 1",
+                (key,),
+            ).fetchone()
+            if already is not None:
+                return 0
+            self._conn.execute(
+                "INSERT INTO sends(client_msg_id, phone, account_id, source, status, error, ts, cold, content_key)"
+                " VALUES(?,?,?,?, 'sent', '', ?, 0, ?)",
+                ("visible-" + key[:24], "", "", "acceptance", ts, key),
+            )
+            self._conn.commit()
+            return 1
+
     def has_sent_content(self, content_key: str) -> bool:
         """同一句话已经发出去过。失败且没点发送的记录不算。"""
         key = str(content_key or "").strip()
