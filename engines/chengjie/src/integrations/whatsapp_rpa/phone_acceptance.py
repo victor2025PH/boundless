@@ -104,34 +104,18 @@ def png_size(png: bytes) -> tuple:
     return (width, height)
 
 
-_CLOCK_LINE = re.compile(
-    r"^(?:凌晨|清晨|早上|上午|中午|下午|傍晚|晚上|夜间)?"
-    r"\s*\d{1,2}\s*[:：]\s*\d{2}"
-    r"(?:\s*(?:AM|PM|am|pm))?$"
-)
-_DATE_LINE = re.compile(
-    r"^(?:今天|昨天|前天|Today|Yesterday|"
-    r"星期[一二三四五六日天]|周[一二三四五六日天]|"
-    r"\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日|"
-    r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2})$",
-    re.IGNORECASE,
-)
-
-
-def _is_time_or_date(text: str) -> bool:
-    """整行是时间或日期分隔条。消息正文里夹着钟点时保留。"""
-    cleaned = re.sub(r"^[□■•·|\-\s]+|[□■•·|\-\s]+$", "", str(text or "").strip())
-    if not cleaned:
-        return True
-    return _CLOCK_LINE.match(cleaned) is not None or _DATE_LINE.match(cleaned) is not None
+# 输入栏只占屏幕最底部。再往上是聊天气泡，不能算进输入框。
+_COMPOSER_TOP = 0.90
 
 
 def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) -> PhoneScreen:
     """按 PP-OCR 的像素框把文字分成顶栏、输入框、对方气泡、己方气泡。
 
     对方在左侧，己方在右侧，看文字框靠哪一边，不看中心点是否过半。
-    时间和日期分隔条不进气泡。
+    输入框只取底部输入栏。时间、日期、勾号和加密提示不进气泡。
     """
+    from src.integrations.whatsapp_rpa.phone_send import is_screen_chrome
+
     header: List[str] = []
     composer: List[str] = []
     incoming: List[str] = []
@@ -148,10 +132,13 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) ->
         if cy < height * 0.16:
             header.append(text)
             continue
-        if cy > height * 0.82:
-            composer.append(text)
+        if cy > height * _COMPOSER_TOP:
+            if is_screen_chrome(text):
+                notes.append(text)
+            else:
+                composer.append(text)
             continue
-        if _is_time_or_date(text):
+        if is_screen_chrome(text):
             notes.append(text)
             continue
         left = float(box[0])
@@ -166,9 +153,27 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) ->
         header=" ".join(header),
         composer="\n".join(composer),
         outgoing=outgoing,
+        incoming=incoming,
         last_incoming=incoming[-1] if incoming else "",
         notes=notes,
     )
+
+
+def new_left_bubbles(incoming: Sequence[str], baseline: Sequence[str]) -> List[str]:
+    """只留这次发送之后新出现的左侧气泡。基线里已有的旧消息不算。"""
+    from src.integrations.whatsapp_rpa.phone_send import is_screen_chrome
+
+    pending = [str(item or "").strip() for item in baseline or [] if str(item or "").strip()]
+    fresh: List[str] = []
+    for raw in incoming or []:
+        text = str(raw or "").strip()
+        if not text or is_screen_chrome(text):
+            continue
+        if text in pending:
+            pending.remove(text)
+            continue
+        fresh.append(text)
+    return fresh
 
 
 def make_ppocr_reader(base_url: str, post_json: Optional[Callable[..., Dict[str, Any]]] = None,
@@ -530,8 +535,23 @@ async def preview_prefill(device: Any, phone: str, text: str, evidence: Evidence
     }
 
 
-async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog) -> Dict[str, Any]:
-    """先看通知。没有就打开 wa.me 截图。顶栏必须按号码（含截断前缀/后缀）对上。"""
+async def snapshot_incoming(device: Any, phone: str) -> List[str]:
+    """打开会话，记下已经在左侧的旧气泡。打不开就返回空，调用方不得把旧消息当新消息。"""
+    try:
+        await open_peer_chat(device, phone)
+    except Exception:
+        return []
+    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
+    ready = await wait_for_chat(device, phone, expected="")
+    if not ready.get("ready"):
+        return []
+    screen = await device.read_screen(await device.screencap())
+    return new_left_bubbles(getattr(screen, "incoming", None) or [], [])
+
+
+async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
+                         baseline: Sequence[str] = ()) -> Dict[str, Any]:
+    """先看通知。没有就打开 wa.me，只认发送之后新出现的左侧气泡。"""
     notes = []
     poll = getattr(device, "poll_notifications", None)
     if poll is not None:
@@ -555,7 +575,8 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog) ->
     if not text:
         png = await device.screencap()
         screen = await device.read_screen(png)
-        text = str(screen.last_incoming or "").strip()
+        fresh = new_left_bubbles(getattr(screen, "incoming", None) or [], baseline)
+        text = fresh[-1] if fresh else ""
     if not text:
         return {"ok": False, "reason": "empty_text", "text": "", "header": ready.get("header") or ""}
     return {
@@ -695,13 +716,20 @@ async def run_rate_limit_check(device: Any, evidence: EvidenceLog) -> Dict[str, 
 
 async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
                         turns: int, seed: str, evidence: EvidenceLog) -> Dict[str, Any]:
-    """A、B 交替。第 1 句由 A 发给 B，之后每人先收对方的信再回复。"""
+    """A、B 交替。第 1 句由 A 发给 B，之后每人先收对方的信再回复。
+
+    第一句没发出去就停，不再往下跑。收信只认发送前画面里没有的新左侧气泡。
+    """
     seats = ((loop_a, phone_a, phone_b, "A"), (loop_b, phone_b, phone_a, "B"))
+    loops = {"A": loop_a, "B": loop_b}
     results = []
+    baselines: Dict[str, List[str]] = {"A": [], "B": []}
     for index in range(int(turns)):
         loop, own, peer, label = seats[index % 2]
+        other = "B" if label == "A" else "A"
         if index == 0:
             from src.integrations.whatsapp_rpa.phone_loop import client_msg_id
+            baselines[other] = await snapshot_incoming(loops[other].device, own)
             item = await loop.send_prepared(
                 phone=peer, text=seed, source="acceptance",
                 client_msg_id=client_msg_id("acceptance", normalize_e164(peer), seed, "seed"),
@@ -710,14 +738,20 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
             item["turn"] = index
             item["seat"] = label
             results.append(item)
+            if item.get("status") != "sent":
+                break
             continue
-        heard = await read_peer_text(loop.device, peer, evidence)
+        heard = await read_peer_text(
+            loop.device, peer, evidence, baseline=baselines.get(label, []),
+        )
         if not heard.get("ok"):
             heard["turn"] = index
             heard["seat"] = label
             heard["status"] = heard.get("reason") or "failed"
             results.append(heard)
             break
+        baselines[label] = list(baselines.get(label, [])) + [str(heard.get("text") or "")]
+        baselines[other] = await snapshot_incoming(loops[other].device, own)
         item = await loop.handle_inbound(
             phone=peer, text=heard["text"], display_name=peer,
         )

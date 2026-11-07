@@ -58,21 +58,63 @@ def _without_hints(line: str) -> str:
     return _norm(text)
 
 
+_CURSOR_TAIL = re.compile(r"(?:\s*-\s*)+$")
+_CLOCK_ANY = re.compile(
+    r"(?:凌晨|清晨|早上|上午|中午|下午|傍晚|晚上|夜间)?\s*\d{1,2}\s*[:：]\s*\d{2}"
+)
+_CHECK_MARK = re.compile(r"[√✓✔☑]")
+_DATE_LINE = re.compile(
+    r"^(?:今天|昨天|前天|Today|Yesterday|"
+    r"星期[一二三四五六日天]|周[一二三四五六日天]|"
+    r"\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日|"
+    r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2})$",
+    re.IGNORECASE,
+)
+
+
+def _strip_cursor(line: str) -> str:
+    """行尾单独的「-」是输入框光标，不是正文。"""
+    return _CURSOR_TAIL.sub("", str(line or "")).strip()
+
+
+def is_screen_chrome(text: str) -> bool:
+    """时间、日期、勾号、加密提示。这些不是消息，也不是输入框正文。"""
+    raw = str(text or "").strip()
+    cleaned = re.sub(r"^[□■•·|\-\s]+|[□■•·|\-\s]+$", "", raw)
+    if not cleaned:
+        return True
+    if _DATE_LINE.match(cleaned) or _CLOCK_ANY.fullmatch(cleaned):
+        return True
+    if re.fullmatch(r"[\s\d:：.。√✓✔☑]+", cleaned):
+        return True
+    folded = cleaned.casefold()
+    if "端到端加密" in cleaned or "end-to-end" in folded:
+        return True
+    if _CLOCK_ANY.search(cleaned) and _CHECK_MARK.search(cleaned):
+        return True
+    return False
+
+
+def composer_body(text: str) -> str:
+    """去掉换行和行尾光标，拼成连续文字。系统提示和加密/时间条不参与比对。"""
+    parts = []
+    for raw in str(text or "").splitlines() or [""]:
+        line = _strip_cursor(_norm(raw))
+        if not line or _is_hint_line(line) or is_screen_chrome(line):
+            continue
+        parts.append(_without_hints(line) or line)
+    return "".join(parts)
+
+
 def composer_matches(composer: str, expected: str) -> bool:
-    """要发的全文必须和输入框里的正文一致。系统提示可以多一行，字不能少、不能改。"""
-    want = _norm(expected)
+    """要发的全文必须和输入框里的连续文字逐字一致。
+
+    换行是折行，行尾「-」是光标。系统提示可以多一行，字不能少、不能改。
+    """
+    want = composer_body(expected)
     if not want:
         return False
-    raw_lines = str(composer or "").splitlines() or [str(composer or "")]
-    kept = []
-    for raw in raw_lines:
-        line = _norm(raw)
-        if line == want or _without_hints(line) == want:
-            return True
-        if _is_hint_line(line):
-            continue
-        kept.append(line)
-    return _norm(" ".join(kept)) == want
+    return composer_body(composer) == want
 
 
 def screen_blob(screen: "PhoneScreen") -> str:
@@ -110,24 +152,23 @@ def screen_is_transient(screen: "PhoneScreen") -> bool:
 
 def _composer_still_arriving(composer: str, expected: str) -> bool:
     """空串、单个噪声字、占位提示，或正文还没打全，都继续等。"""
-    text = str(composer or "").strip()
-    if not text or len(text) <= 1 or _is_hint_line(text):
+    text = composer_body(composer)
+    if not text or len(text) <= 1:
         return True
-    want = _norm(expected)
-    got = _norm(text)
-    return bool(want) and want.startswith(got) and got != want
+    want = composer_body(expected)
+    return bool(want) and want.startswith(text) and text != want
 
 
 def composer_settled(composer: str, expected: str) -> bool:
     """输入框里已经是要发的那句中文。空串、对不上的单个噪声字、只有占位提示都不算就绪。"""
     if not str(expected or "").strip():
         return True
-    text = str(composer or "").strip()
+    text = composer_body(composer)
     if not text:
         return False
-    if len(text) <= 1 and _norm(text) != _norm(expected):
+    if len(text) <= 1 and text != composer_body(expected):
         return False
-    return composer_matches(text, expected)
+    return composer_matches(composer, expected)
 
 
 def bubble_visible(outgoing: List[str], expected: str) -> bool:
@@ -147,6 +188,7 @@ class PhoneScreen:
     header: str = ""
     composer: str = ""
     outgoing: List[str] = field(default_factory=list)
+    incoming: List[str] = field(default_factory=list)
     last_incoming: str = ""
     notes: List[str] = field(default_factory=list)
 

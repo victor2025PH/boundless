@@ -111,16 +111,23 @@ def read_token() -> str:
     return ""
 
 
-def build_decide(args, inbox):
+async def build_decide(args, inbox):
     if getattr(args, "decide_url", ""):
         return make_http_decide(args.decide_url, token=read_token())
     if getattr(args, "config", ""):
-        return build_inprocess_decide(Path(args.config), Path(args.data_dir), inbox)
+        return await build_inprocess_decide(Path(args.config), Path(args.data_dir), inbox)
     raise SystemExit("需要 --config（进程内人设）或 --decide-url（已运行的 decide）")
 
 
-def build_inprocess_decide(config_path: Path, data_dir: Path, inbox):
-    """进程内调用 decide_whatsapp。不启动 Telegram、关怀或旧 RPA。"""
+def _ai_client_ready(ai_client) -> bool:
+    return bool(getattr(ai_client, "_oa_client", None) or getattr(ai_client, "client", None))
+
+
+async def build_inprocess_decide(config_path: Path, data_dir: Path, inbox):
+    """进程内调用 decide_whatsapp。按主进程的方式装好 DeepSeek，失败就停。
+
+    不启动 Telegram、关怀或旧 RPA。
+    """
     from types import SimpleNamespace
 
     from src.ai.ai_client import AIClient
@@ -129,12 +136,19 @@ def build_inprocess_decide(config_path: Path, data_dir: Path, inbox):
     from src.utils.config_manager import ConfigManager
 
     manager = ConfigManager(str(config_path))
+    loaded = await manager.load()
+    if not loaded:
+        raise SystemExit(f"配置没有载入，验收停止：{config_path}")
     cfg = manager.config if isinstance(getattr(manager, "config", None), dict) else {}
     memory = cfg.setdefault("memory", {})
     if isinstance(memory, dict):
         memory["db_path"] = str(Path(data_dir) / "acceptance_memory.db")
     ai_client = AIClient(manager)
+    if not await ai_client.initialize() or not _ai_client_ready(ai_client):
+        raise SystemExit("AI 客户端初始化失败，验收停止。请检查配置里的 DeepSeek（ai.provider / ai.base_url / ai.api_key）")
     skill = SkillManager(manager, ai_client)
+    if not await skill.initialize():
+        raise SystemExit("技能管理器初始化失败，验收停止")
     app = SimpleNamespace(state=SimpleNamespace(
         skill_manager=skill,
         ai_client=ai_client,
@@ -251,7 +265,7 @@ async def _run_command(args, data, locks, *, devices=None, decide_fn=None, ocr_r
     reader = ocr_reader or make_ppocr_reader(args.ocr_url)
     decide = decide_fn
     if decide is None and args.command in {"pair-chat"}:
-        decide = build_decide(args, inbox)
+        decide = await build_decide(args, inbox)
     for device in (devices or {}).values():
         device.open_timeout = float(args.open_timeout)
 
@@ -276,7 +290,7 @@ async def _run_command(args, data, locks, *, devices=None, decide_fn=None, ocr_r
         report = await run_rate_limit_check(device, evidence)
     elif args.command == "pair-chat":
         if decide is None:
-            decide = build_decide(args, inbox)
+            decide = await build_decide(args, inbox)
         device_a = (devices or {}).get("a") or build_device(
             args, evidence, serial=args.a_serial, label="a", reader=reader)
         device_b = (devices or {}).get("b") or build_device(

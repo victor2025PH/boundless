@@ -19,6 +19,7 @@ from src.integrations.whatsapp_rpa.phone_acceptance import (
     lines_to_screen,
     make_http_decide,
     make_ppocr_reader,
+    new_left_bubbles,
     png_size,
     redact_text,
     run_convert_pending,
@@ -31,6 +32,7 @@ from src.integrations.whatsapp_rpa.phone_acceptance import (
     ssh_adb_argv,
     variant_phone,
 )
+from src.integrations.whatsapp_rpa.phone_send import composer_matches
 from src.integrations.whatsapp_rpa.phone_identity import header_matches, header_needs_profile
 from src.integrations.whatsapp_rpa.phone_ledger import PhoneLedger
 from src.integrations.whatsapp_rpa.phone_loop import WaPhoneLoop
@@ -149,6 +151,13 @@ def test_prefill_requires_the_chinese_text_not_the_placeholder():
     assert placeholder["match"] is False
     assert placeholder["placeholder_only"] is True
     assert compare_prefill("你好，这是验收", "你好，这是验收\n输入消息")["match"] is True
+    seed = "你好，我在做聊天链路验收"
+    wrapped = "你好，我在做聊天链路\n验收\n-"
+    assert composer_matches(wrapped, seed)
+    assert compare_prefill(seed, wrapped)["match"] is True
+    mixed = wrapped + "\n04:03 √ 你好呀，这么晚还醒着。04:08 发消息 回"
+    assert composer_matches(mixed, seed)
+    assert not composer_matches("你好，我在做聊天链路验收-", "你好，我在做聊天链路验收。")
 
 
 def test_ppocr_boxes_split_header_composer_and_bubbles():
@@ -289,6 +298,60 @@ async def test_pair_chat_two_phones_exchange(tmp_path: Path):
     assert device_a.taps == 1
     assert device_b.taps == 1
     assert report["turns"][1]["source"] == "notification"
+
+
+@pytest.mark.asyncio
+async def test_pair_chat_stops_when_the_first_send_fails(tmp_path: Path):
+    bus = {}
+    device_a = LinkPhone("a", PHONE_A, bus)
+    device_b = LinkPhone("b", PHONE_B, bus)
+    device_a.force_composer = "不是这句"
+    device_a.open_timeout = 0
+    store = InboxStore(tmp_path / "inbox.db")
+
+    async def decide(*, account_id, phone, last_inbound, persona_id=""):
+        raise AssertionError("首轮没发出去，不应再生成回复")
+
+    def make(name, account, device):
+        return WaPhoneLoop(
+            account_id=account, inbox=store, device=device, decide_fn=decide,
+            cfg={"enabled": True, "hourly_cap": 20, "daily_cap": 80},
+            ledger=PhoneLedger(tmp_path / f"{name}.db"),
+            now_fn=lambda: 1_700_000_000.0,
+        )
+
+    report = await run_pair_chat(
+        make("a", "seat-a", device_a), make("b", "seat-b", device_b),
+        PHONE_A, PHONE_B, 4, "你好，我在做聊天链路验收", EvidenceLog(tmp_path / "pair-stop"),
+    )
+    assert report["ok"] is False
+    assert len(report["turns"]) == 1
+    assert report["turns"][0]["status"] == "failed"
+    assert report["turns"][0]["reason"] == "composer_mismatch"
+    assert device_a.taps == 0
+    assert device_b.taps == 0
+
+
+def test_composer_bar_excludes_history_and_heard_ignores_old_left_bubbles():
+    seed = "你好，我在做聊天链路验收"
+    screen = lines_to_screen([
+        {"text": "消息和通话已进行端到端加密", "box": [560, 1100, 1040, 1180]},
+        {"text": "较方便?", "box": [40, 1400, 320, 1500]},
+        {"text": "你好，我在做聊天链路验收", "box": [36, 1680, 760, 1820]},
+        {"text": "04:03 √ 你好呀，这么晚还醒着。04:08 发消息 回", "box": [80, 1980, 1000, 2080]},
+        {"text": "你好，我在做聊天链路", "box": [80, 2200, 980, 2280]},
+        {"text": "验收", "box": [80, 2288, 240, 2348]},
+        {"text": "-", "box": [250, 2300, 290, 2360]},
+    ], 1080, 2400)
+    assert "04:03" not in screen.composer
+    assert "发消息" not in screen.composer
+    assert composer_matches(screen.composer, seed)
+    assert screen.outgoing == []
+    assert "端到端加密" not in "\n".join(screen.outgoing)
+    assert any("端到端加密" in line for line in screen.notes)
+    assert "较方便?" in screen.incoming
+    assert new_left_bubbles(screen.incoming, ["较方便?"]) == [seed]
+    assert screen.last_incoming != "较方便?"
 
 
 @pytest.mark.asyncio
@@ -494,6 +557,48 @@ def test_device_lock_is_exclusive_per_serial(tmp_path: Path):
     freed.acquire()
     freed.release()
     busy.release()
+
+
+@pytest.mark.asyncio
+async def test_inprocess_decide_exits_when_the_ai_client_is_not_ready(tmp_path: Path, monkeypatch):
+    from scripts.wa_phone_loop_acceptance import build_inprocess_decide
+
+    class Cfg:
+        def __init__(self, path):
+            self.config = {"memory": {}, "ai": {"provider": "openai_compatible"}}
+
+        async def load(self):
+            return True
+
+    class IdleAI:
+        def __init__(self, config):
+            self.client = None
+            self._oa_client = None
+
+        async def initialize(self):
+            return False
+
+    monkeypatch.setattr("src.utils.config_manager.ConfigManager", Cfg)
+    monkeypatch.setattr("src.ai.ai_client.AIClient", IdleAI)
+    with pytest.raises(SystemExit, match="AI 客户端初始化失败"):
+        await build_inprocess_decide(tmp_path / "config.yaml", tmp_path, object())
+
+    class ReadyAI(IdleAI):
+        async def initialize(self):
+            self._oa_client = object()
+            return True
+
+    class Skill:
+        def __init__(self, manager, ai):
+            self.ai = ai
+
+        async def initialize(self):
+            return True
+
+    monkeypatch.setattr("src.ai.ai_client.AIClient", ReadyAI)
+    monkeypatch.setattr("src.skills.skill_manager.SkillManager", Skill)
+    decide = await build_inprocess_decide(tmp_path / "config.yaml", tmp_path, object())
+    assert callable(decide)
 
 
 def test_cli_dry_run_uses_injected_device(tmp_path: Path):
