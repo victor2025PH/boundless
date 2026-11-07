@@ -464,6 +464,8 @@ class WaPhoneLoop:
         self.ledger.finish(
             client_msg_id, outcome.status, error=outcome.reason, now=now,
         )
+        if outcome.status == "sent" and content_key:
+            self.ledger.mark_content_sent(content_key, now=now)
         if outcome.tapped:
             self._taps.append(client_msg_id)
         if outcome.status == "sent":

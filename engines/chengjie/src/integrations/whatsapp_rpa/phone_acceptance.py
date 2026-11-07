@@ -257,15 +257,18 @@ def _composer_cluster(items: Sequence[tuple]) -> List[tuple]:
         if dist > pitch * _COMPOSER_PITCH:
             break
         kept.append(item)
-    # 同一行被拆开的字，左边缘不在行首，但和已收下的行垂直重叠。
+    # 同一行贴着正文右侧拆开的字可以留下。左侧差超过 20px 的框（滑动时列表里的「e」）不要。
     for item in items:
         if item in kept:
             continue
         box = item[1]
-        for kept_item in kept:
+        if float(box[0]) < core_left - _LEFT_SLACK:
+            continue
+        for kept_item in list(kept):
             other = kept_item[1]
             overlap = min(float(box[3]), float(other[3])) - max(float(box[1]), float(other[1]))
-            if overlap > min(_box_height(box), _box_height(other)) * 0.5:
+            gap = _horizontal_gap(box, other)
+            if overlap > min(_box_height(box), _box_height(other)) * 0.5 and gap <= _LEFT_SLACK:
                 kept.append(item)
                 break
     kept.sort(key=lambda item: (float(item[1][1]), float(item[1][0])))
@@ -374,6 +377,49 @@ def _fill_around(png: bytes, box: Sequence[float]) -> str:
     return ""
 
 
+def _merge_bubbles(items: Sequence[tuple], width: float, png: bytes) -> tuple:
+    """把同一气泡的折行收成一条。左边缘 ±20px，行距 ≤ 2.2 倍行高，底色相同。"""
+    from src.integrations.whatsapp_rpa.phone_send import strip_bubble_tail
+
+    incoming: List[str] = []
+    outgoing: List[str] = []
+    groups: List[dict] = []
+    ordered = sorted(items, key=lambda item: (_box_cy(item[1]), float(item[1][0])))
+    for text, box in ordered:
+        side = _bubble_side(box, width, png)
+        color = _fill_around(png, box)
+        placed = False
+        if groups:
+            group = groups[-1]
+            prev = group["box"]
+            pitch = _box_height(prev)
+            dist = abs(_box_cy(box) - _box_cy(prev))
+            same_color = (not color or not group["color"] or color == group["color"])
+            if (
+                side == group["side"]
+                and same_color
+                and abs(float(box[0]) - float(group["left"])) <= _LEFT_SLACK
+                and dist <= pitch * _COMPOSER_PITCH
+            ):
+                group["lines"].append(text)
+                group["box"] = box
+                placed = True
+        if not placed:
+            groups.append({
+                "side": side, "color": color, "left": float(box[0]),
+                "box": box, "lines": [text],
+            })
+    for group in groups:
+        body = strip_bubble_tail("".join(group["lines"]))
+        if not body:
+            continue
+        if group["side"] == "out":
+            outgoing.append(body)
+        else:
+            incoming.append(body)
+    return incoming, outgoing
+
+
 def _bubble_side(box: Sequence[float], width: float, png: bytes) -> str:
     """先看气泡底色，看不清再看左边缘。左边缘小于 0.12W 是对方。"""
     fill = _fill_around(png, box)
@@ -445,14 +491,13 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
     kept_composer = _without_input_icons(cluster, float(width))
     composer = [text for text, _box in kept_composer]
     cluster_ids = {id(item) for item in cluster}
-    for item in composer_items:
-        if id(item) in cluster_ids:
-            continue
-        text, box = item
-        if _bubble_side(box, width, png) == "out":
-            outgoing.append(text)
-        else:
-            incoming.append(text)
+    bubbles = [item for item in composer_items if id(item) not in cluster_ids]
+    incoming, outgoing = _merge_bubbles(bubbles, float(width), png)
+    composer_left = float(cluster[0][1][0]) if cluster else 0.0
+    # cluster is sorted by top, so the first box is the top line. Use the core left.
+    if cluster:
+        core = max(cluster, key=lambda item: float(item[1][3]))
+        composer_left = float(core[1][0])
     return PhoneScreen(
         header=_header_text(header),
         composer="\n".join(composer),
@@ -460,6 +505,13 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
         incoming=incoming,
         last_incoming=incoming[-1] if incoming else "",
         notes=notes,
+        ocr_lines=[
+            {"text": str(line.get("text") or ""), "box": list(line.get("box") or [])}
+            for line in lines or []
+            if isinstance(line, dict)
+        ],
+        composer_left=composer_left,
+        shot_size=[int(width), int(height)],
     )
 
 
@@ -1099,7 +1151,7 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
             png = await device.screencap()
             screen = await device.read_screen(png)
             fresh = new_left_bubbles(getattr(screen, "incoming", None) or [], baseline)
-            text = fresh[-1] if fresh else ""
+            text = "\n".join(fresh)
             if text:
                 break
     if not text:

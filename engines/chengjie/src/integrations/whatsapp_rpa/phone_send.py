@@ -77,6 +77,26 @@ def _strip_cursor(line: str) -> str:
     return _CURSOR_TAIL.sub("", str(line or "")).strip()
 
 
+# 气泡右下角的发送时间，以及已读勾。正文句号要留下。
+_BUBBLE_TAIL = re.compile(
+    r"(?:\s*\d{1,2}\s*[:：]\s*\d{2}\s*)?[√✓✔☑]{1,3}\s*$"
+    r"|"
+    r"(?:(?<=\s)|(?<=[。．.!?！？]))"
+    r"(?:(?:凌晨|清晨|早上|上午|中午|下午|傍晚|晚上|夜间)\s*)?"
+    r"\d{1,2}\s*[:：]\s*\d{2}\s*$"
+)
+
+
+def strip_bubble_tail(text: str) -> str:
+    """去掉气泡尾部的时间戳和已读勾，例如「7:07 ✓✓」。"""
+    cleaned = str(text or "")
+    while True:
+        nxt = _BUBBLE_TAIL.sub("", cleaned).strip()
+        if nxt == cleaned:
+            return cleaned.strip()
+        cleaned = nxt
+
+
 def is_screen_chrome(text: str) -> bool:
     """时间、日期、勾号、加密提示。这些不是消息，也不是输入框正文。"""
     raw = str(text or "").strip()
@@ -91,6 +111,15 @@ def is_screen_chrome(text: str) -> bool:
     if "端到端加密" in cleaned or "end-to-end" in folded:
         return True
     if _CLOCK_ANY.search(cleaned) and _CHECK_MARK.search(cleaned):
+        # 时间和勾在句尾，是气泡角标，正文要留下。时间和勾夹在句子中间，才是系统条。
+        stripped = strip_bubble_tail(cleaned)
+        if (
+            stripped
+            and stripped != cleaned
+            and not _CLOCK_ANY.search(stripped)
+            and not _CHECK_MARK.search(stripped)
+        ):
+            return False
         return True
     return False
 
@@ -99,7 +128,7 @@ def composer_body(text: str) -> str:
     """去掉全部空白、换行和行尾光标。系统提示和加密/时间条不参与比对。"""
     parts = []
     for raw in str(text or "").splitlines() or [""]:
-        line = _strip_cursor(_norm(raw))
+        line = strip_bubble_tail(_strip_cursor(_norm(raw)))
         if not line or _is_hint_line(line) or is_screen_chrome(line):
             continue
         parts.append(_without_hints(line) or line)
@@ -142,6 +171,30 @@ _TRANSIENT_MARKERS = (
     "select contact",
     "choose contact",
 )
+
+
+def frame_boxes(screen: "PhoneScreen") -> tuple:
+    """按从上到下的顺序记下 OCR 框。两次截屏用它判断画面有没有还在滑。"""
+    signature = []
+    for line in getattr(screen, "ocr_lines", None) or []:
+        if not isinstance(line, dict):
+            continue
+        text = str(line.get("text") or "").strip()
+        box = line.get("box") or []
+        if not text or len(box) < 4:
+            continue
+        signature.append((text, tuple(int(round(float(v))) for v in box[:4])))
+    return tuple(signature)
+
+
+def screen_is_sliding(screen: "PhoneScreen") -> bool:
+    """正文左缘超过屏幕宽度的 0.3，是聊天页还在横向滑入，不能拿来核对。"""
+    left = float(getattr(screen, "composer_left", 0) or 0)
+    size = getattr(screen, "shot_size", None) or []
+    width = float(size[0]) if size else 0.0
+    if left <= 0 or width <= 0:
+        return False
+    return left > width * 0.3
 
 
 def screen_is_transient(screen: "PhoneScreen") -> bool:
@@ -202,6 +255,7 @@ class PhoneScreen:
     last_incoming: str = ""
     notes: List[str] = field(default_factory=list)
     ocr_lines: List[dict] = field(default_factory=list)
+    composer_left: float = 0.0
     source: str = ""
     ui_dump: str = ""
     shot_size: List[int] = field(default_factory=list)
@@ -279,6 +333,20 @@ async def wait_for_chat(
             screen = PhoneScreen()
         last = screen
         polls += 1
+        if screen_is_sliding(screen):
+            await sleep(0.4)
+            continue
+        if frame_boxes(screen):
+            await sleep(0.4)
+            png2 = await device.screencap()
+            screen2 = await device.read_screen(png2)
+            if not isinstance(screen2, PhoneScreen):
+                screen2 = PhoneScreen()
+            polls += 1
+            last = screen2
+            if screen_is_sliding(screen2) or frame_boxes(screen2) != frame_boxes(screen):
+                continue
+            screen = screen2
         transient = screen_is_transient(screen)
         header_ok = profile_confirmed or header_matches(screen.header, phone=phone)
         if (
@@ -336,20 +404,76 @@ async def wait_for_chat(
         await sleep(step)
 
 
+def _still_on_profile(screen: "PhoneScreen", phone: str) -> bool:
+    """资料页上有完整号码，输入框是空的。聊天页的截断顶栏对不上完整号码。"""
+    from src.integrations.whatsapp_rpa.phone_identity import profile_shows_phone
+
+    if not isinstance(screen, PhoneScreen):
+        return False
+    if composer_body(getattr(screen, "composer", "")):
+        return False
+    return profile_shows_phone(screen, phone)
+
+
+def _profile_opened(screen: "PhoneScreen", phone: str) -> bool:
+    """顶栏点下去之后，输入框空了、上面是一串号码，就是资料页已经打开。"""
+    if not isinstance(screen, PhoneScreen):
+        return False
+    if composer_body(getattr(screen, "composer", "")):
+        return False
+    if _still_on_profile(screen, phone):
+        return True
+    header = str(getattr(screen, "header", "") or "")
+    return header.strip().startswith("+") and sum(ch.isdigit() for ch in header) >= 8
+
+
+async def _read_once(device: Any) -> "PhoneScreen":
+    try:
+        screen = await device.read_screen(await device.screencap())
+    except Exception:
+        return PhoneScreen()
+    if not isinstance(screen, PhoneScreen):
+        return PhoneScreen()
+    return screen
+
+
 async def confirm_phone_on_profile(device: Any, phone: str) -> bool:
-    """点顶栏进联系人资料，读完整号码，再返回聊天页。对不上就不是这个会话。"""
+    """点顶栏进资料页，读完整号码，再退回聊天。没看到资料页就不按返回。
+
+    返回键如果抢在资料页出现之前，会把聊天页退掉，资料页随后盖上来就停在那里。
+    看到资料页才返回；返回后如果还在资料页，再按一次。
+    """
+    import time
+
     from src.integrations.whatsapp_rpa.phone_identity import profile_shows_phone
 
     await device.tap_header()
-    try:
-        screen = await device.read_screen(await device.screencap())
-    finally:
-        back = getattr(device, "press_back", None)
-        if back is not None:
-            await back()
-    if not isinstance(screen, PhoneScreen):
+    clock = getattr(device, "clock", None) or time.monotonic
+    sleep = getattr(device, "sleep_fn", None) or __import__("asyncio").sleep
+    started = float(clock())
+    screen = PhoneScreen()
+    seen = False
+    while True:
+        screen = await _read_once(device)
+        if _profile_opened(screen, phone):
+            seen = True
+            break
+        if float(clock()) - started >= 2.0:
+            break
+        await sleep(0.3)
+    opened = _profile_opened(screen, phone)
+    confirmed = opened and profile_shows_phone(screen, phone)
+    if not opened:
         return False
-    return profile_shows_phone(screen, phone)
+    back = getattr(device, "press_back", None)
+    if back is None:
+        return confirmed
+    for _ in range(2):
+        await back()
+        landed = await _read_once(device)
+        if composer_body(getattr(landed, "composer", "")) or not _profile_opened(landed, phone):
+            break
+    return confirmed
 
 
 def _wait_timeout_reason(screen: PhoneScreen, phone: str, expected: str) -> str:
@@ -366,7 +490,7 @@ def _wait_timeout_reason(screen: PhoneScreen, phone: str, expected: str) -> str:
     return "chat_not_ready"
 
 
-async def _replace_draft_if_needed(device: Any, url: str, body: str) -> None:
+async def _replace_draft_if_needed(device: Any, url: str, body: str, phone: str) -> str:
     """预填前先看输入框。已经是这句就不再打开链接，以免叠上一遍。
 
     框里是别的草稿就先清空，再预填。空框直接预填。
@@ -377,14 +501,18 @@ async def _replace_draft_if_needed(device: Any, url: str, body: str) -> None:
     except Exception:
         screen = None
     if isinstance(screen, PhoneScreen):
+        from src.integrations.whatsapp_rpa.phone_identity import header_matches
+        if header_matches(screen.header, phone=phone) and send_confirmed(screen, body):
+            return "already"
         current = str(screen.composer or "")
     if composer_matches(current, body):
-        return
+        return ""
     if composer_body(current):
         clear = getattr(device, "clear_composer", None)
         if clear is not None:
             await clear()
     await device.open_url(url)
+    return ""
 
 
 async def deliver_via_wa_me(
@@ -404,7 +532,9 @@ async def deliver_via_wa_me(
     if dry_run:
         return SendOutcome(status="dry_run", reason="dry_run", url=url)
 
-    await _replace_draft_if_needed(device, url, body)
+    draft = await _replace_draft_if_needed(device, url, body, phone)
+    if draft == "already":
+        return SendOutcome(status="sent", reason="already_visible", tapped=False, url=url)
     dismiss = getattr(device, "dismiss_keyboard", None)
     if dismiss is not None:
         await dismiss()

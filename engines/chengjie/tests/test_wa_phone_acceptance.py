@@ -856,6 +856,199 @@ def test_pair0608_read2_drops_the_camera_icon_not_letters_in_the_text():
     assert "D" in adjacent.composer
 
 
+def test_wrapped_bubbles_drop_the_clock_and_heard_keeps_every_new_one():
+    """07:07 / 07:08 的长消息被折成两行，尾部还有时间和已读勾。不能只留最后一行。"""
+    from src.integrations.whatsapp_rpa.phone_send import screen_is_sliding, strip_bubble_tail
+
+    own = "早嘛，周日这个点醒的，是自然醒还是被什么事叫起来的呀。"
+    peer = "早上好呀，不忙，刚起来没多久。你这问候可够早的。"
+    screen = lines_to_screen([
+        {"text": "+639543629194", "box": [198, 86, 520, 130]},
+        {"text": "旧的一句", "box": [36, 700, 220, 748]},
+        {"text": "早上好呀，不忙，刚起来没多久。", "box": [36, 820, 400, 868]},
+        {"text": "你这问候可够早的。", "box": [36, 880, 280, 928]},
+        {"text": "7:07 ✓✓", "box": [300, 930, 420, 968]},
+        {"text": "另一条新消息", "box": [36, 1040, 280, 1088]},
+        {"text": "早嘛，周日这个点醒的，是自然醒还是", "box": [200, 1160, 640, 1208]},
+        {"text": "被什么事叫起来的呀。7:08 ✓✓", "box": [200, 1220, 620, 1268]},
+        {"text": "输入消息", "box": [111, 1500, 400, 1548]},
+    ], 720, 1600)
+    assert screen.outgoing == [own]
+    assert composer_matches(screen.outgoing[0], own)
+    assert peer in screen.incoming
+    assert "7:07" not in "\n".join(screen.incoming)
+    assert "7:08" not in screen.outgoing[0]
+    assert strip_bubble_tail("被什么事叫起来的呀。7:08 ✓✓") == "被什么事叫起来的呀。"
+    fresh = new_left_bubbles(screen.incoming, ["旧的一句"])
+    assert fresh == [peer, "另一条新消息"]
+    assert "\n".join(fresh).startswith(peer)
+
+    sliding = lines_to_screen([
+        {"text": "不忙呢，刚起来没多久", "box": [371, 1470, 680, 1540]},
+        {"text": "e", "box": [308, 1492, 338, 1529]},
+    ], 720, 1600)
+    assert sliding.composer == "不忙呢，刚起来没多久"
+    assert "e" not in sliding.composer
+    assert screen_is_sliding(sliding)
+
+
+@pytest.mark.asyncio
+async def test_read_peer_text_returns_every_new_bubble(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import read_peer_text
+
+    peer = "早上好呀，不忙，刚起来没多久。你这问候可够早的。"
+    screen = PhoneScreen(
+        header=PHONE_A,
+        incoming=["旧的一句", peer, "另一条新消息"],
+    )
+
+    class Quiet:
+        async def open_url(self, url: str) -> None:
+            return None
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return screen
+
+        async def poll_notifications(self):
+            return []
+
+    heard = await read_peer_text(
+        Quiet(), PHONE_A, EvidenceLog(tmp_path / "heard"), baseline=["旧的一句"],
+    )
+    assert heard["ok"] is True
+    assert heard["text"] == peer + "\n另一条新消息"
+
+
+@pytest.mark.asyncio
+async def test_sliding_frame_waits_until_the_boxes_stay_still():
+    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
+
+    phone = "+639543629194"
+    sentence = "不忙呢，刚起来没多久"
+    sliding = lines_to_screen([
+        {"text": phone, "box": [198, 86, 520, 130]},
+        {"text": sentence, "box": [371, 1470, 680, 1540]},
+        {"text": "e", "box": [308, 1492, 338, 1529]},
+    ], 720, 1600)
+    stable = lines_to_screen([
+        {"text": phone, "box": [198, 86, 520, 130]},
+        {"text": sentence, "box": [111, 1470, 420, 1540]},
+    ], 720, 1600)
+
+    class Frames:
+        def __init__(self):
+            self.reads = 0
+            self.t = 0.0
+            self.open_timeout = 5.0
+
+        def clock(self):
+            return self.t
+
+        async def sleep_fn(self, delay):
+            self.t += delay
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            self.reads += 1
+            if self.reads == 1:
+                return sliding
+            return stable
+
+    device = Frames()
+    ready = await wait_for_chat(device, phone, expected=sentence)
+    assert ready["ready"] is True
+    assert "e" not in ready["composer"]
+    assert device.reads >= 3
+
+
+@pytest.mark.asyncio
+async def test_visible_reply_is_marked_sent_without_tapping_again(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+
+    phone = "+639543629194"
+    sentence = "早嘛，周日这个点醒的，是自然醒还是被什么事叫起来的呀。"
+    shown = lines_to_screen([
+        {"text": phone, "box": [198, 86, 520, 130]},
+        {"text": "早嘛，周日这个点醒的，是自然醒还是", "box": [200, 1160, 640, 1208]},
+        {"text": "被什么事叫起来的呀。7:08 ✓✓", "box": [200, 1220, 620, 1268]},
+        {"text": "输入消息", "box": [111, 1500, 400, 1548]},
+    ], 720, 1600)
+
+    class Stay:
+        def __init__(self):
+            self.urls = []
+            self.taps = 0
+
+        async def open_url(self, url: str) -> None:
+            self.urls.append(url)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return shown
+
+        async def tap_send(self) -> None:
+            self.taps += 1
+
+        async def press_back(self) -> None:
+            return None
+
+    device = Stay()
+    ledger = PhoneLedger(tmp_path / "ledger.db")
+    key = sent_content_key("reply", phone, sentence)
+    ledger.reserve(
+        client_msg_id="old-missing", phone=phone, account_id="seat-a",
+        source="reply", content_key=key,
+    )
+    ledger.finish("old-missing", "failed", error="bubble_missing")
+    store = InboxStore(tmp_path / "inbox.db")
+
+    async def decide(**kwargs):
+        return {"ok": True, "reply": sentence}
+
+    loop = WaPhoneLoop(
+        account_id="seat-a", inbox=store, device=device, decide_fn=decide,
+        cfg={"enabled": True}, ledger=ledger,
+        now_fn=lambda: 1_700_000_000.0, run_id="again",
+    )
+    sent = await loop.send_prepared(
+        phone=phone, text=sentence, source="reply",
+        client_msg_id="new-try",
+    )
+    assert sent["status"] == "sent"
+    assert sent["reason"] == "already_visible"
+    assert sent["tapped"] is False
+    assert device.taps == 0
+    assert device.urls == []
+    assert ledger.get_send("old-missing")["status"] == "sent"
+    assert ledger.has_sent_content(key) is True
+
+
+@pytest.mark.asyncio
+async def test_profile_check_presses_back_again_when_the_first_back_stays(tmp_path: Path):
+    class Sticky(ProfilePhone):
+        def __init__(self):
+            super().__init__("+63 993 355 6049")
+            self.backs = 0
+
+        async def press_back(self) -> None:
+            self.backs += 1
+            if self.backs >= 2:
+                self.phase = "chat"
+
+    device = Sticky()
+    report = await run_dry(None, device, REAL_PHONE, "你好，这是验收", EvidenceLog(tmp_path / "sticky"))
+    assert report["profile_confirmed"] is True
+    assert device.backs == 2
+    assert device.phase == "chat"
+
+
 def test_composer_bar_excludes_history_and_heard_ignores_old_left_bubbles():
     seed = "你好，我在做聊天链路验收"
     screen = lines_to_screen([
