@@ -114,6 +114,18 @@ _MIGRATIONS: List[str] = [
     # （漂移释放豁免基准）。与运营 forced_lang 互不覆盖：forced > pref > 检测。
     "ALTER TABLE wa_rpa_chat_state ADD COLUMN user_lang_pref TEXT DEFAULT NULL",
     "ALTER TABLE wa_rpa_chat_state ADD COLUMN user_lang_pref_input TEXT DEFAULT NULL",
+    # 最小闭环：稳定会话键的标签与降级标记。显示名不是键。
+    "ALTER TABLE wa_rpa_chat_state ADD COLUMN display_name TEXT DEFAULT ''",
+    "ALTER TABLE wa_rpa_chat_state ADD COLUMN phone TEXT DEFAULT ''",
+    "ALTER TABLE wa_rpa_chat_state ADD COLUMN key_source TEXT DEFAULT ''",
+    "ALTER TABLE wa_rpa_chat_state ADD COLUMN phone_unresolved INTEGER DEFAULT 0",
+    "ALTER TABLE wa_rpa_chat_state ADD COLUMN conversation_id TEXT DEFAULT ''",
+    # 发送队列幂等键。空串不参与唯一约束（旧行 / 未带键的手动入队）。
+    "ALTER TABLE wa_rpa_send_queue ADD COLUMN client_msg_id TEXT DEFAULT ''",
+    "ALTER TABLE wa_rpa_send_queue ADD COLUMN conversation_id TEXT DEFAULT ''",
+    "ALTER TABLE wa_rpa_send_queue ADD COLUMN receipt TEXT DEFAULT ''",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_wa_send_q_client_msg "
+    "ON wa_rpa_send_queue(client_msg_id) WHERE client_msg_id IS NOT NULL AND client_msg_id != ''",
 ]
 
 
@@ -150,18 +162,19 @@ class WaRpaStateStore:
             self._conn.commit()
 
     def _recover_stuck_send_queue(self) -> None:
-        """启动时：① 重置滞留 processing → queued；② 清理 >7d 已完成记录。
-        wa_rpa_runs（客户聊天记录）永远不删除。"""
+        """启动时：滞留 processing 没有发送证据，改记 send_unconfirmed，不自动重发。
+        清理 >7d 的终态。wa_rpa_runs（客户聊天记录）永远不删除。"""
         cutoff = time.time() - 7 * 86400
         with self._lock:
             try:
                 self._conn.execute(
-                    "UPDATE wa_rpa_send_queue SET status='queued', error='recovered_on_startup'"
-                    " WHERE status='processing'"
+                    "UPDATE wa_rpa_send_queue "
+                    "SET status='send_unconfirmed', error='recovered_without_evidence', receipt='' "
+                    "WHERE status='processing'"
                 )
                 self._conn.execute(
                     "DELETE FROM wa_rpa_send_queue"
-                    " WHERE status IN ('sent','failed','cancelled') AND ts < ?",
+                    " WHERE status IN ('sent','failed','cancelled','dry_run','blocked') AND ts < ?",
                     (cutoff,),
                 )
                 self._conn.commit()
@@ -184,6 +197,8 @@ class WaRpaStateStore:
             "detected_lang", "forced_lang", "quiet_until", "blacklist",
             "user_lang_pref", "user_lang_pref_input",  # 会话语言契约（lang_policy）
             "last_proactive_template",  # P15-g: 记录最后一次主动续聊模板
+            "display_name", "phone", "key_source", "phone_unresolved",
+            "conversation_id",
         }
         fields = {k: v for k, v in kwargs.items() if k in _ALLOWED}
         fields["updated_at"] = time.time()
@@ -209,15 +224,90 @@ class WaRpaStateStore:
 
     # ── 手动发送队列 ──────────────────────────────────────────────────────
 
-    def enqueue_send(self, chat_key: str, peer_name: str, text: str) -> int:
-        """插入一条待主动发送任务，返回新行 id。"""
+    def enqueue_send(
+        self,
+        chat_key: str,
+        peer_name: str,
+        text: str,
+        client_msg_id: str = "",
+        conversation_id: str = "",
+    ) -> int:
+        """插入一条待主动发送任务，返回行 id。重复 client_msg_id 返回已有行。"""
+        rec = self.enqueue_send_ex(
+            chat_key,
+            peer_name,
+            text,
+            client_msg_id=client_msg_id,
+            conversation_id=conversation_id,
+        )
+        return int(rec["id"])
+
+    def enqueue_send_ex(
+        self,
+        chat_key: str,
+        peer_name: str,
+        text: str,
+        client_msg_id: str = "",
+        conversation_id: str = "",
+        status: str = "queued",
+    ) -> Dict[str, Any]:
+        """入队。``client_msg_id`` 非空且已存在时不插第二行。"""
+        cid = (conversation_id or chat_key or "").strip()
+        cmid = (client_msg_id or "").strip()
+        stored_status = status or "queued"
+        receipt = "dry_run" if stored_status == "dry_run" else ""
+        with self._lock:
+            if cmid:
+                existing = self._conn.execute(
+                    "SELECT * FROM wa_rpa_send_queue WHERE client_msg_id=?",
+                    (cmid,),
+                ).fetchone()
+                if existing is not None:
+                    return {
+                        "id": int(existing["id"]),
+                        "duplicate": True,
+                        "status": existing["status"],
+                        "conversation_id": existing["conversation_id"] or existing["chat_key"],
+                    }
+            try:
+                cur = self._conn.execute(
+                    "INSERT INTO wa_rpa_send_queue "
+                    "(ts,chat_key,peer_name,text,status,client_msg_id,conversation_id,receipt) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (time.time(), cid or chat_key, peer_name, text, stored_status, cmid, cid, receipt),
+                )
+                self._conn.commit()
+                return {
+                    "id": int(cur.lastrowid),
+                    "duplicate": False,
+                    "status": stored_status,
+                    "conversation_id": cid,
+                }
+            except sqlite3.IntegrityError:
+                self._conn.rollback()
+                existing = self._conn.execute(
+                    "SELECT * FROM wa_rpa_send_queue WHERE client_msg_id=?",
+                    (cmid,),
+                ).fetchone()
+                if existing is None:
+                    raise
+                return {
+                    "id": int(existing["id"]),
+                    "duplicate": True,
+                    "status": existing["status"],
+                    "conversation_id": existing["conversation_id"] or existing["chat_key"],
+                }
+
+    def claim_send_queue_item(self, item_id: int) -> bool:
+        """把 queued 原子改成 processing。输家不得再发。"""
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO wa_rpa_send_queue (ts,chat_key,peer_name,text,status) VALUES (?,?,?,?,'queued')",
-                (time.time(), chat_key, peer_name, text),
+                "UPDATE wa_rpa_send_queue SET status='processing' "
+                "WHERE id=? AND status='queued'",
+                (int(item_id),),
             )
             self._conn.commit()
-            return cur.lastrowid
+            return cur.rowcount == 1
 
     def has_pending_send(self) -> bool:
         """检查是否有待发送的队列任务（不消费）。"""
@@ -242,19 +332,42 @@ class WaRpaStateStore:
             return dict(row)
 
     def mark_send_queue_item(
-        self, item_id: int, status: str, error: Optional[str] = None
+        self,
+        item_id: int,
+        status: str,
+        error: Optional[str] = None,
+        receipt: Optional[str] = None,
     ) -> None:
+        """``sent_at`` 只在真实 ``sent`` 时写入。dry_run / 未见气泡不记成 sent。"""
+        receipt_val = "" if receipt is None else str(receipt)
+        if status == "sent":
+            if receipt_val not in {"sent", "delivered", "read"}:
+                receipt_val = "sent"
+            sent_at: Optional[float] = time.time()
+        elif status == "dry_run":
+            receipt_val = "dry_run"
+            sent_at = None
+        elif status == "send_unconfirmed":
+            if receipt_val in {"sent", "delivered", "read"}:
+                receipt_val = ""
+            sent_at = None
+        else:
+            if receipt_val in {"sent", "delivered", "read"}:
+                receipt_val = ""
+            sent_at = time.time()
         with self._lock:
             self._conn.execute(
-                "UPDATE wa_rpa_send_queue SET status=?, sent_at=?, error=? WHERE id=?",
-                (status, time.time(), error, item_id),
+                "UPDATE wa_rpa_send_queue SET status=?, sent_at=?, error=?, receipt=? WHERE id=?",
+                (status, sent_at, error, receipt_val, item_id),
             )
             self._conn.commit()
 
     def list_send_queue(
         self, limit: int = 30, include_done: bool = False
     ) -> List[Dict[str, Any]]:
-        clause = "" if include_done else "WHERE status NOT IN ('sent','failed')"
+        clause = "" if include_done else (
+            "WHERE status NOT IN ('sent','failed','dry_run','cancelled','blocked')"
+        )
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT * FROM wa_rpa_send_queue {clause} ORDER BY ts DESC LIMIT ?",

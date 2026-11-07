@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node bounds="[0,0][720,1600]" class="android.widget.FrameLayout">
+    <node bounds="[120,80][400,140]" resource-id="com.whatsapp:id/conversation_contact_name" text="店员" content-desc="" />
+    <node bounds="[40,800][360,900]" resource-id="com.whatsapp:id/message_text" text="在吗" content-desc="" />
+    <node bounds="[20,1400][600,1500]" resource-id="com.whatsapp:id/entry" text="" content-desc="" />
+  </node>
+</hierarchy>

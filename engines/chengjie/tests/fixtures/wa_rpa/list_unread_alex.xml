@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node bounds="[0,0][720,1600]" class="android.widget.FrameLayout">
+    <node bounds="[0,300][720,460]" resource-id="com.whatsapp:id/conversations_row_container">
+      <node bounds="[140,320][400,370]" resource-id="com.whatsapp:id/conversations_row_contact_name" text="Alex" content-desc="+63 917 555 0101" />
+      <node bounds="[640,380][700,430]" resource-id="com.whatsapp:id/conversations_row_message_count" text="" content-desc="1条未读消息" />
+    </node>
+  </node>
+</hierarchy>

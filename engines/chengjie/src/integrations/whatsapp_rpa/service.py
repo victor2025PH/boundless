@@ -213,8 +213,14 @@ class WhatsAppRpaService:
         if not self._merged_cfg.get("enabled"):
             logger.info("WhatsApp RPA disabled（enabled=false），跳过启动")
             return False
-        svc_cfg = self._merged_cfg.get("service") or {}
-        if not svc_cfg.get("autostart", True):
+        # 缺省仍是 autostart=true（不改现有默认）。顶层 autostart 显式写出时优先，
+        # 这样测试 overlay 写 whatsapp_rpa.autostart: false 就能挡住开机即扫。
+        if "autostart" in self._merged_cfg:
+            _autostart = bool(self._merged_cfg.get("autostart"))
+        else:
+            svc_cfg = self._merged_cfg.get("service") or {}
+            _autostart = bool(svc_cfg.get("autostart", True))
+        if not _autostart:
             logger.info("WhatsApp RPA autostart=false，等待外部触发")
             return False
         return await self._do_start()
@@ -496,9 +502,11 @@ class WhatsAppRpaService:
             state_quiet_until = float(row.get("state_quiet_until") or 0)
             state_blacklist = int(row.get("state_blacklist") or 0)
 
-            if state_blacklist:
-                continue
-            if state_quiet_until > 0 and now_ts < state_quiet_until:
+            from src.integrations.whatsapp_rpa.min_loop import rejection_reason
+            if rejection_reason(self._merged_cfg, {
+                "blacklist": state_blacklist,
+                "quiet_until": state_quiet_until,
+            }, str(row.get("state_last_peer") or row.get("peer_text") or "")):
                 continue
 
             last_interact_ts = max(last_peer_ts, last_reply_ts)
@@ -520,6 +528,12 @@ class WhatsAppRpaService:
             })
 
         if not candidates:
+            return
+
+        from src.integrations.whatsapp_rpa.min_loop import auto_reply_allowed
+        if not auto_reply_allowed(
+            "proactive", str(self._merged_cfg.get("reply_mode") or "auto"),
+        ):
             return
 
         candidates.sort(key=lambda r: r.get("silence_secs", 0), reverse=True)
@@ -568,7 +582,21 @@ class WhatsAppRpaService:
             if not reply_text:
                 continue
 
-            self._state.enqueue_send(chat_key, peer_name, reply_text)
+            from src.integrations.whatsapp_rpa.min_loop import make_client_msg_id
+            cmid = make_client_msg_id(chat_key, last_peer_text, "proactive", reply_text)
+            rec = self._state.enqueue_send_ex(
+                chat_key,
+                peer_name,
+                reply_text,
+                client_msg_id=cmid,
+                conversation_id=chat_key,
+            )
+            if rec.get("duplicate"):
+                continue
+            try:
+                self._trigger_evt.set()
+            except Exception:
+                logger.debug("wa proactive enqueue 唤醒失败", exc_info=True)
             self._proactive_last_ts[chat_key] = now_ts
             self._proactive_sent_today += 1
             # P15-g: 记录使用的模板，用于后续回复追踪
@@ -726,10 +754,27 @@ class WhatsAppRpaService:
 
     # ── P4-B: 手动发送队列 ────────────────────────────────────────────────
 
-    def enqueue_send(self, chat_key: str, peer_name: str, text: str) -> int:
-        """入队一条主动发送任务并立即唤醒 runner 进入下一轮（避免等到下一个 interval）。"""
-        item_id = self._state.enqueue_send(
-            chat_key=chat_key, peer_name=peer_name, text=text)
+    def enqueue_send(
+        self,
+        chat_key: str,
+        peer_name: str,
+        text: str,
+        client_msg_id: str = "",
+        conversation_id: str = "",
+    ) -> int:
+        """入队一条主动发送任务并立即唤醒 runner 进入下一轮（避免等到下一个 interval）。
+
+        同一个 ``client_msg_id`` 已存在时返回原行，不再次唤醒、不再插第二行。
+        """
+        rec = self._state.enqueue_send_ex(
+            chat_key,
+            peer_name,
+            text,
+            client_msg_id=client_msg_id,
+            conversation_id=conversation_id or chat_key,
+        )
+        if rec.get("duplicate"):
+            return int(rec["id"])
         # 唤醒 runner 立刻 pop（与 LINE service 对称：入队即触发，降投递延迟）——
         # _loop 在 asyncio.wait([_trigger_evt.wait(), ...], timeout=interval) 上阻塞，
         # set() 令其立即返回并处理发送队列，而非空等一个自适应轮询间隔（最长数十秒）。
@@ -737,7 +782,7 @@ class WhatsAppRpaService:
             self._trigger_evt.set()
         except Exception:
             logger.debug("wa enqueue_send 触发唤醒失败（已忽略）", exc_info=True)
-        return item_id
+        return int(rec["id"])
 
     def list_send_queue(self, limit: int = 30, include_done: bool = False) -> list:
         return self._state.list_send_queue(limit=limit, include_done=include_done)

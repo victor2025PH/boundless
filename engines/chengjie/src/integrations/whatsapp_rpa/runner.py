@@ -32,6 +32,15 @@ from src.integrations.line_rpa.human_pacing import (       # 复用拟人节奏
     typing_duration_sec,
 )
 from src.integrations.whatsapp_rpa import ui_hierarchy as ui
+from src.integrations.whatsapp_rpa.min_loop import (
+    WaMinLoop,
+    auto_reply_allowed,
+    incoming_bubble_texts,
+    normalize_phone,
+    scan_list_rows,
+    select_chat_row,
+    thread_confirms_target,
+)
 from src.integrations.whatsapp_rpa.state_store import WaRpaStateStore
 from src.integrations.whatsapp_rpa.intent_detector import (
     StopContactIntentDetector,
@@ -298,11 +307,17 @@ class WhatsAppRpaRunner:
         skill_manager: Any,
         wa_cfg: Optional[Dict[str, Any]] = None,
         state_store: Optional[WaRpaStateStore] = None,
+        device: Any = None,
+        inbox_store: Any = None,
     ) -> None:
         self._cm = config_manager
         self._sm = skill_manager
         self._cfg: Dict[str, Any] = dict(wa_cfg or {})
         self._state_store = state_store
+        # 测试注入假设备。为 None 时仍走 adb，不改变生产默认路径。
+        self._device = device
+        self._inbox_store = inbox_store
+        self._wa_min_loop: Optional[WaMinLoop] = None
         self._serial: Optional[str] = None
         self._pacing = PacingConfig.from_dict(self._cfg.get("human_pacing") or {})
         self._consecutive_dump_fails: int = 0
@@ -335,9 +350,16 @@ class WhatsAppRpaRunner:
         # P15: 已打开对话新消息检测（解决"已读但未回复"问题）
         # ═══════════════════════════════════════════════════════════════════════
         # 当消息被用户已读（无 badge），但对话仍打开时，检测新消息内容变化
-        self._open_thread_check_enabled: bool = bool(
-            self._cfg_get("open_thread_check_enabled", True)
-        )
+        # open_thread_check 是 overlay 用的别名。两个键都缺省时仍默认开启。
+        if (
+            self._cfg.get("open_thread_check_enabled") is None
+            and "open_thread_check" in self._cfg
+        ):
+            self._open_thread_check_enabled = bool(self._cfg.get("open_thread_check"))
+        else:
+            self._open_thread_check_enabled = bool(
+                self._cfg_get("open_thread_check_enabled", True)
+            )
         self._open_thread_check_interval_sec: float = float(
             self._cfg_get("open_thread_check_interval_sec", 15)
         )
@@ -425,6 +447,118 @@ class WhatsAppRpaRunner:
         val = self._cfg.get(key)
         return val if val is not None else default
 
+    def bind_inbox_store(self, store: Any) -> None:
+        self._inbox_store = store
+
+    def _wa_loop(self) -> WaMinLoop:
+        if self._wa_min_loop is None:
+            self._wa_min_loop = WaMinLoop(
+                account_id=self._account_id,
+                state_store=self._state_store,
+                cfg_getter=lambda: self._cfg,
+                inbox_getter=lambda: self._inbox_store,
+                device_getter=lambda: self._device,
+            )
+        return self._wa_min_loop
+
+    def observe_inbound(
+        self,
+        *,
+        display_name: str,
+        xml: Optional[bytes],
+        peer_text: str,
+        conversation_id: str = "",
+    ) -> Dict[str, Any]:
+        """入站落统一收件箱，并给出 STOP 闸门结果。不读 automation_mode。"""
+        loop = self._wa_loop()
+        ident = loop.identify(
+            display_name=display_name,
+            xml=xml,
+            conversation_id=conversation_id,
+        )
+        loop.remember(ident, peer_text=peer_text)
+        loop.record_inbound(ident, peer_text)
+        gate_text = peer_text
+        if xml:
+            bubbles = incoming_bubble_texts(xml)
+            if bubbles:
+                gate_text = "\n".join(bubbles)
+        block = loop.rejection_block(ident, gate_text)
+        out = ident.as_dict()
+        out["block"] = block
+        out["identity"] = ident
+        return out
+
+    async def _leave_thread(self) -> None:
+        if self._device is not None:
+            self._device.back()
+            return
+        if self._serial:
+            await asyncio.to_thread(adb.input_keyevent, self._serial, "KEYCODE_BACK")
+
+    def _confirm_open_thread(
+        self,
+        *,
+        sender: str,
+        xml: Optional[bytes] = None,
+    ) -> Dict[str, Any]:
+        """截屏兜底点进会话后，顶栏必须对得上通知里的对方。对不上就不发。"""
+        if xml is None:
+            if self._device is not None:
+                raw = self._device.dump()
+                xml = raw.encode("utf-8") if isinstance(raw, str) else raw
+            else:
+                xml, _ = self._dump_ui_xml()
+        phone = normalize_phone(sender)
+        return thread_confirms_target(
+            xml,
+            display_name="" if phone else sender,
+            phone=phone,
+        )
+
+    async def _commit_auto_send(
+        self,
+        *,
+        source: str,
+        identity: Any,
+        text: str,
+        peer_text: str = "",
+        dry_run: bool = False,
+        client_msg_id: str = "",
+        existing_item_id: int = 0,
+        performer: Any = None,
+    ) -> Dict[str, Any]:
+        """自动回复、补扫、截屏兜底、补漏、发送队列共用的发出入口。"""
+        loop = self._wa_loop()
+        prep = loop.prepare_outbound(
+            source=source,
+            identity=identity,
+            text=text,
+            peer_text=peer_text,
+            dry_run=dry_run,
+            client_msg_id=client_msg_id,
+            existing_item_id=existing_item_id,
+        )
+        if not prep.get("touch_device"):
+            return prep
+        if self._device is not None:
+            self._device.send_text(text)
+            raw = self._device.dump()
+            xml = raw.encode("utf-8") if isinstance(raw, str) else raw
+            return loop.finish_outbound(prep, xml, text, identity)
+        if performer is None:
+            loop.mark_failed(int(prep.get("item_id") or 0), "no_performer")
+            prep.update(ok=False, status="failed", step="send_fail", error="no_performer")
+            return prep
+        send_res = await performer()
+        if not isinstance(send_res, dict) or not send_res.get("ok"):
+            err = str((send_res or {}).get("error") or "send_fail")
+            loop.mark_failed(int(prep.get("item_id") or 0), err)
+            prep.update(ok=False, status="failed", step="send_fail", send=send_res, error=err)
+            return prep
+        xml, _ = await asyncio.to_thread(self._dump_ui_xml)
+        return loop.finish_outbound(prep, xml, text, identity)
+
     @property
     def _wa_pkg(self) -> str:
         biz = self._cfg_get("use_business_app", False)
@@ -438,6 +572,8 @@ class WhatsAppRpaRunner:
     # ── ADB 工具 ─────────────────────────────────────────────────────────
 
     def _resolve_serial(self) -> Optional[str]:
+        if self._device is not None:
+            return str(getattr(self._device, "serial", "") or "fake-serial")
         preferred = str(self._cfg_get("adb_serial") or "")
         prefer_wa = bool(self._cfg_get("prefer_wa_device", True))
         return adb.pick_serial(
@@ -476,6 +612,13 @@ class WhatsAppRpaRunner:
             logger.debug("[wa_rpa] _note_risk_screen 跳过", exc_info=True)
 
     def _dump_ui_xml(self) -> Tuple[Optional[bytes], str]:
+        if self._device is not None:
+            raw = self._device.dump()
+            if isinstance(raw, str):
+                raw = raw.encode("utf-8")
+            if not raw:
+                return None, "device_dump_empty"
+            return raw, "ok"
         serial = self._serial
         if not serial:
             return None, "no_serial"
@@ -527,10 +670,16 @@ class WhatsAppRpaRunner:
         return None
 
     def _tap(self, cx: int, cy: int) -> None:
+        if self._device is not None:
+            self._device.tap(cx, cy)
+            return
         if self._serial:
             adb.input_tap(self._serial, cx, cy)
 
     def _back(self) -> None:
+        if self._device is not None:
+            self._device.back()
+            return
         if self._serial:
             adb.input_keyevent(self._serial, "KEYCODE_BACK")
 
@@ -595,11 +744,16 @@ class WhatsAppRpaRunner:
                     break
 
             if not _peer_name:
+                _peer_name = ui.find_chat_title(xml_bytes) or ""
+            if not _peer_name:
                 # 无法确定对方名字，跳过（避免误操作）
                 logger.debug("[wa_rpa][open_thread] 无法提取对方名字，跳过检测")
                 return None
 
-            chat_key = f"wa:{self._account_id}:{_peer_name}"
+            _ident = self._wa_loop().identify(display_name=_peer_name, xml=xml_bytes)
+            chat_key = _ident.conversation_id
+            result["key_source"] = _ident.key_source
+            result["phone_unresolved"] = _ident.phone_unresolved
 
             # 3) 检查冷却时间（避免过于频繁检查同一对话）
             _last_check = self._open_thread_last_check_ts.get(chat_key, 0)
@@ -612,9 +766,15 @@ class WhatsAppRpaRunner:
 
             self._open_thread_last_check_ts[chat_key] = _now
 
-            # 4) 提取最后一条对方消息
-            _peer_text = ui.pick_last_incoming_text(xml_bytes)
-            if not _peer_text:
+            # 4) 提取最后一条对方消息（pick 返回 (text, reason)，不能把元组当正文）
+            # 短英文 STOP 会被日期过滤器丢掉，气泡原文仍要送给拒收闸。
+            _picked = ui.pick_last_incoming_text(xml_bytes)
+            _peer_text = (_picked[0] if isinstance(_picked, tuple) else _picked) or ""
+            _peer_text = str(_peer_text)
+            if not _peer_text.strip():
+                _bubbles = incoming_bubble_texts(xml_bytes)
+                _peer_text = _bubbles[-1] if _bubbles else ""
+            if not _peer_text.strip():
                 logger.debug("[wa_rpa][open_thread] 未检测到对方消息 chat=%s", chat_key)
                 return None
 
@@ -667,7 +827,7 @@ class WhatsAppRpaRunner:
 
                 # 调用消息处理流程
                 _process_result = await self._process_open_thread_message(
-                    serial, chat_key, _peer_text, result, t0
+                    serial, chat_key, _peer_text, result, t0, xml=xml_bytes,
                 )
                 _processed_count += 1
 
@@ -677,8 +837,10 @@ class WhatsAppRpaRunner:
                 if not xml_bytes:
                     break
 
-                _new_text = ui.pick_last_incoming_text(xml_bytes)
-                if not _new_text:
+                _picked_new = ui.pick_last_incoming_text(xml_bytes)
+                _new_text = (_picked_new[0] if isinstance(_picked_new, tuple) else _picked_new) or ""
+                _new_text = str(_new_text)
+                if not _new_text.strip():
                     break
 
                 _new_hash = hashlib.sha256(_new_text.encode()).hexdigest()[:16]
@@ -772,9 +934,31 @@ class WhatsAppRpaRunner:
         peer_text: str,
         result: Dict[str, Any],
         t0: float,
+        xml: Optional[bytes] = None,
     ) -> Dict[str, Any]:
-        """处理已打开对话中的单条消息（复用现有逻辑）。"""
-        # 使用 SkillManager 生成回复 + _pace_and_send 发送
+        """处理已打开对话中的单条消息。补扫服从 reply_mode，STOP 开关挡发送。"""
+        if xml is None:
+            xml, _ = self._dump_ui_xml()
+        _obs = self.observe_inbound(
+            display_name=str(result.get("peer_name") or ""),
+            xml=xml,
+            peer_text=peer_text,
+            conversation_id=chat_key if str(chat_key).startswith("whatsapp:") else "",
+        )
+        chat_key = _obs["conversation_id"]
+        result["chat_key"] = chat_key
+        result["conversation_id"] = chat_key
+        result["key_source"] = _obs["key_source"]
+        result["phone_unresolved"] = _obs["phone_unresolved"]
+        if _obs["block"]:
+            result["step"] = _obs["block"]
+            result["ok"] = True
+            return result
+        _mode = str(self._cfg_get("reply_mode", "auto") or "auto").strip().lower()
+        if _mode in ("off", "approve"):
+            result["step"] = "reply_mode_off" if _mode == "off" else "reply_mode_approve"
+            result["ok"] = True
+            return result
 
         _state = (self._state_store.get_chat_state(chat_key)
                   if self._state_store else {})
@@ -844,16 +1028,25 @@ class WhatsAppRpaRunner:
 
         result["reply_text"] = reply_text
 
-        # 发送回复（坐标 fallback，需要屏幕尺寸定位输入框/发送键）
-        _screen = await asyncio.to_thread(adb.screen_size, serial)
-        _sw = _screen[0] if _screen else 1080
-        _sh = _screen[1] if _screen else 1920
-        send_res = await self._send_text_coord_fallback(serial, reply_text, (_sw, _sh))
+        async def _coord_send() -> Dict[str, Any]:
+            _screen = await asyncio.to_thread(adb.screen_size, serial)
+            _sw = _screen[0] if _screen else 1080
+            _sh = _screen[1] if _screen else 1920
+            return await self._send_text_coord_fallback(serial, reply_text, (_sw, _sh))
 
-        if send_res.get("ok"):
+        fin = await self._commit_auto_send(
+            source="open_thread",
+            identity=_obs["identity"],
+            text=reply_text,
+            peer_text=peer_text,
+            performer=None if self._device is not None else _coord_send,
+        )
+        result["client_msg_id"] = fin.get("client_msg_id")
+        result["send_status"] = fin.get("status")
+        result["receipt"] = fin.get("receipt")
+        if fin.get("status") == "sent":
             result["ok"] = True
             result["step"] = "sent"
-            # 更新状态
             if self._state_store:
                 self._state_store.upsert_chat_state(
                     chat_key,
@@ -864,8 +1057,9 @@ class WhatsAppRpaRunner:
                     last_reply_ts=time.time(),
                 )
         else:
-            result["step"] = "send_fail"
-            result["error"] = send_res.get("error", "unknown")
+            result["ok"] = False
+            result["step"] = str(fin.get("step") or "send_fail")
+            result["error"] = str(fin.get("error") or fin.get("status") or "")
 
         return result
 
@@ -1641,86 +1835,138 @@ class WhatsAppRpaRunner:
             result["error"] = "empty_text_or_name"
             return self._finish(result, t0)
 
-        # P5-3: dump + 最多滚动 3 次重试，确保联系人可见
+        ident = self._wa_loop().identify(
+            display_name=peer_name,
+            phone=normalize_phone(peer_name),
+            conversation_id=chat_key if str(chat_key).startswith("whatsapp:") else "",
+        )
+        chat_key = ident.conversation_id
+        result["chat_key"] = chat_key
+        result["conversation_id"] = chat_key
+        result["key_source"] = ident.key_source
+        result["phone_unresolved"] = ident.phone_unresolved
+        last_peer = ""
+        if self._state_store:
+            last_peer = str((self._state_store.get_chat_state(chat_key) or {}).get("last_peer_text") or "")
+        block = self._wa_loop().rejection_block(ident, last_peer)
+        if block:
+            if self._state_store and item_id:
+                self._state_store.mark_send_queue_item(item_id, "blocked", block)
+            result["step"] = block
+            result["ok"] = True
+            result["send_status"] = "blocked"
+            return self._finish(result, t0)
+
+        if dry_run:
+            fin = await self._commit_auto_send(
+                source="send_queue",
+                identity=ident,
+                text=text,
+                peer_text=last_peer,
+                dry_run=True,
+                client_msg_id=str(item.get("client_msg_id") or ""),
+                existing_item_id=item_id,
+            )
+            result["ok"] = True
+            result["step"] = "dry_run_done"
+            result["send_status"] = fin.get("status")
+            result["client_msg_id"] = fin.get("client_msg_id")
+            return self._finish(result, t0)
+
+        def _pick(xml: Optional[bytes]) -> Tuple[Any, str]:
+            if not xml:
+                return None, "not_found"
+            return select_chat_row(scan_list_rows(xml), ident)
+
         xml_bytes, _ = await asyncio.to_thread(self._dump_ui_xml)
-        tap_xy: Optional[Tuple[int, int]] = None
-        for _scroll_try in range(4):
-            if xml_bytes:
-                tap_xy = ui.find_chat_row_by_name(xml_bytes, peer_name, wa_pkg=self._wa_pkg)
-            if tap_xy is not None:
-                break
-            if _scroll_try < 3:
-                # 向下滚动半屏再重新 dump
+        picked, why = _pick(xml_bytes)
+        if why in ("ambiguous_display_name", "ambiguous_phone"):
+            if self._state_store:
+                self._state_store.mark_send_queue_item(item_id, "failed", why)
+            result["error"] = why
+            result["step"] = why
+            return self._finish(result, t0)
+
+        # 假设备不滚动、不调系统 adb。真机才向下翻并尝试搜索。
+        if picked is None and self._device is None:
+            for _scroll_try in range(3):
                 await asyncio.to_thread(
                     adb.run_adb,
-                    ["shell", f"input swipe 540 900 540 300"],
+                    ["shell", "input swipe 540 900 540 300"],
                     serial=self._serial, timeout=5.0,
                 )
                 await asyncio.sleep(0.8)
                 xml_bytes, _ = await asyncio.to_thread(self._dump_ui_xml)
+                picked, why = _pick(xml_bytes)
+                if why in ("ambiguous_display_name", "ambiguous_phone"):
+                    if self._state_store:
+                        self._state_store.mark_send_queue_item(item_id, "failed", why)
+                    result["error"] = why
+                    result["step"] = why
+                    return self._finish(result, t0)
+                if picked is not None:
+                    break
+            if picked is None and xml_bytes:
+                search_btn = ui.find_search_button(xml_bytes, wa_pkg=self._wa_pkg)
+                if search_btn:
+                    logger.info("[wa_rpa] 手动发送：聊天列表未找到 peer=%r，尝试 WA 搜索", peer_name)
+                    self._tap(*search_btn)
+                    await asyncio.sleep(0.8)
+                    await asyncio.to_thread(
+                        adb.run_adb,
+                        ["shell", f"input text '{peer_name.replace(chr(39), '')}' "],
+                        serial=self._serial, timeout=8.0,
+                    )
+                    await asyncio.sleep(1.2)
+                    search_xml, _ = await asyncio.to_thread(self._dump_ui_xml)
+                    picked, why = _pick(search_xml)
+                    if why in ("ambiguous_display_name", "ambiguous_phone"):
+                        if self._state_store:
+                            self._state_store.mark_send_queue_item(item_id, "failed", why)
+                        result["error"] = why
+                        result["step"] = why
+                        return self._finish(result, t0)
+                    if picked is None:
+                        await asyncio.to_thread(adb.input_keyevent, self._serial, "KEYCODE_BACK")
+                        await asyncio.sleep(0.5)
 
-        # P5-3 兜底：尝试 WA 内置搜索
-        if tap_xy is None and xml_bytes:
-            search_btn = ui.find_search_button(xml_bytes, wa_pkg=self._wa_pkg)
-            if search_btn:
-                logger.info("[wa_rpa] 手动发送：聊天列表未找到 peer=%r，尝试 WA 搜索", peer_name)
-                self._tap(*search_btn)
-                await asyncio.sleep(0.8)
-                # 通过 ADB 键盘输入联系人名
-                await asyncio.to_thread(
-                    adb.run_adb,
-                    ["shell", f"input text '{peer_name.replace(chr(39), '')}' "],
-                    serial=self._serial, timeout=8.0,
-                )
-                await asyncio.sleep(1.2)
-                search_xml, _ = await asyncio.to_thread(self._dump_ui_xml)
-                if search_xml:
-                    tap_xy = ui.find_chat_row_by_name(search_xml, peer_name, wa_pkg=self._wa_pkg)
-                if tap_xy is None:
-                    # 清除搜索框，退出搜索模式
-                    await asyncio.to_thread(adb.input_keyevent, self._serial, "KEYCODE_BACK")
-                    await asyncio.sleep(0.5)
-
-        if tap_xy is None:
+        if picked is None:
             if self._state_store:
                 self._state_store.mark_send_queue_item(item_id, "failed", "contact_not_found")
             result["error"] = "contact_not_found"
             result["step"] = "queued_send_not_found"
-            logger.warning("[wa_rpa] 手动发送：滚动+搜索仍未找到 peer=%r", peer_name)
+            logger.warning("[wa_rpa] 手动发送：未按稳定键找到 peer=%r reason=%s", peer_name, why)
             return self._finish(result, t0)
 
-        # 点进会话
-        self._tap(*tap_xy)
-        await asyncio.sleep(1.5)
+        self._tap(picked.cx, picked.cy)
+        await asyncio.sleep(0.2 if self._device is not None else 1.5)
 
-        if dry_run:
-            if self._state_store:
-                self._state_store.mark_send_queue_item(item_id, "sent")
-            result["ok"] = True
-            result["step"] = "dry_run_done"
-            self._back()
-            return self._finish(result, t0)
+        async def _pace() -> Dict[str, Any]:
+            chat_xml, _ = await asyncio.to_thread(self._dump_ui_xml)
+            return await self._pace_and_send(chat_xml, text)
 
-        chat_xml, _ = await asyncio.to_thread(self._dump_ui_xml)
-        send_result = await self._pace_and_send(chat_xml, text)
-
-        if send_result.get("ok"):
-            if self._state_store:
-                self._state_store.mark_send_queue_item(item_id, "sent")
-                self._state_store.upsert_chat_state(
-                    chat_key, last_reply=text, last_reply_ts=time.time()
-                )
+        fin = await self._commit_auto_send(
+            source="send_queue",
+            identity=ident,
+            text=text,
+            peer_text=last_peer,
+            client_msg_id=str(item.get("client_msg_id") or ""),
+            existing_item_id=item_id,
+            performer=None if self._device is not None else _pace,
+        )
+        result["client_msg_id"] = fin.get("client_msg_id")
+        result["send_status"] = fin.get("status")
+        result["receipt"] = fin.get("receipt")
+        if fin.get("status") == "sent":
             result["ok"] = True
             result["step"] = "queued_send_done"
         else:
-            err = str(send_result.get("error", "send_fail"))
-            if self._state_store:
-                self._state_store.mark_send_queue_item(item_id, "failed", err)
-            result["error"] = err
-            result["step"] = "queued_send_fail"
+            result["ok"] = False
+            result["step"] = "queued_send_fail" if fin.get("status") == "failed" else str(fin.get("step") or "send_unconfirmed")
+            result["error"] = str(fin.get("error") or fin.get("status") or "")
 
         self._back()
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.1 if self._device is not None else 0.6)
         return self._finish(result, t0)
 
     # ── MIUI screencap fallback（uiautomator dump 被系统安全功能杀死时使用） ────
@@ -1910,17 +2156,31 @@ class WhatsAppRpaRunner:
         await asyncio.to_thread(adb.input_tap, serial, _cx, _first_row_cy)
         await asyncio.sleep(2.5)
 
-        # 4. 取 peer_msg（优先 notification 数据，免去 XML 解析）
+        # 点的是坐标上的第一行，不能凭这一下就发。顶栏对不上通知对方则退出。
         msg = pending_msgs[0]
         peer_name = msg["sender"]
+        _ver = self._confirm_open_thread(sender=peer_name or "")
+        if not _ver.get("ok"):
+            result["step"] = str(_ver.get("reason") or "unverified_thread")
+            result["ok"] = True
+            result["error"] = result["step"]
+            await self._leave_thread()
+            return self._finish(result, t0)
+
+        # 4. 取 peer_msg（优先 notification 数据，免去 XML 解析）
         peer_text = msg["text"]
         _voice_transcribed = bool(msg.get("_voice_pretranscribed"))
         if _voice_transcribed:
             result["voice_transcript"] = peer_text
             result["voice_detected_from_badge_pretranscribe"] = True
-        chat_key = f"wa:{self._account_id}:{peer_name}"
+        _hdr_xml, _ = self._dump_ui_xml()
+        _ident = self._wa_loop().identify(display_name=peer_name, xml=_hdr_xml)
+        chat_key = _ident.conversation_id
         result["chat_key"] = chat_key
+        result["conversation_id"] = chat_key
         result["peer_name"] = peer_name
+        result["key_source"] = _ident.key_source
+        result["phone_unresolved"] = _ident.phone_unresolved
 
         # 4.0 screencap-badge 兜底：通知文本为空时（MIUI 提前清除），
         #     dump 聊天界面 XML 获取真实消息内容和语音气泡
@@ -1959,9 +2219,15 @@ class WhatsAppRpaRunner:
                         _cn = ui.find_chat_title(_chat_xml_raw)
                         if _cn:
                             peer_name = _cn
-                            chat_key = f"wa:{self._account_id}:{peer_name}"
+                            _ident = self._wa_loop().identify(
+                                display_name=peer_name, xml=_chat_xml_raw,
+                            )
+                            chat_key = _ident.conversation_id
                             result["chat_key"] = chat_key
+                            result["conversation_id"] = chat_key
                             result["peer_name"] = peer_name
+                            result["key_source"] = _ident.key_source
+                            result["phone_unresolved"] = _ident.phone_unresolved
             except Exception as _e:
                 logger.warning("[wa_rpa][fb] screencap-badge XML fallback 失败: %s", _e)
 
@@ -1995,6 +2261,20 @@ class WhatsAppRpaRunner:
             "[wa_rpa][fb] peer=%r msg=%r chat=%s serial=%s voice=%s",
             peer_name, peer_text[:40], chat_key, serial, _voice_transcribed,
         )
+        _obs = self.observe_inbound(
+            display_name=peer_name,
+            xml=self._dump_ui_xml()[0],
+            peer_text=peer_text,
+            conversation_id=chat_key if str(chat_key).startswith("whatsapp:") else "",
+        )
+        chat_key = _obs["conversation_id"]
+        result["chat_key"] = chat_key
+        result["conversation_id"] = chat_key
+        if _obs["block"]:
+            result["step"] = _obs["block"]
+            result["ok"] = True
+            await self._leave_thread()
+            return self._finish(result, t0)
 
         # 5. 去重：已回复过的消息在 dedup_window 内不重复回复
         peer_hash = hashlib.sha256(peer_text.encode()).hexdigest()[:16]
@@ -2104,8 +2384,18 @@ class WhatsAppRpaRunner:
             return self._finish(result, t0)
 
         if dry_run:
+            fin = await self._commit_auto_send(
+                source="screencap",
+                identity=_obs["identity"],
+                text=result.get("reply_text") or "",
+                peer_text=peer_text,
+                dry_run=True,
+            )
             result["step"] = "dry_run_done"
             result["ok"] = True
+            result["send_status"] = fin.get("status")
+            result["client_msg_id"] = fin.get("client_msg_id")
+            await self._leave_thread()
             return self._finish(result, t0)
 
         # 7. AI 生成回复
@@ -2192,10 +2482,22 @@ class WhatsAppRpaRunner:
             await asyncio.to_thread(adb.input_keyevent, serial, "KEYCODE_BACK")
             return self._finish(result, t0)
 
-        # 8. 坐标发送（不依赖 XML）
-        send_res = await self._send_text_coord_fallback(serial, reply_text, (sw, sh))
-        result["send"] = send_res
-        if send_res.get("ok"):
+        # 8. 同一个发送入口。坐标动作只是 performer；没看到己方气泡不记 sent。
+        async def _fb_send() -> Dict[str, Any]:
+            return await self._send_text_coord_fallback(serial, reply_text, (sw, sh))
+
+        fin = await self._commit_auto_send(
+            source="screencap",
+            identity=_obs["identity"],
+            text=reply_text,
+            peer_text=peer_text,
+            performer=_fb_send,
+        )
+        result["send"] = fin
+        result["client_msg_id"] = fin.get("client_msg_id")
+        result["send_status"] = fin.get("status")
+        result["receipt"] = fin.get("receipt")
+        if fin.get("status") == "sent":
             result["step"] = "sent"
             result["ok"] = True
             _now_ts = time.time()
@@ -2238,10 +2540,11 @@ class WhatsAppRpaRunner:
                 "[wa_rpa][fb] 坐标发送成功 chat=%s reply=%r", chat_key, reply_text[:40]
             )
         else:
-            result["step"] = "send_fail"
-            result["error"] = str(send_res.get("error", ""))
+            result["step"] = str(fin.get("step") or "send_fail")
+            result["ok"] = False
+            result["error"] = str(fin.get("error") or fin.get("status") or "")
 
-        await asyncio.to_thread(adb.input_keyevent, serial, "KEYCODE_BACK")
+        await self._leave_thread()
         return self._finish(result, t0)
 
     # ── 多条消息引用回复 ─────────────────────────────────────────────────────────
@@ -2911,11 +3214,9 @@ class WhatsAppRpaRunner:
 
             return self._finish(result, t0)
 
-        # 5) 取第一个未读会话
+        # 5) 取第一个未读会话。稳定键等打开会话、读到号码后再绑定。
         row = unread_rows[0]
-        # P10-A: 用 account_id 代替 ADB serial，保证设备重连后 key 不变
-        chat_key = f"wa:{self._account_id}:{row.name}"
-        result["chat_key"] = chat_key
+        chat_key = ""
         result["peer_name"] = row.name
 
         # 点进会话
@@ -2929,10 +3230,21 @@ class WhatsAppRpaRunner:
             self._back()
             return self._finish(result, t0)
 
+        _early = self._wa_loop().identify(display_name=row.name, xml=chat_xml)
+        chat_key = _early.conversation_id
+        result["chat_key"] = chat_key
+        result["conversation_id"] = chat_key
+        result["key_source"] = _early.key_source
+        result["phone_unresolved"] = _early.phone_unresolved
+
         # 7) 提取最新消息（按气泡位置判断新旧：语音/媒体 > 旧文字）
-        screen_w = adb.screen_size(self._serial)
-        sw = screen_w[0] if screen_w else 1080
-        sh = screen_w[1] if screen_w else 1920
+        if self._device is not None:
+            sw = int(getattr(self._device, "screen_width", 0) or 720)
+            sh = int(getattr(self._device, "screen_height", 0) or 1600)
+        else:
+            screen_w = adb.screen_size(self._serial)
+            sw = screen_w[0] if screen_w else 1080
+            sh = screen_w[1] if screen_w else 1920
         peer_text, reason2 = ui.pick_last_incoming_text(chat_xml, wa_pkg=self._wa_pkg, screen_width=sw)
 
         _voice_transcribed = False
@@ -2965,12 +3277,32 @@ class WhatsAppRpaRunner:
                 _media_described = True
 
         if not peer_text:
+            _bubbles = incoming_bubble_texts(chat_xml, sw)
+            peer_text = _bubbles[-1] if _bubbles else ""
+        if not peer_text:
             result["step"] = "no_peer_text"
             self._back()
             await asyncio.sleep(0.4)
             return self._finish(result, t0)
 
         result["peer_text"] = peer_text
+        _obs = self.observe_inbound(
+            display_name=row.name,
+            xml=chat_xml,
+            peer_text=peer_text,
+            conversation_id=chat_key,
+        )
+        chat_key = _obs["conversation_id"]
+        result["chat_key"] = chat_key
+        result["conversation_id"] = chat_key
+        result["key_source"] = _obs["key_source"]
+        result["phone_unresolved"] = _obs["phone_unresolved"]
+        if _obs["block"]:
+            result["step"] = _obs["block"]
+            result["ok"] = True
+            self._back()
+            await asyncio.sleep(0.4)
+            return self._finish(result, t0)
 
         # 8) 去重：已回复过的消息在 dedup_window 内不重复回复
         #    用 last_reply_ts（上次实际发送时间）而非 last_peer_ts，
@@ -3360,13 +3692,26 @@ class WhatsAppRpaRunner:
                     or "zh-cn"
                 ),
             )
+        # dry_run 走同一个发送入口，但在 TTS / 真发之前结束，避免被记成 sent。
+        if dry_run:
+            fin = await self._commit_auto_send(
+                source="unread",
+                identity=_obs["identity"],
+                text=reply_text,
+                peer_text=peer_text,
+                dry_run=True,
+            )
+            result["step"] = "dry_run_done"
+            result["ok"] = True
+            result["send_status"] = fin.get("status")
+            result["client_msg_id"] = fin.get("client_msg_id")
+            self._back()
+            await asyncio.sleep(0.4)
+            return self._finish(result, t0)
+
         await self._maybe_prepare_tts_reply(reply_text, result, tts_lang=_tts_lang)
 
         # 12) auto 模式 → 发送
-        if dry_run:
-            result["step"] = "dry_run_done"
-            result["ok"] = True
-            return self._finish(result, t0)
 
         # TTS auto_voice 已发送语音时，跳过文本发送（避免重复）
         if result.get("tts_send_ok"):
@@ -3416,6 +3761,22 @@ class WhatsAppRpaRunner:
                 _pre_send_sl, chat_key,
             )
 
+        # 先占住 client_msg_id。重复键或 STOP 不再点发送。
+        _prep = self._wa_loop().prepare_outbound(
+            source="unread",
+            identity=_obs["identity"],
+            text=reply_text,
+            peer_text=peer_text,
+        )
+        result["client_msg_id"] = _prep.get("client_msg_id")
+        if not _prep.get("touch_device"):
+            result["step"] = str(_prep.get("step") or "duplicate")
+            result["send_status"] = _prep.get("status")
+            result["ok"] = False
+            self._back()
+            await asyncio.sleep(0.4)
+            return self._finish(result, t0)
+
         # auto_quote_reply：可选引用回复（long-press → 「回复」→ 发送）
         # combined 模式总是尝试，用户显式请求总是尝试，单条消息受 config 控制
         _do_quote = (
@@ -3463,39 +3824,14 @@ class WhatsAppRpaRunner:
                 send_result = await self._pace_and_send(chat_xml, reply_text)
         else:
             send_result = await self._pace_and_send(chat_xml, reply_text)
-        result["send"] = send_result
-
-        if send_result.get("ok"):
-            result["step"] = "sent"
-            result["ok"] = True
-            if self._state_store:
-                # combined 模式用真实最后一条消息作锚点，避免合并文本污染下次检测
-                _state_peer = result.get("_multi_real_last_peer") or peer_text
-                self._state_store.upsert_chat_state(
-                    chat_key,
-                    last_peer_text=_state_peer,
-                    last_peer_hash=peer_hash,
-                    last_reply=reply_text,
-                    last_peer_ts=t0,
-                    last_reply_ts=time.time(),
-                )
-            # W4-Runner：ContactHooks outbound 入库
-            if _hooks is not None:
-                try:
-                    _hooks.on_message(
-                        channel="whatsapp",
-                        account_id=self._account_id,
-                        external_id=row.name or chat_key,
-                        direction="out",
-                        text_preview=reply_text[:120],
-                        display_name=row.name or "",
-                        trace_id=req_id,
-                    )
-                except Exception:
-                    logger.debug("[wa_rpa] contact_hooks on_message(out) 异常", exc_info=True)
-        else:
+        if not send_result.get("ok"):
+            if _prep.get("item_id"):
+                self._wa_loop().mark_failed(int(_prep["item_id"]), str(send_result.get("error") or "send_fail"))
+            result["send"] = send_result
             result["step"] = "send_fail"
+            result["ok"] = False
             result["error"] = str(send_result.get("error", "") or "send_unknown")
+            result["send_status"] = "failed"
             if send_result.get("parts"):
                 result["send_parts"] = send_result.get("parts")
             if self._state_store:
@@ -3505,9 +3841,54 @@ class WhatsAppRpaRunner:
                     message=f"发送失败: chat={chat_key} err={result['error'][:80]}",
                     dedup_window_sec=120.0,
                 )
-            # P6：设备 RPA 屏幕级风控识别 → 24h 滚动风控计数（喂 account_health）。
-            # 复用本轮 chat_xml（发送时已 dump），零额外 IO；全 best-effort 不影响主链。
             self._note_risk_screen(chat_xml)
+            send_result = {"ok": False}
+        elif not _prep.get("touch_device"):
+            result["send"] = _prep
+            result["step"] = str(_prep.get("step") or "duplicate")
+            result["send_status"] = _prep.get("status")
+            result["ok"] = False
+            send_result = {"ok": False}
+        else:
+            _ev_xml, _ = await asyncio.to_thread(self._dump_ui_xml)
+            fin = self._wa_loop().finish_outbound(
+                _prep, _ev_xml, reply_text, _obs["identity"],
+            )
+            result["send"] = fin
+            result["send_status"] = fin.get("status")
+            result["receipt"] = fin.get("receipt")
+            if fin.get("status") == "sent":
+                result["step"] = "sent"
+                result["ok"] = True
+                send_result = {"ok": True}
+                if self._state_store:
+                    _state_peer = result.get("_multi_real_last_peer") or peer_text
+                    self._state_store.upsert_chat_state(
+                        chat_key,
+                        last_peer_text=_state_peer,
+                        last_peer_hash=peer_hash,
+                        last_reply=reply_text,
+                        last_peer_ts=t0,
+                        last_reply_ts=time.time(),
+                    )
+                if _hooks is not None:
+                    try:
+                        _hooks.on_message(
+                            channel="whatsapp",
+                            account_id=self._account_id,
+                            external_id=row.name or chat_key,
+                            direction="out",
+                            text_preview=reply_text[:120],
+                            display_name=row.name or "",
+                            trace_id=req_id,
+                        )
+                    except Exception:
+                        logger.debug("[wa_rpa] contact_hooks on_message(out) 异常", exc_info=True)
+            else:
+                result["step"] = "send_unconfirmed"
+                result["ok"] = False
+                result["error"] = "bubble_not_seen"
+                send_result = {"ok": False}
 
         # 抓包补漏：发完后检测 AI 处理期间到达的新消息（最多 N 轮）
         # 背景：bot 打开聊天 → AI 思考 15-25s → 用户发新消息 → WhatsApp 自动已读
@@ -3567,16 +3948,38 @@ class WhatsAppRpaRunner:
                     _catchup_last_hash = _cu_hash  # 标为已见，避免重复
                     continue
                 _cu_reply = str(_cu_reply).strip()
-                if _cu_quote_msg is not None:
-                    _cu_send = await self._quote_reply_msg(
-                        self._serial, _cu_quote_msg.cx, _cu_quote_msg.cy, _cu_reply, (sw, sh)
+                _cu_block = self._wa_loop().rejection_block(_obs["identity"], _cu_text)
+                if _cu_block or not auto_reply_allowed(
+                    "catchup", str(self._cfg_get("reply_mode", "auto") or "auto"),
+                ):
+                    logger.info(
+                        "[wa_rpa] catchup blocked round=%d reason=%s",
+                        _cu_round, _cu_block or "reply_mode",
                     )
-                    if not _cu_send.get("ok"):
-                        _cu_send = await self._pace_and_send(_cu_xml, _cu_reply)
-                else:
-                    _cu_send = await self._pace_and_send(_cu_xml, _cu_reply)
-                if not _cu_send.get("ok"):
-                    logger.warning("[wa_rpa] catchup send_fail round=%d", _cu_round)
+                    break
+
+                async def _cu_perform() -> Dict[str, Any]:
+                    if _cu_quote_msg is not None:
+                        _cu_send = await self._quote_reply_msg(
+                            self._serial, _cu_quote_msg.cx, _cu_quote_msg.cy, _cu_reply, (sw, sh)
+                        )
+                        if not _cu_send.get("ok"):
+                            _cu_send = await self._pace_and_send(_cu_xml, _cu_reply)
+                        return _cu_send
+                    return await self._pace_and_send(_cu_xml, _cu_reply)
+
+                _cu_fin = await self._commit_auto_send(
+                    source="catchup",
+                    identity=_obs["identity"],
+                    text=_cu_reply,
+                    peer_text=_cu_text,
+                    performer=None if self._device is not None else _cu_perform,
+                )
+                if _cu_fin.get("status") != "sent":
+                    logger.warning(
+                        "[wa_rpa] catchup not confirmed round=%d status=%s",
+                        _cu_round, _cu_fin.get("status"),
+                    )
                     break
                 _catchup_last_hash = _cu_hash
                 if self._state_store:
@@ -3608,6 +4011,9 @@ class WhatsAppRpaRunner:
 
         # 发完后强制跳回聊天列表（am start 比 KEYCODE_BACK 更可靠）
         # 防止 WA 停在聊天界面 → 后续新消息被自动已读 → runner 永久漏检
+        if self._device is not None:
+            self._device.back()
+            return self._finish(result, t0)
         _go_home = (
             f"am start -n {self._wa_pkg}/{self._wa_activity} "
             f"--activity-clear-top --activity-new-task >/dev/null 2>&1; echo OK"
