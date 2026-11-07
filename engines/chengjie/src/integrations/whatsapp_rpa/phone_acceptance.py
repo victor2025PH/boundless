@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import time
 from pathlib import Path
@@ -103,12 +104,39 @@ def png_size(png: bytes) -> tuple:
     return (width, height)
 
 
+_CLOCK_LINE = re.compile(
+    r"^(?:凌晨|清晨|早上|上午|中午|下午|傍晚|晚上|夜间)?"
+    r"\s*\d{1,2}\s*[:：]\s*\d{2}"
+    r"(?:\s*(?:AM|PM|am|pm))?$"
+)
+_DATE_LINE = re.compile(
+    r"^(?:今天|昨天|前天|Today|Yesterday|"
+    r"星期[一二三四五六日天]|周[一二三四五六日天]|"
+    r"\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日|"
+    r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2})$",
+    re.IGNORECASE,
+)
+
+
+def _is_time_or_date(text: str) -> bool:
+    """整行是时间或日期分隔条。消息正文里夹着钟点时保留。"""
+    cleaned = re.sub(r"^[□■•·|\-\s]+|[□■•·|\-\s]+$", "", str(text or "").strip())
+    if not cleaned:
+        return True
+    return _CLOCK_LINE.match(cleaned) is not None or _DATE_LINE.match(cleaned) is not None
+
+
 def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) -> PhoneScreen:
-    """按 PP-OCR 的像素框把文字分成顶栏、输入框、对方气泡、己方气泡。"""
+    """按 PP-OCR 的像素框把文字分成顶栏、输入框、对方气泡、己方气泡。
+
+    对方在左侧，己方在右侧，看文字框靠哪一边，不看中心点是否过半。
+    时间和日期分隔条不进气泡。
+    """
     header: List[str] = []
     composer: List[str] = []
     incoming: List[str] = []
     outgoing: List[str] = []
+    notes: List[str] = []
     if width <= 0 or height <= 0:
         return PhoneScreen()
     for line in lines or []:
@@ -116,21 +144,30 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int) ->
         box = line.get("box") or []
         if not text or len(box) < 4:
             continue
-        cx = (float(box[0]) + float(box[2])) / 2.0
         cy = (float(box[1]) + float(box[3])) / 2.0
         if cy < height * 0.16:
             header.append(text)
-        elif cy > height * 0.82:
+            continue
+        if cy > height * 0.82:
             composer.append(text)
-        elif cx >= width * 0.55:
+            continue
+        if _is_time_or_date(text):
+            notes.append(text)
+            continue
+        left = float(box[0])
+        right_gap = float(width) - float(box[2])
+        if right_gap < left:
             outgoing.append(text)
-        else:
+        elif left < right_gap:
             incoming.append(text)
+        else:
+            notes.append(text)
     return PhoneScreen(
         header=" ".join(header),
         composer="\n".join(composer),
         outgoing=outgoing,
         last_incoming=incoming[-1] if incoming else "",
+        notes=notes,
     )
 
 
@@ -323,6 +360,7 @@ class EvidenceLog:
             "composer": screen.composer,
             "outgoing": list(screen.outgoing or []),
             "last_incoming": screen.last_incoming,
+            "notes": list(getattr(screen, "notes", []) or []),
         }
         if extra:
             ocr.update(safe_log_fields(extra, self.secrets))
@@ -427,6 +465,15 @@ class SshAdbPhoneDevice:
         if code != 0:
             raise RuntimeError(redact_text(err or "tap failed", []))
 
+    async def tap_header(self) -> None:
+        code, out, err = await self._run(["shell", "wm", "size"])
+        text = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out)
+        width, height = _parse_wm_size(text)
+        x, y = int(width * 0.32), int(height * 0.09)
+        code, _out, err = await self._run(["shell", "input", "tap", str(x), str(y)])
+        if code != 0:
+            raise RuntimeError(redact_text(err or "header tap failed", []))
+
     async def press_back(self) -> None:
         await self._run(["shell", "input", "keyevent", "KEYCODE_BACK"])
 
@@ -469,13 +516,17 @@ async def preview_prefill(device: Any, phone: str, text: str, evidence: Evidence
     await device.open_url(url)
     ready = await wait_for_chat(device, phone, expected=text)
     compared = compare_prefill(text, str(ready.get("composer") or ""))
+    confirmed = bool(ready.get("profile_confirmed"))
     if ready.get("ready") and compared["match"]:
-        return {"status": "dry_run", "reason": "", "tapped": False, "url": url, "polls": ready.get("polls"), **compared}
+        return {
+            "status": "dry_run", "reason": "", "tapped": False, "url": url,
+            "polls": ready.get("polls"), "profile_confirmed": confirmed, **compared,
+        }
     reason = str(ready.get("reason") or "chat_not_ready")
     status = "throttled" if reason == "wa_rate_limit" else "failed"
     return {
         "status": status, "reason": reason, "tapped": False, "url": url,
-        "polls": ready.get("polls"), **compared,
+        "polls": ready.get("polls"), "profile_confirmed": confirmed, **compared,
     }
 
 

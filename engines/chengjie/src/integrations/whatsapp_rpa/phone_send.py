@@ -76,7 +76,10 @@ def composer_matches(composer: str, expected: str) -> bool:
 
 
 def screen_blob(screen: "PhoneScreen") -> str:
-    parts = [screen.header, screen.composer, screen.last_incoming, *list(screen.outgoing or [])]
+    parts = [
+        screen.header, screen.composer, screen.last_incoming,
+        *list(screen.outgoing or []), *list(screen.notes or []),
+    ]
     return "\n".join(str(part or "") for part in parts)
 
 
@@ -145,6 +148,7 @@ class PhoneScreen:
     composer: str = ""
     outgoing: List[str] = field(default_factory=list)
     last_incoming: str = ""
+    notes: List[str] = field(default_factory=list)
 
 
 class PhoneDevice(Protocol):
@@ -192,7 +196,7 @@ async def wait_for_chat(
     import asyncio
     import time
 
-    from src.integrations.whatsapp_rpa.phone_identity import header_matches
+    from src.integrations.whatsapp_rpa.phone_identity import header_matches, header_needs_profile
 
     if timeout is None:
         raw_limit = getattr(device, "open_timeout", None)
@@ -209,6 +213,8 @@ async def wait_for_chat(
     started = float(clock())
     last: Optional[PhoneScreen] = None
     polls = 0
+    profile_checked = False
+    profile_confirmed = False
     while True:
         png = await device.screencap()
         screen = await device.read_screen(png)
@@ -217,7 +223,30 @@ async def wait_for_chat(
         last = screen
         polls += 1
         transient = screen_is_transient(screen)
-        header_ok = header_matches(screen.header, phone=phone)
+        header_ok = profile_confirmed or header_matches(screen.header, phone=phone)
+        if (
+            not transient and not header_ok and not profile_checked
+            and header_needs_profile(screen.header, phone=phone)
+            and (not expected or not _composer_still_arriving(screen.composer, expected))
+            and getattr(device, "tap_header", None) is not None
+        ):
+            profile_checked = True
+            confirmed = await confirm_phone_on_profile(device, phone)
+            if not confirmed:
+                return {
+                    "ready": False, "status": "failed", "reason": "header_mismatch",
+                    "polls": polls, "header": screen.header, "composer": screen.composer,
+                    "match": False, "profile_confirmed": False,
+                }
+            profile_confirmed = True
+            png = await device.screencap()
+            screen = await device.read_screen(png)
+            if not isinstance(screen, PhoneScreen):
+                screen = PhoneScreen()
+            last = screen
+            polls += 1
+            transient = screen_is_transient(screen)
+            header_ok = True
         if not transient and header_ok and screen_is_rate_limited(screen):
             return {
                 "ready": False, "status": "throttled", "reason": "wa_rate_limit",
@@ -229,7 +258,7 @@ async def wait_for_chat(
             return {
                 "ready": True, "status": "ready", "reason": "",
                 "polls": polls, "header": screen.header, "composer": screen.composer,
-                "match": matched,
+                "match": matched, "profile_confirmed": profile_confirmed,
             }
         if (
             not transient and header_ok and expected
@@ -248,6 +277,22 @@ async def wait_for_chat(
                 "match": False,
             }
         await sleep(step)
+
+
+async def confirm_phone_on_profile(device: Any, phone: str) -> bool:
+    """点顶栏进联系人资料，读完整号码，再返回聊天页。对不上就不是这个会话。"""
+    from src.integrations.whatsapp_rpa.phone_identity import profile_shows_phone
+
+    await device.tap_header()
+    try:
+        screen = await device.read_screen(await device.screencap())
+    finally:
+        back = getattr(device, "press_back", None)
+        if back is not None:
+            await back()
+    if not isinstance(screen, PhoneScreen):
+        return False
+    return profile_shows_phone(screen, phone)
 
 
 def _wait_timeout_reason(screen: PhoneScreen, phone: str, expected: str) -> str:
@@ -386,6 +431,13 @@ class AdbPhoneDevice:
         size = adb.screen_size(self._serial) or (720, 1600)
         sw, sh = int(size[0]), int(size[1])
         adb.input_tap(self._serial, int(sw * 0.94), int(sh * 0.956))
+
+    async def tap_header(self) -> None:
+        from src.integrations.line_rpa import adb_helpers as adb
+
+        size = adb.screen_size(self._serial) or (720, 1600)
+        sw, sh = int(size[0]), int(size[1])
+        adb.input_tap(self._serial, int(sw * 0.32), int(sh * 0.09))
 
     async def read_screen(self, png: bytes) -> PhoneScreen:
         if self._read_screen_fn is None:

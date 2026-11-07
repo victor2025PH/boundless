@@ -31,7 +31,7 @@ from src.integrations.whatsapp_rpa.phone_acceptance import (
     ssh_adb_argv,
     variant_phone,
 )
-from src.integrations.whatsapp_rpa.phone_identity import header_matches
+from src.integrations.whatsapp_rpa.phone_identity import header_matches, header_needs_profile
 from src.integrations.whatsapp_rpa.phone_ledger import PhoneLedger
 from src.integrations.whatsapp_rpa.phone_loop import WaPhoneLoop
 from src.integrations.whatsapp_rpa.phone_send import PhoneScreen
@@ -65,7 +65,7 @@ class LinkPhone:
         digits = parsed.path.strip("/").split("/")[-1]
         text = unquote(parse_qs(parsed.query).get("text", [""])[0])
         self._bubble = text
-        header = digits[:6] + "…"
+        header = digits[:8] + "…"
         if self.rate:
             composer = (text or "你好") + "\n发送过于频繁，请稍后再试"
         elif self.force_composer is not None:
@@ -112,11 +112,23 @@ def _loop(tmp_path: Path, device, account: str, decide_reply: str = "收到，�
     return loop
 
 
+REAL_HEADER = "凌晨5:46 100 +63 993 355 6... □ 今天"
+REAL_PHONE = "+639933556049"
+
+
 def test_truncated_header_matches_prefix_or_suffix_only():
-    assert header_matches("141555…", phone=PHONE_A)
-    assert header_matches("…2671", phone=PHONE_A)
+    assert header_matches(REAL_HEADER, phone=REAL_PHONE)
+    assert not header_needs_profile(REAL_HEADER, phone=REAL_PHONE)
+    assert header_matches("+63 993 355 6049", phone=REAL_PHONE)
+    assert header_matches("14155552…", phone=PHONE_A)
+    assert not header_matches("141555…", phone=PHONE_A)
+    assert header_needs_profile("141555…", phone=PHONE_A)
+    assert header_needs_profile("+63 99…", phone=REAL_PHONE)
+    assert not header_matches("…2671", phone=PHONE_A)
+    assert not header_needs_profile("…2671", phone=PHONE_A)
     assert not header_matches("5552", phone=PHONE_A)
     assert not header_matches("415555", phone=PHONE_A)
+    assert not header_matches("凌晨5:46 100", phone=REAL_PHONE)
     assert header_matches("Ann", phone=PHONE_A, sender="Ann")
 
 
@@ -166,6 +178,33 @@ def test_ppocr_boxes_split_header_composer_and_bubbles():
     parsed = reader(png)
     assert seen["url"] == "http://192.168.0.176:8766/v1/ocr"
     assert parsed.composer == "你好，这是验收"
+
+
+def test_real_ocr_header_and_bubble_sides():
+    """02→03 干跑的顶栏原文，加上会把时间和己方历史认错的框。"""
+    width, height = 1080, 2400
+    screen = lines_to_screen([
+        {"text": "凌晨5:46", "box": [48, 28, 220, 84]},
+        {"text": "100", "box": [900, 28, 1040, 84]},
+        {"text": "+63 993 355 6...", "box": [160, 150, 780, 230]},
+        {"text": "□", "box": [800, 160, 860, 220]},
+        {"text": "今天", "box": [470, 250, 610, 320]},
+        {"text": "17:02", "box": [760, 500, 900, 560]},
+        {"text": "昨天", "box": [460, 600, 620, 660]},
+        {"text": "在吗", "box": [36, 700, 280, 820]},
+        {"text": "上一句验收", "box": [160, 880, 1000, 1020]},
+        {"text": "你好，这是验收", "box": [80, 2100, 980, 2280]},
+    ], width, height)
+    assert screen.header == REAL_HEADER
+    assert header_matches(screen.header, phone=REAL_PHONE)
+    assert screen.composer == "你好，这是验收"
+    assert screen.last_incoming == "在吗"
+    assert screen.outgoing == ["上一句验收"]
+    assert "17:02" not in screen.outgoing
+    assert "昨天" not in screen.outgoing
+    assert screen.last_incoming != "上一句验收"
+    assert "17:02" in screen.notes
+    assert "昨天" in screen.notes
 
 
 def test_decide_log_does_not_keep_the_token():
@@ -322,7 +361,7 @@ async def test_wa_me_waits_out_contact_picker_and_search(tmp_path: Path):
     device = FramePhone([
         PhoneScreen(header="发送给 03", composer="O"),
         PhoneScreen(header="正在搜索…", composer=""),
-        PhoneScreen(header="639933…", composer="你好，这是验收"),
+        PhoneScreen(header=REAL_HEADER, composer="你好，这是验收"),
     ])
     report = await run_dry(None, device, phone, "你好，这是验收", EvidenceLog(tmp_path / "wait"))
     assert report["ok"] is True
@@ -356,7 +395,7 @@ async def test_name_header_and_wrong_text_are_not_a_ready_chat(tmp_path: Path):
     assert named_report["reason"] == "header_timeout"
     assert named.taps == 0
 
-    wrong = FramePhone([PhoneScreen(header="639933…", composer="不是这句")])
+    wrong = FramePhone([PhoneScreen(header=REAL_HEADER, composer="不是这句")])
     wrong.open_timeout = 30
     wrong_report = await run_dry(
         None, wrong, "+639933556049", "你好，这是验收", EvidenceLog(tmp_path / "wrong"),
@@ -364,6 +403,64 @@ async def test_name_header_and_wrong_text_are_not_a_ready_chat(tmp_path: Path):
     assert wrong_report["reason"] == "composer_mismatch"
     assert wrong_report["polls"] == 1
     assert wrong.t == 0.0
+    assert wrong.taps == 0
+
+
+class ProfilePhone(FramePhone):
+    def __init__(self, profile_header: str):
+        super().__init__([
+            PhoneScreen(header="+63 99…", composer="你好，这是验收"),
+        ])
+        self.profile_header = profile_header
+        self.header_taps = 0
+        self.backs = 0
+        self.phase = "chat"
+
+    async def tap_header(self) -> None:
+        self.header_taps += 1
+        self.phase = "profile"
+
+    async def press_back(self) -> None:
+        self.backs += 1
+        self.phase = "chat"
+
+    async def read_screen(self, png: bytes) -> PhoneScreen:
+        if self.phase == "profile":
+            return PhoneScreen(header=self.profile_header)
+        return self.frames[0]
+
+
+@pytest.mark.asyncio
+async def test_real_header_dry_run_matches_without_opening_profile(tmp_path: Path):
+    device = FramePhone([
+        PhoneScreen(header=REAL_HEADER, composer="你好，这是验收",
+                    outgoing=["17:02"], last_incoming="上一句验收"),
+    ])
+    device.open_timeout = 0
+    report = await run_dry(None, device, REAL_PHONE, "你好，这是验收", EvidenceLog(tmp_path / "real"))
+    assert report["ok"] is True
+    assert report["match"] is True
+    assert report["status"] == "dry_run"
+    assert report["polls"] == 1
+    assert device.taps == 0
+    assert not hasattr(device, "header_taps") or device.header_taps == 0
+
+
+@pytest.mark.asyncio
+async def test_short_prefix_opens_profile_and_checks_the_full_number(tmp_path: Path):
+    device = ProfilePhone("+63 993 355 6049")
+    report = await run_dry(None, device, REAL_PHONE, "你好，这是验收", EvidenceLog(tmp_path / "profile"))
+    assert report["ok"] is True
+    assert report["profile_confirmed"] is True
+    assert device.header_taps == 1
+    assert device.backs == 1
+    assert device.taps == 0
+
+    wrong = ProfilePhone("+63 111 111 1111")
+    missed = await run_dry(None, wrong, REAL_PHONE, "你好，这是验收", EvidenceLog(tmp_path / "other"))
+    assert missed["ok"] is False
+    assert missed["reason"] == "header_mismatch"
+    assert wrong.header_taps == 1
     assert wrong.taps == 0
 
 

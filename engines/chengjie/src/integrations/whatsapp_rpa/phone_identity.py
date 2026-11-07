@@ -98,39 +98,101 @@ def same_name(a: str, b: str) -> bool:
     return bool(left) and left == right
 
 
+_PHONE_CHUNK = re.compile(r"\+?\d(?:[\d\s().-]*\d)?")
+_ELLIPSIS_AFTER = re.compile(r"(?:\.{2,}|…|⋯)")
+_CLOCK_TAIL = re.compile(r"\d[:：]$")
+
+
+def header_number_candidates(shown: str) -> list:
+    """从顶栏抽出号码片段。时钟和电量不并进号码。
+
+    每个结果是 ``(数字, 是否被省略号截断)``。空格、括号、横线已经去掉。
+    没有加号、又不足 4 位的数字（电量 100、分钟 46）丢弃。
+    """
+    text = str(shown or "")
+    found = []
+    for match in _PHONE_CHUNK.finditer(text):
+        raw = match.group(0)
+        before = text[max(0, match.start() - 3):match.start()]
+        if _CLOCK_TAIL.search(before):
+            continue
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        if not digits:
+            continue
+        if not raw.lstrip().startswith("+") and len(digits) < 4:
+            continue
+        after = text[match.end():match.end() + 3]
+        truncated = _ELLIPSIS_AFTER.match(after) is not None
+        found.append((digits, truncated))
+    return found
+
+
+def _phone_body(phone: str) -> str:
+    e164 = normalize_e164(phone)
+    return e164[1:] if e164 else ""
+
+
 def header_matches(header: str, *, phone: str = "", sender: str = "") -> bool:
     """顶栏必须对上号码或显示名全称。对不上就不能入库、不能发。
 
-    顶栏号码被省略号截断时，可见数字只要是完整号码的前缀或后缀也算对上。
-    没有省略号时，残段至少 6 位，避免一位数字误认。中间一段不算。
+    号码先去掉空格和符号，再按前缀认。至少要连续对上 8 位，或就是完整号码。
+    时钟、电量不参与拼接。不足 8 位的截断不算对上，要去资料页看完整号码。
+    后缀和中间一段都不算。
     """
     shown = str(header or "").strip()
     if not shown:
         return False
-    if phone and _truncated_phone_matches(shown, phone):
+    if phone and _header_prefix_confident(shown, phone):
         return True
     if sender and same_name(shown, sender):
         return True
     return False
 
 
-def _truncated_phone_matches(shown: str, phone: str) -> bool:
+def _header_prefix_confident(shown: str, phone: str) -> bool:
+    body = _phone_body(phone)
+    if not body:
+        return False
+    for digits, _truncated in header_number_candidates(shown):
+        if len(digits) >= 8 and body.startswith(digits):
+            return True
+    return False
+
+
+def header_needs_profile(header: str, *, phone: str = "") -> bool:
+    """截断后的数字是目标号码的前缀，但不足 8 位。要打开资料页，不能直接认。"""
+    if _header_prefix_confident(header, phone):
+        return False
+    body = _phone_body(phone)
+    if not body:
+        return False
+    for digits, truncated in header_number_candidates(header):
+        if truncated and digits and len(digits) < 8 and body.startswith(digits):
+            return True
+    return False
+
+
+def profile_shows_phone(screen, phone: str) -> bool:
+    """资料页上要能读到完整号码。前缀不够，必须和目标逐位相同。"""
     want = normalize_e164(phone)
-    if not want:
+    if not want or screen is None:
         return False
-    digits = "".join(_DIGITS.findall(shown))
-    full = want[1:]
-    if not digits or not full:
-        return False
-    if digits == full:
-        return True
-    if len(digits) >= len(full):
-        return False
-    truncated = any(mark in shown for mark in ("…", "...", "..", "⋯"))
-    minimum = 4 if truncated else 6
-    if len(digits) < minimum:
-        return False
-    return full.startswith(digits) or full.endswith(digits)
+    parts = [
+        getattr(screen, "header", ""),
+        getattr(screen, "composer", ""),
+        getattr(screen, "last_incoming", ""),
+        *list(getattr(screen, "outgoing", []) or []),
+        *list(getattr(screen, "notes", []) or []),
+    ]
+    for part in parts:
+        for line in str(part or "").splitlines():
+            for match in _PHONE_CHUNK.finditer(line):
+                digits = "".join(ch for ch in match.group(0) if ch.isdigit())
+                if not digits:
+                    continue
+                if normalize_e164("+" + digits) == want:
+                    return True
+    return False
 
 
 def lookup_phone_by_name(store, account_id: str, name: str) -> str:
