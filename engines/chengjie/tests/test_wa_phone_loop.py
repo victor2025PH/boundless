@@ -261,7 +261,7 @@ async def test_reply_writes_inbox_and_sends_once(tmp_path: Path):
     assert result["conversation_id"] == conversation_id(ACCOUNT, PHONE)
     assert result["send"]["status"] == "sent"
     assert device.taps == 1
-    assert "text=" in device.urls[-1]
+    assert device.urls == []
     rows = loop.inbox.list_recent_messages(result["conversation_id"])
     assert [row["direction"] for row in rows] == ["in", "out"]
     assert rows[1]["text"] == "你好呀"

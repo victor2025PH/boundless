@@ -366,6 +366,27 @@ def _wait_timeout_reason(screen: PhoneScreen, phone: str, expected: str) -> str:
     return "chat_not_ready"
 
 
+async def _replace_draft_if_needed(device: Any, url: str, body: str) -> None:
+    """预填前先看输入框。已经是这句就不再打开链接，以免叠上一遍。
+
+    框里是别的草稿就先清空，再预填。空框直接预填。
+    """
+    current = ""
+    try:
+        screen = await device.read_screen(await device.screencap())
+    except Exception:
+        screen = None
+    if isinstance(screen, PhoneScreen):
+        current = str(screen.composer or "")
+    if composer_matches(current, body):
+        return
+    if composer_body(current):
+        clear = getattr(device, "clear_composer", None)
+        if clear is not None:
+            await clear()
+    await device.open_url(url)
+
+
 async def deliver_via_wa_me(
     device: PhoneDevice,
     phone: str,
@@ -383,7 +404,7 @@ async def deliver_via_wa_me(
     if dry_run:
         return SendOutcome(status="dry_run", reason="dry_run", url=url)
 
-    await device.open_url(url)
+    await _replace_draft_if_needed(device, url, body)
     dismiss = getattr(device, "dismiss_keyboard", None)
     if dismiss is not None:
         await dismiss()

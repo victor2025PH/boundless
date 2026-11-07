@@ -99,27 +99,27 @@ def same_name(a: str, b: str) -> bool:
 
 
 _PHONE_CHUNK = re.compile(r"\+?\d(?:[\d\s().-]*\d)?")
+_PLUS_PHONE = re.compile(r"\+[\d\s-]*\d")
 _ELLIPSIS_AFTER = re.compile(r"(?:\.{2,}|…|⋯)")
-_CLOCK_TAIL = re.compile(r"\d[:：]$")
+_CUT_PREFIX = re.compile(r"(?<!\d)(\d{4,})(?=(?:\.{2,}|…|⋯))")
+_NOT_A_NAME = re.compile(
+    r"^(?:今天|昨天|前天|在线|在線|online|last seen.*|正在输入.*|typing.*)$",
+    re.IGNORECASE,
+)
 
 
 def header_number_candidates(shown: str) -> list:
-    """从顶栏抽出号码片段。时钟和电量不并进号码。
+    """只认以加号开头的那一段。省略号处停下，后面的数字不并进来。
 
-    每个结果是 ``(数字, 是否被省略号截断)``。空格、括号、横线已经去掉。
-    没有加号、又不足 4 位的数字（电量 100、分钟 46）丢弃。
+    每个结果是 ``(数字, 是否被省略号截断)``。空格和横线已经去掉。
+    状态栏的时间、电量，以及号码框右侧单独的「2」，都不会进这段数字。
     """
     text = str(shown or "")
     found = []
-    for match in _PHONE_CHUNK.finditer(text):
+    for match in _PLUS_PHONE.finditer(text):
         raw = match.group(0)
-        before = text[max(0, match.start() - 3):match.start()]
-        if _CLOCK_TAIL.search(before):
-            continue
         digits = "".join(ch for ch in raw if ch.isdigit())
-        if not digits:
-            continue
-        if not raw.lstrip().startswith("+") and len(digits) < 4:
+        if len(digits) < 4:
             continue
         after = text[match.end():match.end() + 3]
         truncated = _ELLIPSIS_AFTER.match(after) is not None
@@ -132,12 +132,24 @@ def _phone_body(phone: str) -> str:
     return e164[1:] if e164 else ""
 
 
+def _looks_like_contact_name(shown: str) -> bool:
+    """没有加号的顶栏。人名要去资料页看完整号码。在线、加密、日期不是人名。"""
+    text = re.sub(r"\s+", " ", str(shown or "")).strip()
+    if not text or _PLUS_PHONE.search(text):
+        return False
+    if _NOT_A_NAME.match(text):
+        return False
+    folded = text.casefold()
+    if "端到端" in text or "end-to-end" in folded:
+        return False
+    return re.search(r"[A-Za-z\u4e00-\u9fff]", text) is not None
+
+
 def header_matches(header: str, *, phone: str = "", sender: str = "") -> bool:
     """顶栏必须对上号码或显示名全称。对不上就不能入库、不能发。
 
-    号码先去掉空格和符号，再按前缀认。至少要连续对上 8 位，或就是完整号码。
-    时钟、电量不参与拼接。不足 8 位的截断不算对上，要去资料页看完整号码。
-    后缀和中间一段都不算。
+    只拿以加号开头的那一段数字做前缀。至少连续对上 8 位。
+    省略号后面的数字、状态栏和在线状态都不参与。没有加号的人名要去资料页。
     """
     shown = str(header or "").strip()
     if not shown:
@@ -160,14 +172,21 @@ def _header_prefix_confident(shown: str, phone: str) -> bool:
 
 
 def header_needs_profile(header: str, *, phone: str = "") -> bool:
-    """截断后的数字是目标号码的前缀，但不足 8 位。要打开资料页，不能直接认。"""
-    if _header_prefix_confident(header, phone):
+    """加号号码太短，或顶栏是联系人名。要打开资料页看完整号码。"""
+    shown = str(header or "").strip()
+    if _header_prefix_confident(shown, phone):
         return False
+    if _looks_like_contact_name(shown):
+        return True
     body = _phone_body(phone)
     if not body:
         return False
-    for digits, truncated in header_number_candidates(header):
+    for digits, truncated in header_number_candidates(shown):
         if truncated and digits and len(digits) < 8 and body.startswith(digits):
+            return True
+    for match in _CUT_PREFIX.finditer(shown):
+        digits = match.group(1)
+        if digits and body.startswith(digits) and len(digits) < len(body):
             return True
     return False
 

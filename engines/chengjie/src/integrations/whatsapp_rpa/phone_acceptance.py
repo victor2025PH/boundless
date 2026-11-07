@@ -386,6 +386,27 @@ def _bubble_side(box: Sequence[float], width: float, png: bytes) -> str:
     return "out"
 
 
+def _header_noise(text: str) -> bool:
+    """在线状态和加密提示不是号码，也不拿去当联系人名。"""
+    raw = str(text or "").strip()
+    folded = raw.casefold()
+    if raw in {"在线", "在線"} or folded in {"online", "typing"}:
+        return True
+    if folded.startswith("last seen") or raw.startswith("正在输入"):
+        return True
+    return "端到端加密" in raw or "end-to-end" in folded
+
+
+def _header_text(parts: Sequence[str]) -> str:
+    """有加号号码框时只用那一框。省略号留在原文里，后面的框不拼进来。"""
+    from src.integrations.whatsapp_rpa.phone_identity import header_number_candidates
+
+    plus = [text for text in parts if header_number_candidates(text)]
+    if plus:
+        return plus[0].strip()
+    return " ".join(part.strip() for part in parts if part.strip())
+
+
 def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
                     png: bytes = b"") -> PhoneScreen:
     """按 PP-OCR 的像素框把文字分成顶栏、输入框、对方气泡、己方气泡。
@@ -408,7 +429,12 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
         if not text or len(box) < 4:
             continue
         cy = (float(box[1]) + float(box[3])) / 2.0
+        if cy < height * 0.05:
+            continue
         if cy < height * 0.16:
+            if _header_noise(text) or is_screen_chrome(text):
+                notes.append(text)
+                continue
             header.append(text)
             continue
         if is_screen_chrome(text):
@@ -428,7 +454,7 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
         else:
             incoming.append(text)
     return PhoneScreen(
-        header=" ".join(header),
+        header=_header_text(header),
         composer="\n".join(composer),
         outgoing=outgoing,
         incoming=incoming,
@@ -874,6 +900,14 @@ class SshAdbPhoneDevice:
     async def dismiss_keyboard(self) -> None:
         """ESC。预填会把键盘顶起来，建议条会挡住输入栏。"""
         await self._run(["shell", "input", "keyevent", "111"])
+
+    async def clear_composer(self) -> None:
+        """先点输入栏，光标移到末尾，再删掉未发出的草稿。"""
+        await self.dismiss_keyboard()
+        width, height = await self._device_size()
+        x, y = max(1, int(width * 0.42)), max(1, int(height * 0.91))
+        deletes = " ".join(["input keyevent 67"] * 100)
+        await self._run(["shell", f"input tap {x} {y}; input keyevent 123; {deletes}"])
 
     async def _device_size(self) -> tuple:
         code, out, _err = await self._run(["shell", "wm", "size"])

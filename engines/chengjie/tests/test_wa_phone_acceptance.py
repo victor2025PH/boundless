@@ -68,7 +68,7 @@ class LinkPhone:
         digits = parsed.path.strip("/").split("/")[-1]
         text = unquote(parse_qs(parsed.query).get("text", [""])[0])
         self._bubble = text
-        header = digits[:8] + "…"
+        header = "+" + digits[:8] + "…"
         if self.rate:
             composer = (text or "你好") + "\n发送过于频繁，请稍后再试"
         elif self.force_composer is not None:
@@ -123,9 +123,12 @@ def test_truncated_header_matches_prefix_or_suffix_only():
     assert header_matches(REAL_HEADER, phone=REAL_PHONE)
     assert not header_needs_profile(REAL_HEADER, phone=REAL_PHONE)
     assert header_matches("+63 993 355 6049", phone=REAL_PHONE)
-    assert header_matches("14155552…", phone=PHONE_A)
+    assert not header_matches("14155552…", phone=PHONE_A)
+    assert header_needs_profile("14155552…", phone=PHONE_A)
     assert not header_matches("141555…", phone=PHONE_A)
     assert header_needs_profile("141555…", phone=PHONE_A)
+    assert header_needs_profile("小明", phone=PHONE_A)
+    assert not header_matches("小明", phone=PHONE_A)
     assert header_needs_profile("+63 99…", phone=REAL_PHONE)
     assert not header_matches("…2671", phone=PHONE_A)
     assert not header_needs_profile("…2671", phone=PHONE_A)
@@ -465,8 +468,9 @@ def test_real_ocr_header_and_bubble_sides():
         {"text": "上一句验收", "box": [160, 880, 1000, 1020]},
         {"text": "你好，这是验收", "box": [80, 2100, 980, 2280]},
     ], width, height)
-    assert screen.header == REAL_HEADER
+    assert screen.header == "+63 993 355 6..."
     assert header_matches(screen.header, phone=REAL_PHONE)
+    assert header_matches(REAL_HEADER, phone=REAL_PHONE)
     assert screen.composer == "你好，这是验收"
     assert screen.last_incoming == "在吗"
     assert screen.outgoing == ["上一句验收"]
@@ -475,6 +479,114 @@ def test_real_ocr_header_and_bubble_sides():
     assert screen.last_incoming != "上一句验收"
     assert "17:02" in screen.notes
     assert "昨天" in screen.notes
+
+
+def test_header_uses_only_the_plus_box_and_stops_at_the_ellipsis():
+    """03 顶栏把电量、时间和右侧的「2」拼进号码，前缀才和 639543629194 冲突。"""
+    from src.integrations.whatsapp_rpa.phone_identity import header_number_candidates
+
+    blob = "6:51… 100 +63 954362 9... 2 在线 消息和通话已进行端到端加密…"
+    phone = "+639543629194"
+    assert header_number_candidates(blob) == [("639543629", True)]
+    assert header_matches(blob, phone=phone)
+    assert "6395436292" not in [digits for digits, _flag in header_number_candidates(blob)]
+    width, height = 720, 1600
+    screen = lines_to_screen([
+        {"text": "6:51", "box": [24, 8, 90, 36]},
+        {"text": "100", "box": [620, 8, 690, 36]},
+        {"text": "+63 954 362 9...", "box": [198, 86, 435, 121]},
+        {"text": "2", "box": [579, 111, 586, 122]},
+        {"text": "在线", "box": [198, 128, 250, 156]},
+        {"text": "消息和通话已进行端到端加密", "box": [40, 180, 680, 230]},
+    ], width, height)
+    assert screen.header == "+63 954 362 9..."
+    assert header_matches(screen.header, phone=phone)
+    assert "在线" not in screen.header
+    assert "端到端" not in screen.header
+    named = lines_to_screen([
+        {"text": "小明", "box": [198, 86, 320, 121]},
+    ], width, height)
+    assert named.header == "小明"
+    assert header_needs_profile(named.header, phone=phone)
+
+
+@pytest.mark.asyncio
+async def test_existing_draft_is_sent_or_cleared_before_prefill():
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    from src.integrations.whatsapp_rpa.phone_send import deliver_via_wa_me
+
+    sentence = "早呀，这个点起得挺早嘛"
+
+    class SameDraft:
+        def __init__(self):
+            self.taps = 0
+            self.urls = []
+            self.cleared = False
+            self.screen = PhoneScreen(header=PHONE_A, composer=sentence)
+
+        async def open_url(self, url: str) -> None:
+            self.urls.append(url)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return self.screen
+
+        async def clear_composer(self) -> None:
+            self.cleared = True
+
+        async def tap_send(self) -> None:
+            self.taps += 1
+            self.screen = PhoneScreen(header=PHONE_A, composer="", outgoing=[sentence])
+
+        async def press_back(self) -> None:
+            return None
+
+    same = SameDraft()
+    sent = await deliver_via_wa_me(same, PHONE_A, sentence)
+    assert sent.status == "sent"
+    assert same.urls == []
+    assert same.cleared is False
+    assert same.taps == 1
+
+    class StaleDraft:
+        def __init__(self):
+            self.taps = 0
+            self.urls = []
+            self.cleared = False
+            self.screen = PhoneScreen(header=PHONE_A, composer="不忙呢，刚起来没多久")
+
+        async def open_url(self, url: str) -> None:
+            self.urls.append(url)
+            text = unquote(parse_qs(urlparse(url).query).get("text", [""])[0])
+            prior = "" if self.cleared else self.screen.composer
+            self.screen = PhoneScreen(header=PHONE_A, composer=prior + text)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return self.screen
+
+        async def clear_composer(self) -> None:
+            self.cleared = True
+            self.screen = PhoneScreen(header=PHONE_A, composer="")
+
+        async def tap_send(self) -> None:
+            self.taps += 1
+            shown = self.screen.composer
+            self.screen = PhoneScreen(header=PHONE_A, composer="", outgoing=[shown])
+
+        async def press_back(self) -> None:
+            return None
+
+    stale = StaleDraft()
+    sent = await deliver_via_wa_me(stale, PHONE_A, sentence)
+    assert stale.cleared is True
+    assert sent.status == "sent"
+    assert stale.screen.outgoing == [sentence]
 
 
 def test_decide_log_does_not_keep_the_token():
