@@ -360,6 +360,23 @@ def _paint_bubbles() -> bytes:
     return buf.getvalue()
 
 
+def test_wrapped_reply_lines_merge_upward_when_the_left_edge_matches():
+    """03 的三行回复被折成五行，行距大约 50px，超过旧的 1.5 倍行高。"""
+    lines = [
+        {"text": "早呀，这个点起得挺早", "box": [112, 1301, 470, 1335]},
+        {"text": "嘛", "box": [111, 1350, 150, 1389]},
+        {"text": "我在呢，还没吃早饭，先喝口水缓一缓", "box": [111, 1403, 451, 1441]},
+        {"text": "你周末也这么早起", "box": [112, 1453, 367, 1494]},
+        {"text": "？", "box": [111, 1506, 417, 1543]},
+        {"text": "D", "box": [507, 1535, 544, 1572]},
+    ]
+    screen = lines_to_screen(lines, 720, 1600)
+    expected = "早呀，这个点起得挺早嘛\n我在呢，还没吃早饭，先喝口水缓一缓\n你周末也这么早起？"
+    assert "D" not in screen.composer
+    assert composer_matches(screen.composer, expected)
+    assert composer_matches("早呀， 这个点起得挺早嘛", "早呀，这个点起得挺早嘛")
+
+
 def test_own_bubble_is_green_even_when_its_center_is_left_of_center():
     """02 发出的气泡 [197,739,519,776]，中心 x=358，在 720 宽的左半边。
 
@@ -588,6 +605,60 @@ async def test_visible_seed_is_marked_sent_and_not_sent_again(tmp_path: Path):
     assert device_a.taps == 0
     assert ledger.get_send("old-fail")["status"] == "sent"
     assert ledger.has_sent_content(key) is True
+
+
+@pytest.mark.asyncio
+async def test_empty_text_is_reread_and_the_next_turn_still_runs(tmp_path: Path):
+    sentence = "你好，早上好，在忙吗"
+
+    class Quiet:
+        def __init__(self):
+            self.reads = 0
+            self.taps = 0
+            self.urls = []
+
+        async def open_url(self, url: str) -> None:
+            self.urls.append(url)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            self.reads += 1
+            return PhoneScreen(header=PHONE_A, composer="")
+
+        async def poll_notifications(self):
+            return []
+
+        async def tap_send(self) -> None:
+            self.taps += 1
+
+        async def press_back(self) -> None:
+            return None
+
+    device_a = LinkPhone("a", PHONE_A, {})
+    device_b = Quiet()
+    store = InboxStore(tmp_path / "inbox.db")
+
+    async def decide(**kwargs):
+        return {"ok": True, "reply": "收到"}
+
+    def make(account, device, name):
+        return WaPhoneLoop(
+            account_id=account, inbox=store, device=device, decide_fn=decide,
+            cfg={"enabled": True, "hourly_cap": 20, "daily_cap": 80},
+            ledger=PhoneLedger(tmp_path / f"{name}.db"),
+            now_fn=lambda: 1_700_000_000.0, run_id=name,
+        )
+
+    report = await run_pair_chat(
+        make("seat-a", device_a, "a"), make("seat-b", device_b, "b"),
+        PHONE_A, PHONE_B, 3, sentence, EvidenceLog(tmp_path / "empty"),
+    )
+    assert [row.get("status") for row in report["turns"]][0] == "sent"
+    assert report["turns"][1]["reason"] == "empty_text"
+    assert len(report["turns"]) == 3
+    assert device_b.reads >= 2
 
 
 @pytest.mark.asyncio

@@ -105,6 +105,62 @@ def _ready(text: str, header: str = PHONE) -> FakeDevice:
     )
 
 
+def test_reply_chunks_split_on_newlines_and_truncate_a_long_line():
+    from src.integrations.whatsapp_rpa.phone_loop import reply_chunks
+    text = "早呀，这个点起得挺早嘛\n我在呢，还没吃早饭，先喝口水缓一缓\n你周末也这么早起？"
+    assert reply_chunks(text) == [
+        "早呀，这个点起得挺早嘛",
+        "我在呢，还没吃早饭，先喝口水缓一缓",
+        "你周末也这么早起？",
+    ]
+    long = "啊" * 100
+    assert reply_chunks(long) == ["啊" * 80]
+
+
+@pytest.mark.asyncio
+async def test_multiline_reply_is_sent_as_separate_bubbles(tmp_path: Path):
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    class Prefill:
+        def __init__(self):
+            self.taps = 0
+            self.sent = []
+            self.screen = PhoneScreen(header=PHONE, composer="")
+
+        async def open_url(self, url: str) -> None:
+            text = unquote(parse_qs(urlparse(url).query).get("text", [""])[0])
+            self.screen = PhoneScreen(header=PHONE, composer=text)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return self.screen
+
+        async def tap_send(self) -> None:
+            self.taps += 1
+            chunk = self.screen.composer
+            self.sent.append(chunk)
+            self.screen = PhoneScreen(header=PHONE, composer="", outgoing=[chunk])
+
+        async def press_back(self) -> None:
+            return None
+
+    device = Prefill()
+    reply = "早呀，这个点起得挺早嘛\n我在呢，还没吃早饭，先喝口水缓一缓\n你周末也这么早起？"
+    loop = _loop(tmp_path, device, reply=reply)
+    result = await loop.handle_inbound(phone=PHONE, text="在吗")
+    assert device.taps == 3
+    assert device.sent == [
+        "早呀，这个点起得挺早嘛",
+        "我在呢，还没吃早饭，先喝口水缓一缓",
+        "你周末也这么早起？",
+    ]
+    assert result["send"]["status"] == "sent"
+    ids = [row["client_msg_id"] for row in result["sends"]]
+    assert len(set(ids)) == 3
+
+
 def test_e164_key_and_wa_me_keeps_chinese():
     assert normalize_e164("你好") == ""
     assert normalize_e164("+1 (415) 555-2671") == PHONE

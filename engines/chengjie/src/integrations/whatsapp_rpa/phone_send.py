@@ -96,14 +96,14 @@ def is_screen_chrome(text: str) -> bool:
 
 
 def composer_body(text: str) -> str:
-    """去掉换行和行尾光标，拼成连续文字。系统提示和加密/时间条不参与比对。"""
+    """去掉全部空白、换行和行尾光标。系统提示和加密/时间条不参与比对。"""
     parts = []
     for raw in str(text or "").splitlines() or [""]:
         line = _strip_cursor(_norm(raw))
         if not line or _is_hint_line(line) or is_screen_chrome(line):
             continue
         parts.append(_without_hints(line) or line)
-    return "".join(parts)
+    return re.sub(r"\s+", "", "".join(parts))
 
 
 def composer_matches(composer: str, expected: str) -> bool:

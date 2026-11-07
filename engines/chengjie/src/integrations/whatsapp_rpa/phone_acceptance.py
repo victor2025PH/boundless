@@ -207,7 +207,8 @@ def png_size(png: bytes) -> tuple:
 # 键盘弹起时输入栏不在屏幕最底。核心行是最靠下的那行正文，
 # 只并入和它垂直连着的行。ceb233 真机：正文 [111,1428,474,1472]，
 # 其下「D」[507,1535,544,1572] 是键盘建议条或表情条上的图标。
-_COMPOSER_PITCH = 1.5
+_COMPOSER_PITCH = 2.2
+_LEFT_SLACK = 20.0
 _ICON_GUTTER = 0.15
 
 
@@ -231,32 +232,42 @@ def _is_body_line(box: Sequence[float]) -> bool:
 
 
 def _composer_cluster(items: Sequence[tuple]) -> List[tuple]:
-    """输入框只留最靠下那组正文，以及和它垂直连着的行。
+    """从输入栏最底一行往上，合并左边缘相近、行距还连着的折行。
 
-    行距用两行中心的垂直距离。超过核心行高的 1.5 倍就不是同一栏。
-    字高不到核心的六成、或超过 1.6 倍的孤立框也丢掉。
-    实测正文高 44px、中心在 1450；「D」中心在 1553，相距 103px，
-    大于 1.5×44=66，所以不并进「你好，早上好，在忙吗」。
+    左边缘相差超过 20px 的不是同一栏。行距用相邻两行中心的垂直距离，
+    不超过 2.2 倍行高才继续往上收。中间断开就停。
+    真机三行回复被折成五行，行距大约 50px，旧的 1.5 倍阈值只剩最底两行。
+    「D」的左边缘离正文很远，仍然不并进来。
     """
     if not items:
         return []
     bodies = [item for item in items if _is_body_line(item[1])]
     core = max(bodies or list(items), key=lambda item: float(item[1][3]))
-    core_box = core[1]
-    core_h = _box_height(core_box)
-    core_cy = _box_cy(core_box)
-    kept = [core]
+    core_left = float(core[1][0])
+    column = [
+        item for item in items
+        if abs(float(item[1][0]) - core_left) <= _LEFT_SLACK
+    ]
+    column.sort(key=lambda item: _box_cy(item[1]), reverse=True)
+    kept = [column[0]]
+    for item in column[1:]:
+        prev = kept[-1]
+        pitch = max(_box_height(prev[1]), _box_height(item[1]))
+        dist = abs(_box_cy(item[1]) - _box_cy(prev[1]))
+        if dist > pitch * _COMPOSER_PITCH:
+            break
+        kept.append(item)
+    # 同一行被拆开的字，左边缘不在行首，但和已收下的行垂直重叠。
     for item in items:
-        if item is core:
+        if item in kept:
             continue
         box = item[1]
-        height = _box_height(box)
-        if height < core_h * 0.6 or height > core_h * 1.6:
-            continue
-        overlap = min(float(box[3]), float(core_box[3])) - max(float(box[1]), float(core_box[1]))
-        if overlap <= 0 and abs(_box_cy(box) - core_cy) > core_h * _COMPOSER_PITCH:
-            continue
-        kept.append(item)
+        for kept_item in kept:
+            other = kept_item[1]
+            overlap = min(float(box[3]), float(other[3])) - max(float(box[1]), float(other[1]))
+            if overlap > min(_box_height(box), _box_height(other)) * 0.5:
+                kept.append(item)
+                break
     kept.sort(key=lambda item: (float(item[1][1]), float(item[1][0])))
     return kept
 
@@ -1050,10 +1061,13 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
         }
     text = noted or ""
     if not text:
-        png = await device.screencap()
-        screen = await device.read_screen(png)
-        fresh = new_left_bubbles(getattr(screen, "incoming", None) or [], baseline)
-        text = fresh[-1] if fresh else ""
+        for _ in range(2):
+            png = await device.screencap()
+            screen = await device.read_screen(png)
+            fresh = new_left_bubbles(getattr(screen, "incoming", None) or [], baseline)
+            text = fresh[-1] if fresh else ""
+            if text:
+                break
     if not text:
         return {"ok": False, "reason": "empty_text", "text": "", "header": ready.get("header") or ""}
     return {
@@ -1238,7 +1252,10 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
             heard["turn"] = index
             heard["seat"] = label
             heard["status"] = heard.get("reason") or "failed"
+            heard["ok"] = False
             results.append(heard)
+            if heard.get("reason") == "empty_text":
+                continue
             break
         baselines[label] = list(baselines.get(label, [])) + [str(heard.get("text") or "")]
         baselines[other] = await snapshot_incoming(loops[other].device, own)

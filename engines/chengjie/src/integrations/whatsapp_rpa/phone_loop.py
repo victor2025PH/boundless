@@ -99,6 +99,23 @@ def client_msg_id(source: str, phone: str, text: str, anchor: str = "") -> str:
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
+_REPLY_LINE_LIMIT = 80
+
+
+def reply_chunks(text: str, limit: int = _REPLY_LINE_LIMIT) -> List[str]:
+    """按换行拆成多条短消息。一行太长就截断，不从句子中间再拆开。"""
+    chunks: List[str] = []
+    cap = max(1, int(limit))
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if len(line) > cap:
+            line = line[:cap]
+        chunks.append(line)
+    return chunks
+
+
 def sent_content_key(source: str, phone: str, text: str) -> str:
     """同一来源、号码、正文的稳定号。不带 run id，用来认出已经发出去的那条。"""
     return client_msg_id("sent", phone, text, source)
@@ -351,14 +368,29 @@ class WaPhoneLoop:
             result["reply"] = "pending"
             result["draft"] = reply
             return result
-        sent = await self.send_prepared(
-            phone=e164,
-            text=reply,
-            source="reply",
-            client_msg_id=self.scoped_msg_id("reply", e164, reply, msg_id or body),
-            display_name=display_name,
-        )
-        result["send"] = sent
+        chunks = reply_chunks(reply)
+        sends = []
+        anchor = msg_id or body
+        for index, chunk in enumerate(chunks):
+            sent = await self.send_prepared(
+                phone=e164,
+                text=chunk,
+                source="reply",
+                client_msg_id=self.scoped_msg_id("reply", e164, chunk, f"{anchor}:{index}"),
+                display_name=display_name,
+            )
+            sends.append(sent)
+            if sent.get("status") != "sent":
+                break
+        result["sends"] = sends
+        result["send"] = sends[-1] if len(sends) == 1 else {
+            "status": "sent" if sends and all(row.get("status") == "sent" for row in sends) else (sends[-1].get("status") if sends else "failed"),
+            "parts": sends,
+            "delivered": bool(sends) and all(row.get("status") == "sent" for row in sends),
+            "tapped": any(row.get("tapped") for row in sends),
+        }
+        if len(sends) == 1:
+            result["send"] = sends[0]
         return result
 
     async def send_prepared(
