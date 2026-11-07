@@ -291,6 +291,63 @@ async def test_killed_ui_dump_is_tried_once_then_ocr(tmp_path: Path):
     assert key_at < size_at < tap_at
 
 
+def test_ocr_box_is_scaled_into_device_pixels_before_tap():
+    """ceb233 之后那下点空了：OCR 框在约 720×1600，手机是 1080×2400。
+
+    正文 [111,1432,471,1469]。把这套坐标直接拿去 input tap 会点在 y=1450，
+    打不中大约 0.907W、0.904H 的绿色发送钮。
+    """
+    from src.integrations.whatsapp_rpa.phone_acceptance import locate_send_tap
+
+    sentence = "你好，早上好，在忙吗"
+    box = [111, 1432, 471, 1469]
+    screen = PhoneScreen(composer=sentence, ocr_lines=[{"text": sentence, "box": box}])
+    screen.ocr_size = [720, 1600]
+    point = locate_send_tap(b"", (1080, 2400), screen)
+    cy = (1432 + 1469) / 2.0
+    assert point["tap_source"] == "composer"
+    assert point["tap"] == [round(0.907 * 1080), round(cy * 2400 / 1600)]
+    assert point["tap"][1] != round(cy)
+    assert point["device_size"] == [1080, 2400]
+    assert point["ocr_size"] == [720, 1600]
+    assert abs(point["tap"][0] - 980) <= 1
+    assert abs(point["tap"][1] - 2176) <= 1
+
+
+def test_green_send_button_is_mapped_from_the_screenshot():
+    """461×1024 的预览里绿钮在 (418,925)，对应 720×1600 截图里的 (653,1445)。"""
+    import io
+    from PIL import Image, ImageDraw
+    from src.integrations.whatsapp_rpa.phone_acceptance import find_green_send_center, locate_send_tap
+
+    shot_w, shot_h = 720, 1600
+    view_w, view_h = 461, 1024
+    shot_x = 418 * shot_w / view_w
+    shot_y = 925 * shot_h / view_h
+    image = Image.new("RGB", (shot_w, shot_h), (20, 20, 20))
+    draw = ImageDraw.Draw(image)
+    radius = 22
+    draw.ellipse(
+        (shot_x - radius, shot_y - radius, shot_x + radius, shot_y + radius),
+        fill=(37, 211, 102),
+    )
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    png = buf.getvalue()
+    center = find_green_send_center(png)
+    assert center is not None
+    assert abs(center[0] - shot_x) < 2
+    assert abs(center[1] - shot_y) < 2
+    point = locate_send_tap(png, (1080, 2400), None)
+    assert point["tap_source"] == "green"
+    assert point["shot_size"] == [720, 1600]
+    assert point["device_size"] == [1080, 2400]
+    assert abs(point["tap"][0] - round(shot_x * 1080 / 720)) <= 2
+    assert abs(point["tap"][1] - round(shot_y * 2400 / 1600)) <= 2
+    assert abs(point["tap"][0] - 980) <= 3
+    assert abs(point["tap"][1] - 2168) <= 3
+
+
 def test_prefill_requires_the_chinese_text_not_the_placeholder():
     assert compare_prefill("你好，这是验收", "你好，这是验收")["match"] is True
     placeholder = compare_prefill("你好，这是验收", "输入消息")

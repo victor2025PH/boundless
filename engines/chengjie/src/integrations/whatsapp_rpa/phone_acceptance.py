@@ -100,6 +100,102 @@ def _looks_placeholder(text: str) -> bool:
     return all(_is_hint_line(line) for line in lines)
 
 
+def to_device_point(x: float, y: float, src_w: float, src_h: float,
+                    device_w: float, device_h: float) -> tuple:
+    """把截图或 OCR 坐标换成 adb input tap 用的设备坐标。
+
+    真机上 OCR 框在大约 720×1600 的图里，``wm size`` 往往是 1080×2400。
+    直接把 OCR 的 y=1450 拿去点，会点在屏幕中部，打不中底部的发送按钮。
+    """
+    if src_w <= 0 or src_h <= 0 or device_w <= 0 or device_h <= 0:
+        return (int(round(x)), int(round(y)))
+    return (
+        int(round(float(x) * float(device_w) / float(src_w))),
+        int(round(float(y) * float(device_h) / float(src_h))),
+    )
+
+
+def find_green_send_center(png: bytes):
+    """在截图像素里找输入框右侧的饱和绿色圆钮，返回圆心。
+
+    顶栏也是绿色，所以只在画面下半、靠右 20% 里找。找不到返回 None。
+    """
+    if not png or not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    try:
+        import io
+        from PIL import Image
+        image = Image.open(io.BytesIO(png)).convert("RGB")
+    except Exception:
+        return None
+    width, height = image.size
+    if width < 8 or height < 8:
+        return None
+    pixels = image.load()
+    x0 = int(width * 0.80)
+    y0 = int(height * 0.50)
+    total_x = 0
+    total_y = 0
+    count = 0
+    for y in range(y0, height):
+        for x in range(x0, width):
+            red, green, blue = pixels[x, y][:3]
+            if green >= 150 and green >= red + 45 and green >= blue + 25:
+                total_x += x
+                total_y += y
+                count += 1
+    if count < 20:
+        return None
+    return (total_x / count, total_y / count)
+
+
+def locate_send_tap(png: bytes, device_size: Sequence[float], screen: Optional[PhoneScreen] = None) -> Dict[str, Any]:
+    """发送按钮的设备坐标。优先用截图里的绿色圆，否则用正文中心那一行。
+
+    x 约在屏幕宽度的 0.907。y 和输入框正文中心对齐；键盘收起后大约在 0.904 屏高。
+    """
+    device_w = int(device_size[0]) if device_size else 0
+    device_h = int(device_size[1]) if device_size else 0
+    shot_w, shot_h = png_size(png)
+    ocr_w, ocr_h = shot_w, shot_h
+    if screen is not None and len(getattr(screen, "ocr_size", []) or []) >= 2:
+        ocr_w, ocr_h = int(screen.ocr_size[0]), int(screen.ocr_size[1])
+    green = find_green_send_center(png)
+    if green is not None and shot_w and shot_h and device_w and device_h:
+        tap = to_device_point(green[0], green[1], shot_w, shot_h, device_w, device_h)
+        how = "green"
+    else:
+        cy = None
+        for line in (getattr(screen, "ocr_lines", None) or []):
+            box = line.get("box") or []
+            if len(box) < 4:
+                continue
+            text = str(line.get("text") or "")
+            if text and text == getattr(screen, "composer", ""):
+                cy = (float(box[1]) + float(box[3])) / 2.0
+                break
+        if cy is None:
+            for line in (getattr(screen, "ocr_lines", None) or []):
+                box = line.get("box") or []
+                if len(box) >= 4 and str(line.get("text") or "").strip():
+                    cy = (float(box[1]) + float(box[3])) / 2.0
+        if cy is not None and ocr_h and device_h:
+            _x, y = to_device_point(0, cy, ocr_w or shot_w or 1, ocr_h, device_w or 1, device_h)
+            how = "composer"
+        else:
+            y = int(round(device_h * 0.904)) if device_h else 0
+            how = "fraction"
+        x = int(round(device_w * 0.907)) if device_w else 0
+        tap = (x, y)
+    return {
+        "tap": [int(tap[0]), int(tap[1])],
+        "device_size": [device_w, device_h],
+        "shot_size": [int(shot_w), int(shot_h)],
+        "ocr_size": [int(ocr_w or 0), int(ocr_h or 0)],
+        "tap_source": how,
+    }
+
+
 def png_size(png: bytes) -> tuple:
     if not png or len(png) < 24 or png[12:16] != b"IHDR":
         return (0, 0)
@@ -304,6 +400,10 @@ def make_ppocr_reader(base_url: str, post_json: Optional[Callable[..., Dict[str,
             for line in lines
             if isinstance(line, dict)
         ]
+        screen.shot_size = [int(width), int(height)]
+        reported_w = (data or {}).get("width") or (data or {}).get("image_width") or width
+        reported_h = (data or {}).get("height") or (data or {}).get("image_height") or height
+        screen.ocr_size = [int(reported_w or 0), int(reported_h or 0)]
         screen.source = "ocr"
         return screen
 
@@ -536,7 +636,11 @@ class RecordingDevice:
     async def read_screen(self, png: bytes) -> PhoneScreen:
         self._reads += 1
         screen = await self.inner.read_screen(png)
-        self.evidence.save(f"{self.label}-read{self._reads}", png, screen)
+        extra = getattr(self.inner, "last_tap", None)
+        self.evidence.save(
+            f"{self.label}-read{self._reads}", png, screen,
+            extra=extra if isinstance(extra, dict) else None,
+        )
         return screen
 
     def __getattr__(self, name: str):
@@ -669,6 +773,8 @@ class SshAdbPhoneDevice:
         self.read_screen_fn = read_screen_fn
         self.runner = runner or subprocess_runner
         self.ui_dump_status = ""
+        self.last_tap: Dict[str, Any] = {}
+        self._last_screen: Optional[PhoneScreen] = None
 
     def _argv(self, adb_args: Sequence[str]) -> List[str]:
         return ssh_adb_argv(self.host, self.serial, adb_args)
@@ -693,13 +799,24 @@ class SshAdbPhoneDevice:
         """ESC。预填会把键盘顶起来，建议条会挡住输入栏。"""
         await self._run(["shell", "input", "keyevent", "111"])
 
-    async def tap_send(self) -> None:
-        """先收起键盘，再按当前屏幕重新算发送按钮。"""
-        await self.dismiss_keyboard()
-        code, out, err = await self._run(["shell", "wm", "size"])
+    async def _device_size(self) -> tuple:
+        code, out, _err = await self._run(["shell", "wm", "size"])
         text = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out)
-        width, height = _parse_wm_size(text)
-        x, y = int(width * 0.94), int(height * 0.956)
+        if code != 0:
+            return (0, 0)
+        return _parse_wm_size(text)
+
+    async def tap_send(self) -> None:
+        """收起键盘后，用截图里的绿色圆钮换成设备坐标再点。"""
+        await self.dismiss_keyboard()
+        device_size = await self._device_size()
+        try:
+            png = await self.screencap()
+        except Exception:
+            png = b""
+        point = locate_send_tap(png, device_size, self._last_screen)
+        self.last_tap = point
+        x, y = point["tap"]
         code, _out, err = await self._run(["shell", "input", "tap", str(x), str(y)])
         if code != 0:
             raise RuntimeError(redact_text(err or "tap failed", []))
@@ -756,6 +873,10 @@ class SshAdbPhoneDevice:
         parsed = screen_from_ui_xml(await self.dump_ui_xml())
         if parsed is not None:
             parsed.ui_dump = self.ui_dump_status
+            shot_w, shot_h = png_size(png)
+            if shot_w and shot_h:
+                parsed.shot_size = [int(shot_w), int(shot_h)]
+            self._last_screen = parsed
             return parsed
         screen = self.read_screen_fn(png)
         if hasattr(screen, "__await__"):
@@ -764,7 +885,11 @@ class SshAdbPhoneDevice:
             screen = PhoneScreen()
         if not screen.source:
             screen.source = "ocr"
+        shot_w, shot_h = png_size(png)
+        if shot_w and shot_h and not screen.shot_size:
+            screen.shot_size = [int(shot_w), int(shot_h)]
         screen.ui_dump = self.ui_dump_status
+        self._last_screen = screen
         return screen
 
 

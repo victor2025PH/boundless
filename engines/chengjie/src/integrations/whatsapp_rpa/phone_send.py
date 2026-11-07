@@ -194,6 +194,8 @@ class PhoneScreen:
     ocr_lines: List[dict] = field(default_factory=list)
     source: str = ""
     ui_dump: str = ""
+    shot_size: List[int] = field(default_factory=list)
+    ocr_size: List[int] = field(default_factory=list)
 
 
 class PhoneDevice(Protocol):
@@ -386,11 +388,18 @@ async def deliver_via_wa_me(
 
     await device.tap_send()
     after = await device.read_screen(await device.screencap())
-    if not bubble_visible(after.outgoing, body):
-        return SendOutcome(
-            status="failed", reason="bubble_missing", tapped=True, url=url,
-        )
-    return SendOutcome(status="sent", reason="", tapped=True, url=url)
+    if bubble_visible(after.outgoing, body):
+        return SendOutcome(status="sent", reason="", tapped=True, url=url)
+    # 原文还在输入框、也没有新气泡：这一下没点中发送按钮，重新定位再点一次。
+    # 输入框已经空了就绝不补发，气泡可能只是没被读出来。
+    if composer_matches(after.composer, body):
+        await device.tap_send()
+        after = await device.read_screen(await device.screencap())
+        if bubble_visible(after.outgoing, body):
+            return SendOutcome(status="sent", reason="", tapped=True, url=url)
+    return SendOutcome(
+        status="failed", reason="bubble_missing", tapped=True, url=url,
+    )
 
 
 def _png_of(image) -> bytes:
@@ -482,9 +491,9 @@ class AdbPhoneDevice:
         from src.integrations.line_rpa import adb_helpers as adb
 
         adb.input_keyevent(self._serial, "111")
-        size = adb.screen_size(self._serial) or (720, 1600)
+        size = adb.screen_size(self._serial) or (1080, 2400)
         sw, sh = int(size[0]), int(size[1])
-        adb.input_tap(self._serial, int(sw * 0.94), int(sh * 0.956))
+        adb.input_tap(self._serial, int(round(sw * 0.907)), int(round(sh * 0.904)))
 
     async def tap_header(self) -> None:
         from src.integrations.line_rpa import adb_helpers as adb

@@ -34,6 +34,7 @@ from src.integrations.whatsapp_rpa.phone_send import (
     PhoneScreen,
     bubble_visible,
     composer_matches,
+    deliver_via_wa_me,
 )
 from src.integrations.whatsapp_rpa.service import WhatsAppRpaService
 
@@ -290,6 +291,67 @@ async def test_missing_bubble_is_failed_and_not_retried(tmp_path: Path):
     assert first["status"] == "failed"
     assert first["reason"] == "bubble_missing"
     assert device.taps == 1
+
+
+@pytest.mark.asyncio
+async def test_retap_only_while_the_same_draft_is_still_in_the_box():
+    text = "你好，早上好，在忙吗"
+
+    class StayThenSend:
+        def __init__(self):
+            self.taps = 0
+            self.urls = []
+            self.screen = PhoneScreen(header=PHONE, composer=text)
+
+        async def open_url(self, url):
+            self.urls.append(url)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return self.screen
+
+        async def tap_send(self):
+            self.taps += 1
+            if self.taps >= 2:
+                self.screen = PhoneScreen(header=PHONE, composer="", outgoing=[text])
+
+        async def press_back(self):
+            return None
+
+    stayed = StayThenSend()
+    sent = await deliver_via_wa_me(stayed, PHONE, text)
+    assert sent.status == "sent"
+    assert stayed.taps == 2
+
+    class ClearedWithoutBubble:
+        def __init__(self):
+            self.taps = 0
+            self.urls = []
+            self.screen = PhoneScreen(header=PHONE, composer=text)
+
+        async def open_url(self, url):
+            self.urls.append(url)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return self.screen
+
+        async def tap_send(self):
+            self.taps += 1
+            self.screen = PhoneScreen(header=PHONE, composer="")
+
+        async def press_back(self):
+            return None
+
+    cleared = ClearedWithoutBubble()
+    missed = await deliver_via_wa_me(cleared, PHONE, text)
+    assert missed.status == "failed"
+    assert missed.reason == "bubble_missing"
+    assert cleared.taps == 1
     assert not bubble_visible(["另一句"], "你好呀")
 
 
