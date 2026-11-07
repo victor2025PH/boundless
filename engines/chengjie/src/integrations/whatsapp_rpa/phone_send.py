@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 
 def _norm(text: str) -> str:
@@ -85,6 +85,48 @@ def screen_is_rate_limited(screen: "PhoneScreen") -> bool:
     return any(marker.casefold() in blob for marker in _RATE_LIMIT_MARKERS)
 
 
+# wa.me 打开后会先停在「发送给…」联系人列表或「正在搜索…」弹窗。
+# 这些画面不是聊天页，输入框 OCR 会读成「O」或空串。
+_TRANSIENT_MARKERS = (
+    "发送给",
+    "正在搜索",
+    "选择联系人",
+    "搜索联系人",
+    "send to",
+    "searching",
+    "select contact",
+    "choose contact",
+)
+
+
+def screen_is_transient(screen: "PhoneScreen") -> bool:
+    """联系人选择页或搜索弹窗。要继续等，不能拿来核对输入框。"""
+    blob = screen_blob(screen).casefold()
+    return any(marker.casefold() in blob for marker in _TRANSIENT_MARKERS)
+
+
+def _composer_still_arriving(composer: str, expected: str) -> bool:
+    """空串、单个噪声字、占位提示，或正文还没打全，都继续等。"""
+    text = str(composer or "").strip()
+    if not text or len(text) <= 1 or _is_hint_line(text):
+        return True
+    want = _norm(expected)
+    got = _norm(text)
+    return bool(want) and want.startswith(got) and got != want
+
+
+def composer_settled(composer: str, expected: str) -> bool:
+    """输入框里已经是要发的那句中文。空串、对不上的单个噪声字、只有占位提示都不算就绪。"""
+    if not str(expected or "").strip():
+        return True
+    text = str(composer or "").strip()
+    if not text:
+        return False
+    if len(text) <= 1 and _norm(text) != _norm(expected):
+        return False
+    return composer_matches(text, expected)
+
+
 def bubble_visible(outgoing: List[str], expected: str) -> bool:
     """发出后的截图里要能看到这句己方文字。"""
     want = _norm(expected)
@@ -134,6 +176,94 @@ class SendOutcome:
         }
 
 
+async def wait_for_chat(
+    device: Any,
+    phone: str,
+    *,
+    expected: str = "",
+    timeout: Optional[float] = None,
+    interval: Optional[float] = None,
+) -> Dict[str, Any]:
+    """wa.me 打开之后轮询，直到顶栏是目标号码且输入框就绪。
+
+    联系人选择页和搜索弹窗会继续等。超时后按最后一帧说明停在哪，
+    不把「O」或空串报成正文对不上。
+    """
+    import asyncio
+    import time
+
+    from src.integrations.whatsapp_rpa.phone_identity import header_matches
+
+    if timeout is None:
+        raw_limit = getattr(device, "open_timeout", None)
+        limit = 25.0 if raw_limit is None else float(raw_limit)
+    else:
+        limit = float(timeout)
+    if interval is None:
+        raw_step = getattr(device, "open_interval", None)
+        step = 0.8 if raw_step is None else float(raw_step)
+    else:
+        step = float(interval)
+    clock = getattr(device, "clock", None) or time.monotonic
+    sleep = getattr(device, "sleep_fn", None) or asyncio.sleep
+    started = float(clock())
+    last: Optional[PhoneScreen] = None
+    polls = 0
+    while True:
+        png = await device.screencap()
+        screen = await device.read_screen(png)
+        if not isinstance(screen, PhoneScreen):
+            screen = PhoneScreen()
+        last = screen
+        polls += 1
+        transient = screen_is_transient(screen)
+        header_ok = header_matches(screen.header, phone=phone)
+        if not transient and header_ok and screen_is_rate_limited(screen):
+            return {
+                "ready": False, "status": "throttled", "reason": "wa_rate_limit",
+                "polls": polls, "header": screen.header, "composer": screen.composer,
+                "match": False,
+            }
+        if not transient and header_ok and composer_settled(screen.composer, expected):
+            matched = (not expected) or composer_matches(screen.composer, expected)
+            return {
+                "ready": True, "status": "ready", "reason": "",
+                "polls": polls, "header": screen.header, "composer": screen.composer,
+                "match": matched,
+            }
+        if (
+            not transient and header_ok and expected
+            and not _composer_still_arriving(screen.composer, expected)
+        ):
+            return {
+                "ready": False, "status": "failed", "reason": "composer_mismatch",
+                "polls": polls, "header": screen.header, "composer": screen.composer,
+                "match": False,
+            }
+        if float(clock()) - started >= limit or polls >= 40:
+            return {
+                "ready": False, "status": "failed",
+                "reason": _wait_timeout_reason(screen, phone, expected),
+                "polls": polls, "header": screen.header, "composer": screen.composer,
+                "match": False,
+            }
+        await sleep(step)
+
+
+def _wait_timeout_reason(screen: PhoneScreen, phone: str, expected: str) -> str:
+    from src.integrations.whatsapp_rpa.phone_identity import header_matches
+    if screen_is_transient(screen):
+        return "contact_picker"
+    if not header_matches(screen.header, phone=phone):
+        return "header_timeout"
+    text = str(screen.composer or "").strip()
+    if expected and (not text or len(text) <= 1):
+        return "composer_not_ready"
+    if expected and not composer_matches(screen.composer, expected):
+        return "composer_mismatch"
+    return "chat_not_ready"
+
+
 async def deliver_via_wa_me(
     device: PhoneDevice,
     phone: str,
@@ -141,7 +271,7 @@ async def deliver_via_wa_me(
     *,
     dry_run: bool = False,
 ) -> SendOutcome:
-    """预填、核对、点发送、再核对气泡。任何一步对不上都不再点。"""
+    """预填、等到聊天页、核对中文、点发送、再核对气泡。选择页上不点。"""
     from src.integrations.whatsapp_rpa.phone_identity import wa_me_url
 
     body = str(text or "").strip()
@@ -152,23 +282,14 @@ async def deliver_via_wa_me(
         return SendOutcome(status="dry_run", reason="dry_run", url=url)
 
     await device.open_url(url)
-    before = await device.read_screen(await device.screencap())
-    if screen_is_rate_limited(before):
+    ready = await wait_for_chat(device, phone, expected=body)
+    if not ready.get("ready"):
         try:
             await device.press_back()
         except Exception:
             pass
-        return SendOutcome(
-            status="throttled", reason="wa_rate_limit", tapped=False, url=url,
-        )
-    if not composer_matches(before.composer, body):
-        try:
-            await device.press_back()
-        except Exception:
-            pass
-        return SendOutcome(
-            status="failed", reason="composer_mismatch", tapped=False, url=url,
-        )
+        status = "throttled" if ready.get("reason") == "wa_rate_limit" else "failed"
+        return SendOutcome(status=status, reason=str(ready.get("reason") or "chat_not_ready"), url=url)
 
     await device.tap_send()
     after = await device.read_screen(await device.screencap())

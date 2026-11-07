@@ -215,6 +215,8 @@ async def test_dry_run_checks_chinese_and_does_not_tap(tmp_path: Path):
     assert any(path.name.endswith(".ocr.json") for path in (tmp_path / "evidence").iterdir())
 
     device.force_composer = "输入消息"
+    device.open_timeout = 0
+    device.open_interval = 0
     missed = await run_dry(loop, device, PHONE_B, "你好，这是验收", EvidenceLog(tmp_path / "bad"))
     assert missed["ok"] is False
     assert missed["placeholder_only"] is True
@@ -278,6 +280,123 @@ async def test_cap_stop_convert_and_rate_limit(tmp_path: Path):
     assert rate["status"] == "throttled"
     assert rate["tapped"] is False
     assert cold_texts(["一句"], 2)[0] == "一句"
+
+
+class FramePhone:
+    def __init__(self, frames):
+        self.frames = list(frames)
+        self.i = 0
+        self.taps = 0
+        self.urls = []
+        self.t = 0.0
+        self.open_timeout = 3.0
+        self.open_interval = 1.0
+
+    def clock(self):
+        return self.t
+
+    async def sleep_fn(self, delay):
+        self.t += delay
+
+    async def open_url(self, url: str) -> None:
+        self.urls.append(url)
+
+    async def screencap(self) -> bytes:
+        return b"frame"
+
+    async def read_screen(self, png: bytes) -> PhoneScreen:
+        screen = self.frames[min(self.i, len(self.frames) - 1)]
+        self.i += 1
+        return screen
+
+    async def tap_send(self) -> None:
+        self.taps += 1
+
+    async def press_back(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_wa_me_waits_out_contact_picker_and_search(tmp_path: Path):
+    phone = "+639933556049"
+    device = FramePhone([
+        PhoneScreen(header="发送给 03", composer="O"),
+        PhoneScreen(header="正在搜索…", composer=""),
+        PhoneScreen(header="639933…", composer="你好，这是验收"),
+    ])
+    report = await run_dry(None, device, phone, "你好，这是验收", EvidenceLog(tmp_path / "wait"))
+    assert report["ok"] is True
+    assert report["status"] == "dry_run"
+    assert report["polls"] == 3
+    assert device.taps == 0
+    assert device.i == 3
+
+
+@pytest.mark.asyncio
+async def test_picker_timeout_is_not_a_text_mismatch(tmp_path: Path):
+    device = FramePhone([
+        PhoneScreen(header="发送给 03", composer="O"),
+    ])
+    device.open_timeout = 1.0
+    report = await run_dry(None, device, "+639933556049", "你好，这是验收", EvidenceLog(tmp_path / "stuck"))
+    assert report["ok"] is False
+    assert report["reason"] == "contact_picker"
+    assert report["reason"] != "composer_mismatch"
+    assert device.taps == 0
+
+
+@pytest.mark.asyncio
+async def test_name_header_and_wrong_text_are_not_a_ready_chat(tmp_path: Path):
+    named = FramePhone([PhoneScreen(header="Ann", composer="你好，这是验收")])
+    named.open_timeout = 0
+    named_report = await run_dry(
+        None, named, "+639933556049", "你好，这是验收", EvidenceLog(tmp_path / "name"),
+    )
+    assert named_report["ok"] is False
+    assert named_report["reason"] == "header_timeout"
+    assert named.taps == 0
+
+    wrong = FramePhone([PhoneScreen(header="639933…", composer="不是这句")])
+    wrong.open_timeout = 30
+    wrong_report = await run_dry(
+        None, wrong, "+639933556049", "你好，这是验收", EvidenceLog(tmp_path / "wrong"),
+    )
+    assert wrong_report["reason"] == "composer_mismatch"
+    assert wrong_report["polls"] == 1
+    assert wrong.t == 0.0
+    assert wrong.taps == 0
+
+
+def test_device_lock_is_exclusive_per_serial(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import DeviceBusy, DeviceLock
+
+    first = DeviceLock(tmp_path, "SERIAL_A")
+    first.acquire()
+    second = DeviceLock(tmp_path, "SERIAL_A")
+    with pytest.raises(DeviceBusy):
+        second.acquire()
+    other = DeviceLock(tmp_path, "SERIAL_B")
+    other.acquire()
+    other.release()
+    first.release()
+    second.acquire()
+    second.release()
+
+    stale = tmp_path / ".adb-SERIAL_A.lock"
+    stale.write_text("99999999\n", encoding="utf-8")
+    taken = DeviceLock(tmp_path, "SERIAL_A")
+    taken.acquire()
+    taken.release()
+
+    from src.integrations.whatsapp_rpa.phone_acceptance import lock_serials
+    busy = DeviceLock(tmp_path, "SERIAL_B")
+    busy.acquire()
+    with pytest.raises(DeviceBusy):
+        lock_serials(tmp_path, ["SERIAL_A", "SERIAL_B"])
+    freed = DeviceLock(tmp_path, "SERIAL_A")
+    freed.acquire()
+    freed.release()
+    busy.release()
 
 
 def test_cli_dry_run_uses_injected_device(tmp_path: Path):

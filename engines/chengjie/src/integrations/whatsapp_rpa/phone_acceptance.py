@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shlex
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from src.integrations.whatsapp_rpa.phone_identity import (
-    header_matches,
     normalize_e164,
     wa_me_url,
 )
@@ -207,6 +208,103 @@ def _post_json(url: str, body: Dict[str, Any], timeout: float = 20.0,
         return json.loads(resp.read().decode("utf-8"))
 
 
+class DeviceBusy(RuntimeError):
+    def __init__(self, serial: str) -> None:
+        self.serial = serial
+        super().__init__(f"设备 {serial} 正在被另一个验收占用")
+
+
+class DeviceLock:
+    """同一台手机的独占锁。锁文件按序列号放在 data-dir，进程退出或 release 后放开。"""
+
+    def __init__(self, directory: Path, serial: str) -> None:
+        self.serial = str(serial or "").strip()
+        safe = "".join(ch if ch.isalnum() else "_" for ch in self.serial) or "device"
+        self.path = Path(directory) / f".adb-{safe}.lock"
+        self._fd: Optional[int] = None
+
+    def acquire(self) -> None:
+        if not self.serial:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os_open_exclusive(self.path)
+            except FileExistsError:
+                if not lock_is_stale(self.path):
+                    raise DeviceBusy(self.serial)
+                try:
+                    self.path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            os.write(fd, f"{os.getpid()}\n".encode())
+            self._fd = fd
+            return
+        raise DeviceBusy(self.serial)
+
+    def release(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+        try:
+            if self.path.exists():
+                self.path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def __enter__(self) -> "DeviceLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.release()
+
+
+def os_open_exclusive(path: Path) -> int:
+    return os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+
+
+def lock_is_stale(path: Path, *, max_age_sec: float = 7200.0) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8").strip().splitlines()
+        pid = int(text[0]) if text else 0
+    except (OSError, ValueError):
+        return True
+    if not _pid_alive(pid):
+        return True
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return True
+    return age > max_age_sec
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def lock_serials(directory: Path, serials: Sequence[str]):
+    """按序列号排序加锁，避免两台手机交叉抢锁。中途失败时放开已经拿到的锁。"""
+    locks = [DeviceLock(directory, serial) for serial in sorted({s for s in serials if str(s).strip()})]
+    held: List[DeviceLock] = []
+    try:
+        for lock in locks:
+            lock.acquire()
+            held.append(lock)
+    except DeviceBusy:
+        for lock in held:
+            lock.release()
+        raise
+    return held
+
+
 class EvidenceLog:
     def __init__(self, directory: Path, secrets: Optional[Sequence[str]] = None) -> None:
         self.dir = Path(directory)
@@ -280,6 +378,9 @@ class RecordingDevice:
         screen = await self.inner.read_screen(png)
         self.evidence.save(f"{self.label}-read{self._reads}", png, screen)
         return screen
+
+    def __getattr__(self, name: str):
+        return getattr(self.inner, name)
 
 
 def subprocess_runner(argv: Sequence[str]) -> tuple:
@@ -361,19 +462,21 @@ async def open_peer_chat(device: Any, phone: str) -> str:
 
 
 async def preview_prefill(device: Any, phone: str, text: str, evidence: EvidenceLog) -> Dict[str, Any]:
-    """打开预填链接并核对中文，不点发送。"""
+    """打开预填链接，等到聊天页再核对中文，不点发送。"""
+    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
+
     url = wa_me_url(phone, text)
     await device.open_url(url)
-    png = await device.screencap()
-    screen = await device.read_screen(png)
-    compared = compare_prefill(text, screen.composer)
-    evidence.save("prefill", png, screen, compared)
-    limited = screen_is_rate_limited(screen)
-    if limited:
-        return {"status": "throttled", "reason": "wa_rate_limit", "tapped": False, "url": url, **compared}
-    if not compared["match"]:
-        return {"status": "failed", "reason": "composer_mismatch", "tapped": False, "url": url, **compared}
-    return {"status": "dry_run", "reason": "", "tapped": False, "url": url, **compared}
+    ready = await wait_for_chat(device, phone, expected=text)
+    compared = compare_prefill(text, str(ready.get("composer") or ""))
+    if ready.get("ready") and compared["match"]:
+        return {"status": "dry_run", "reason": "", "tapped": False, "url": url, "polls": ready.get("polls"), **compared}
+    reason = str(ready.get("reason") or "chat_not_ready")
+    status = "throttled" if reason == "wa_rate_limit" else "failed"
+    return {
+        "status": status, "reason": reason, "tapped": False, "url": url,
+        "polls": ready.get("polls"), **compared,
+    }
 
 
 async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog) -> Dict[str, Any]:
@@ -390,16 +493,24 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog) ->
             noted = str(note.get("text") or "").strip()
             break
     await open_peer_chat(device, wanted)
-    png = await device.screencap()
-    screen = await device.read_screen(png)
-    matched = header_matches(screen.header, phone=wanted)
-    text = noted or str(screen.last_incoming or "").strip()
-    evidence.save("inbound", png, screen, {"header_match": matched, "from_notification": bool(noted)})
-    if not matched:
-        return {"ok": False, "reason": "header_mismatch", "text": "", "header": screen.header}
+    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
+    ready = await wait_for_chat(device, wanted, expected="")
+    if not ready.get("ready"):
+        return {
+            "ok": False, "reason": ready.get("reason") or "header_mismatch",
+            "text": "", "header": ready.get("header") or "",
+        }
+    text = noted or ""
     if not text:
-        return {"ok": False, "reason": "empty_text", "text": "", "header": screen.header}
-    return {"ok": True, "text": text, "header": screen.header, "source": "notification" if noted else "screenshot"}
+        png = await device.screencap()
+        screen = await device.read_screen(png)
+        text = str(screen.last_incoming or "").strip()
+    if not text:
+        return {"ok": False, "reason": "empty_text", "text": "", "header": ready.get("header") or ""}
+    return {
+        "ok": True, "text": text, "header": ready.get("header") or "",
+        "source": "notification" if noted else "screenshot",
+    }
 
 
 def cold_texts(texts: Sequence[str], cap: int) -> List[str]:
@@ -470,11 +581,12 @@ async def run_first_touch_cap(loop: Any, phone: str, texts: Sequence[str], cap: 
 async def run_stop_test(loop: Any, phone: str, text: str, evidence: EvidenceLog) -> Dict[str, Any]:
     from src.integrations.whatsapp_rpa.phone_loop import client_msg_id
     await open_peer_chat(loop.device, phone)
-    screen = await loop.device.read_screen(await loop.device.screencap())
-    if not header_matches(screen.header, phone=phone):
+    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
+    ready = await wait_for_chat(loop.device, phone, expected="")
+    if not ready.get("ready"):
         return evidence.finish({
-            "command": "stop-test", "ok": False, "status": "header_mismatch",
-            "header": screen.header,
+            "command": "stop-test", "ok": False, "status": ready.get("reason") or "header_mismatch",
+            "header": ready.get("header") or "",
         })
     inbound = await loop.handle_inbound(phone=phone, text=text, display_name=phone)
     follow = await loop.send_prepared(
@@ -491,11 +603,13 @@ async def run_convert_pending(loop: Any, phone: str, text: str, evidence: Eviden
                               confirm: bool = False) -> Dict[str, Any]:
     loop.cfg["reply_mode"] = "off"
     await open_peer_chat(loop.device, phone)
-    screen = await loop.device.read_screen(await loop.device.screencap())
-    if not header_matches(screen.header, phone=phone):
+    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
+    ready = await wait_for_chat(loop.device, phone, expected="")
+    if not ready.get("ready"):
         return evidence.finish({
-            "command": "convert-pending", "ok": False, "status": "header_mismatch",
-            "header": screen.header,
+            "command": "convert-pending", "ok": False,
+            "status": ready.get("reason") or "header_mismatch",
+            "header": ready.get("header") or "",
         })
     inbound = await loop.handle_inbound(phone=phone, text=text, display_name=phone)
     deal = None

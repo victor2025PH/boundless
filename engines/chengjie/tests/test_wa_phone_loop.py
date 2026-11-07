@@ -352,8 +352,15 @@ async def test_notification_header_must_match_before_ingest(tmp_path: Path):
     assert device.taps == 0
     assert loop.inbox.list_conversations(platform="whatsapp", account_id=ACCOUNT) == []
 
-    device.screen = PhoneScreen(header="Ann", composer="你好呀")
-    device.after = PhoneScreen(header="Ann", outgoing=["你好呀"])
+    device.screen = PhoneScreen(header="Ann", composer="")
+
+    async def open_url(url: str) -> None:
+        await FakeDevice.open_url(device, url)
+        if "text=" in url:
+            device.screen = PhoneScreen(header=PHONE, composer="你好呀")
+            device.after = PhoneScreen(header=PHONE, outgoing=["你好呀"])
+
+    device.open_url = open_url  # type: ignore[method-assign]
     hit = await loop.ingest_notification({
         "sender": "Ann", "text": "在吗", "phone": PHONE,
     })

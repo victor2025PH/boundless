@@ -85,9 +85,11 @@ if str(ROOT) not in sys.path:
 from src.inbox.store import InboxStore
 from src.integrations.whatsapp_rpa.phone_acceptance import (
     TOKEN_ENV_NAMES,
+    DeviceBusy,
     EvidenceLog,
     RecordingDevice,
     SshAdbPhoneDevice,
+    lock_serials,
     make_http_decide,
     make_ppocr_reader,
     run_convert_pending,
@@ -153,6 +155,7 @@ def build_device(args, evidence: EvidenceLog, *, serial: str, label: str, reader
     if not args.adb_ssh_host or not serial:
         raise SystemExit("真机验收需要 --adb-ssh-host 和 --serial")
     inner = SshAdbPhoneDevice(args.adb_ssh_host, serial, reader)
+    inner.open_timeout = float(args.open_timeout)
     return RecordingDevice(inner, evidence, label)
 
 
@@ -185,6 +188,7 @@ def parser() -> argparse.ArgumentParser:
     common.add_argument("--account", default="seat-a")
     common.add_argument("--phone", default="")
     common.add_argument("--persona-id", default="")
+    common.add_argument("--open-timeout", type=float, default=25.0)
     top = argparse.ArgumentParser(description="WhatsApp 号码闭环真机验收")
     sub = top.add_subparsers(dest="command", required=True)
 
@@ -219,6 +223,27 @@ def parser() -> argparse.ArgumentParser:
 async def async_main(args, *, devices=None, decide_fn=None, ocr_reader=None) -> dict:
     data = Path(args.data_dir)
     data.mkdir(parents=True, exist_ok=True)
+    serials = []
+    if args.command == "pair-chat":
+        serials = [args.a_serial, args.b_serial]
+    elif getattr(args, "serial", ""):
+        serials = [args.serial]
+    try:
+        locks = lock_serials(data, serials)
+    except DeviceBusy as busy:
+        raise SystemExit(str(busy)) from busy
+    try:
+        report = await _run_command(
+            args, data, locks, devices=devices, decide_fn=decide_fn, ocr_reader=ocr_reader,
+        )
+    finally:
+        for lock in locks:
+            lock.release()
+    return report
+
+
+async def _run_command(args, data, locks, *, devices=None, decide_fn=None, ocr_reader=None) -> dict:
+    del locks
     token = read_token() if getattr(args, "decide_url", "") else ""
     evidence = EvidenceLog(Path(args.evidence_dir), secrets=[token])
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -227,6 +252,8 @@ async def async_main(args, *, devices=None, decide_fn=None, ocr_reader=None) -> 
     decide = decide_fn
     if decide is None and args.command in {"pair-chat"}:
         decide = build_decide(args, inbox)
+    for device in (devices or {}).values():
+        device.open_timeout = float(args.open_timeout)
 
     if args.command == "dry-run":
         device = (devices or {}).get("a") or build_device(args, evidence, serial=args.serial, label="a", reader=reader)
