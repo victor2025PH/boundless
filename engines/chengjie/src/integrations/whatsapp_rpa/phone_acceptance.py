@@ -207,7 +207,7 @@ def png_size(png: bytes) -> tuple:
 # 键盘弹起时输入栏不在屏幕最底。核心行是最靠下的那行正文，
 # 只并入和它垂直连着的行。ceb233 真机：正文 [111,1428,474,1472]，
 # 其下「D」[507,1535,544,1572] 是键盘建议条或表情条上的图标。
-_COMPOSER_PITCH = 2.2
+_COMPOSER_PITCH = 4.0
 _LEFT_SLACK = 20.0
 _ICON_GUTTER = 0.15
 
@@ -1396,14 +1396,12 @@ def _parse_wm_size(text: str) -> tuple:
 
 
 async def _seed_already_visible(loop: Any, peer: str, seed: str) -> bool:
-    """这句已经在气泡里、输入框也空了。下一轮接着聊，不要再发一次。"""
-    try:
-        await open_peer_chat(loop.device, peer)
-    except Exception:
+    """这句已经在气泡里、输入框也空了。已经在聊天页就不再打开链接。"""
+    from src.integrations.whatsapp_rpa.phone_send import send_confirmed
+    opened = await enter_chat(loop.device, normalize_e164(peer))
+    screen = opened.get("screen") or PhoneScreen()
+    if not opened.get("ok"):
         return False
-    from src.integrations.whatsapp_rpa.phone_send import send_confirmed, wait_for_chat
-    await wait_for_chat(loop.device, peer, expected="")
-    screen = await loop.device.read_screen(await loop.device.screencap())
     return send_confirmed(screen, seed)
 
 
@@ -1442,16 +1440,11 @@ async def preview_prefill(device: Any, phone: str, text: str, evidence: Evidence
 
 
 async def snapshot_incoming(device: Any, phone: str) -> List[str]:
-    """打开会话，记下已经在左侧的旧气泡。打不开就返回空，调用方不得把旧消息当新消息。"""
-    try:
-        await open_peer_chat(device, phone)
-    except Exception:
+    """记下已经在左侧的旧气泡。已经在聊天页就不再打开链接。"""
+    opened = await enter_chat(device, normalize_e164(phone))
+    if not opened.get("ok"):
         return []
-    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
-    ready = await wait_for_chat(device, phone, expected="")
-    if not ready.get("ready"):
-        return []
-    screen = await device.read_screen(await device.screencap())
+    screen = opened.get("screen") or PhoneScreen()
     return new_left_bubbles(getattr(screen, "incoming", None) or [], [])
 
 
@@ -1469,30 +1462,42 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
         if candidate == wanted:
             noted = str(note.get("text") or "").strip()
             break
-    await open_peer_chat(device, wanted)
-    scroll = getattr(device, "scroll_to_latest", None)
-    if scroll is not None:
-        try:
-            await scroll()
-        except Exception:
-            pass
-    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
-    ready = await wait_for_chat(device, wanted, expected="")
-    if not ready.get("ready"):
-        return {
-            "ok": False, "reason": ready.get("reason") or "header_mismatch",
-            "text": "", "header": ready.get("header") or "",
-        }
     from src.integrations.whatsapp_rpa.phone_send import composer_body
+    import asyncio
+    import time
 
-    screen = None
-    fresh: List[str] = []
-    for _ in range(2):
-        png = await device.screencap()
-        screen = await device.read_screen(png)
-        fresh = peer_after_last_own(screen)
-        if fresh:
+    screen = await _read(device)
+    if not in_chat(screen, wanted).get("ok"):
+        opened = await enter_chat(device, wanted)
+        screen = opened.get("screen") or screen
+        if not opened.get("ok") and not (noted and len(composer_body(noted)) >= 2):
+            return {
+                "ok": False, "reason": "not_in_chat", "text": "",
+                "header": str(getattr(screen, "header", "") or ""),
+            }
+    clock = getattr(device, "clock", None) or time.monotonic
+    sleep = getattr(device, "sleep_fn", None) or asyncio.sleep
+    deadline = float(clock()) + 20.0
+    fresh = new_left_bubbles(peer_after_last_own(screen), baseline)
+    unchanged = 0
+    previous = None
+    while (
+        not fresh
+        and not noted
+        and float(clock()) < deadline
+        and unchanged < 4
+    ):
+        signature = tuple(fresh)
+        if signature == previous:
+            unchanged += 1
+        else:
+            unchanged = 0
+            previous = signature
+        if unchanged >= 4:
             break
+        await sleep(1.5)
+        screen = await _read(device)
+        fresh = new_left_bubbles(peer_after_last_own(screen), baseline)
     if fresh:
         text = "\n".join(fresh)
         source = "screenshot"
@@ -1502,14 +1507,15 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
     else:
         text = ""
         source = ""
+    header = str(getattr(screen, "header", "") or "")
     composer = str(getattr(screen, "composer", "") or "") if screen is not None else ""
     if not text:
         return {
             "ok": False, "reason": "empty_text", "text": "",
-            "header": ready.get("header") or "", "composer": composer,
+            "header": header, "composer": composer,
         }
     return {
-        "ok": True, "text": text, "header": ready.get("header") or "",
+        "ok": True, "text": text, "header": header,
         "source": source, "composer": composer,
     }
 
@@ -1713,10 +1719,12 @@ async def reconcile_pair(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str) -
     found: List[str] = []
     for loop, peer in ((loop_a, phone_b), (loop_b, phone_a)):
         try:
-            await open_peer_chat(loop.device, peer)
-            screen = await loop.device.read_screen(await loop.device.screencap())
+            opened = await enter_chat(loop.device, normalize_e164(peer))
         except Exception:
             continue
+        if not opened.get("ok"):
+            continue
+        screen = opened.get("screen") or PhoneScreen()
         found.extend(getattr(screen, "outgoing", None) or [])
         found.extend(getattr(screen, "incoming", None) or [])
     absorb_visible_texts(loop_a.ledger, normalize_e164(phone_b), found)
@@ -1964,7 +1972,9 @@ def recognized_popup(screen: Any) -> bool:
 
 
 def input_bar_top(screen: Any):
-    """输入栏文字的上沿。键盘弹起后它会停在屏幕中部，而不是最底一行。"""
+    """输入栏文字的上沿。多行被撑到屏幕上半时，取草稿第一行，不取上面的引用。"""
+    from src.integrations.whatsapp_rpa.phone_send import composer_is_placeholder
+
     composer = str(getattr(screen, "composer", "") or "").strip()
     best = None
     for line in getattr(screen, "ocr_lines", None) or []:
@@ -1972,7 +1982,16 @@ def input_bar_top(screen: Any):
         box = (line or {}).get("box") or []
         if len(box) < 4 or not text:
             continue
-        if text == composer or "发消息" in text or (composer and composer.split("\n")[0] in text):
+        first = composer.split("\n")[0].strip()
+        same = (
+            text == composer
+            or "发消息" in text
+            or composer_is_placeholder(text)
+            or (len(text) >= 4 and first and (
+                text == first or first.startswith(text) or text.startswith(first[:8])
+            ))
+        )
+        if same and len(text) >= 1:
             top = float(box[1])
             best = top if best is None else min(best, top)
     return best
@@ -2015,17 +2034,35 @@ def failed_history_texts(*ledgers: Any) -> List[str]:
         seen.add(body)
         texts.append(body)
 
+    from src.integrations.whatsapp_rpa.phone_send import texts_close
+
+    sent: List[str] = []
+    pending: List[str] = []
     for ledger in ledgers:
         rows = ledger.list_sends() if hasattr(ledger, "list_sends") else []
         for row in rows:
+            body = str(row.get("body") or "")
             status = str(row.get("status") or "")
             error = str(row.get("error") or "")
-            if status not in {"failed", "bubble_missing"} and "bubble_missing" not in error:
-                continue
-            add(str(row.get("body") or ""))
+            if status == "sent" and body:
+                sent.append(body)
+            elif status in {"failed", "bubble_missing"} or "bubble_missing" in error:
+                pending.append(body)
         for item in ledger_history(ledger):
-            if str(item.get("status") or "") in {"failed", "bubble_missing"}:
-                add(str(item.get("text") or ""))
+            text = str(item.get("text") or "")
+            status = str(item.get("status") or "")
+            if status == "sent":
+                sent.append(text)
+            elif status in {"failed", "bubble_missing"}:
+                pending.append(text)
+
+    def already_sent(text: str) -> bool:
+        return any(texts_close(text, done) for done in sent)
+
+    for text in pending:
+        if already_sent(text):
+            continue
+        add(text)
     return texts
 
 
@@ -2055,18 +2092,19 @@ def quote_close_point(lines: Sequence[Dict[str, Any]], width: float, height: flo
         return found
     if input_top is None or float(input_top) >= height * 0.75:
         return None
-    band = []
+    tops: List[float] = []
     for line in lines or []:
         text = str((line or {}).get("text") or "").strip()
         box = (line or {}).get("box") or []
         if not text or text in marks or len(box) < 4 or "发消息" in text:
             continue
         cy = _box_cy(box)
-        if float(input_top) - 180 <= cy <= float(input_top) - 8:
-            band.append(text)
-    if not band:
+        if float(input_top) - 220 <= cy <= float(input_top) - 8:
+            tops.append(float(box[1]))
+    if not tops:
         return None
-    return int(width * 0.92), int(float(input_top) - 36)
+    # 引用块右上角。OCR 往往只读到左侧的「你」，X 在同一条的右端。
+    return int(width * 0.92), int(min(tops) + 12)
 
 
 async def _press_home(device: Any) -> None:
@@ -2087,11 +2125,14 @@ async def _read(device: Any) -> Any:
 
 
 async def enter_chat(device: Any, phone: str) -> Dict[str, Any]:
-    """先回桌面，再用 wa.me 打开会话。返回键最多一次，而且只关已经认出的弹层。
+    """已经在对方聊天页就停在原地。否则回桌面再用 wa.me 打开。
 
-    不在聊天页就再打开一次 wa.me。仍然不对，就停，不去点屏幕上的字。
+    返回键最多一次，而且只关已经认出的弹层。不在聊天页才再打开一次。
     """
-    screen = PhoneScreen()
+    screen = await _read(device)
+    verdict = in_chat(screen, phone)
+    if verdict.get("ok"):
+        return {"ok": True, "screen": screen, "reason": "", "in_chat": verdict}
     used_back = False
     for _attempt in range(2):
         try:

@@ -25,7 +25,15 @@ _COMPOSER_HINTS = (
     "双击以使用表情",
     "点按以使用表情",
     "tap to use emoji",
+    "escribe un mensaje",
 )
+# 单独一个词才是占位。不能用「包含 message」去咬掉正文里的 message。
+_PLACEHOLDER_EXACT = frozenset({
+    "message",
+    "mensaje",
+    "mensagem",
+    "nachricht",
+})
 
 # WhatsApp 自己弹出的限速提示。看到就先停，不靠条数去掐正在聊的朋友。
 _RATE_LIMIT_MARKERS = (
@@ -67,6 +75,8 @@ def _is_hint_line(line: str) -> bool:
     """整行是系统提示才丢掉。正文里出现「发消息」这三个字时保留。"""
     cleaned = _norm(line).casefold()
     if not cleaned:
+        return True
+    if cleaned in _PLACEHOLDER_EXACT:
         return True
     return any(cleaned == hint or cleaned.startswith(hint) for hint in _COMPOSER_HINTS)
 
@@ -172,7 +182,10 @@ def composer_body(text: str) -> str:
 
 
 def composer_is_placeholder(text: str) -> bool:
-    """输入框还是「发消息」这类占位，正文没写进去。"""
+    """输入框还是「发消息」或英文 Message 这类占位，正文没写进去。"""
+    folded = str(text or "").strip().casefold()
+    if folded in _PLACEHOLDER_EXACT:
+        return True
     if composer_body(text):
         return False
     raw = str(text or "")
@@ -415,9 +428,9 @@ async def wait_for_chat(
 
     if timeout is None:
         raw_limit = getattr(device, "open_timeout", None)
-        limit = 25.0 if raw_limit is None else float(raw_limit)
+        limit = 20.0 if raw_limit is None else min(20.0, float(raw_limit))
     else:
-        limit = float(timeout)
+        limit = min(20.0, float(timeout))
     if interval is None:
         raw_step = getattr(device, "open_interval", None)
         step = 0.8 if raw_step is None else float(raw_step)
@@ -749,7 +762,7 @@ async def deliver_via_wa_me(
     dismiss = getattr(device, "dismiss_keyboard", None)
     if dismiss is not None:
         await dismiss()
-    limit = 8.0 if placed in {"typed", "held", "keyboard"} or stay else None
+    limit = 8.0 if placed in {"typed", "held", "keyboard"} or stay else 20.0
     ready = await wait_for_chat(device, phone, expected=body, timeout=limit)
     if (
         not ready.get("ready")

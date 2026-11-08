@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 from src.inbox.models import InboxConversation, InboxMessage
 from src.inbox.reply_history import load_reply_history
@@ -163,8 +163,37 @@ def persona_separation_note(self_name: str, peer_name: str) -> str:
     them = str(peer_name or "").strip() or "另一个人"
     return (
         f"你是{you}。对方是{them}，是另一个人。"
+        f"对方叫{them}，你叫{you}，绝不用对方名字自称。"
         "不要复述对方的自我介绍，不要把对方刚告诉你的名字当成自己的名字。"
     )
+
+
+def claims_peer_identity(text: str, peer_names: Sequence[str]) -> bool:
+    """回复里用「我叫 / 叫我 / 我是」接上对方的名字。这种不能发出去。"""
+    body = str(text or "")
+    for name in peer_names or []:
+        token = str(name or "").strip()
+        if len(token) < 1:
+            continue
+        if re.search(r"(?:我叫|叫我|我是)\s*" + re.escape(token), body):
+            return True
+    return False
+
+
+def peer_name_list(peer_name: str, last_inbound: str, self_name: str = "") -> List[str]:
+    """配置的对方名字，加上对方刚自称的名字。自己的名字不算。"""
+    names: List[str] = []
+    own = str(self_name or "").strip()
+    configured = str(peer_name or "").strip()
+    if configured and configured != own:
+        names.append(configured)
+    for found in re.findall(
+        r"(?:我叫|叫我|我是)\s*([\u4e00-\u9fffA-Za-z·]{1,8})",
+        str(last_inbound or ""),
+    ):
+        if found and found != own and found not in names:
+            names.append(found)
+    return names
 
 
 async def decide_whatsapp(

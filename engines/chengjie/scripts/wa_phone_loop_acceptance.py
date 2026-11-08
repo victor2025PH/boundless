@@ -306,17 +306,44 @@ def make_loop(args, inbox, device, ledger_path: Path, account: str, decide, pers
     )
 
 
+def _clamp_max_seconds(value) -> float:
+    """默认 540 秒。可以配到 1800，再大就停在 1800。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 540.0
+    if number <= 0:
+        return 540.0
+    return min(1800.0, number)
+
+
 def bind_persona_decide(decide, self_id: str, self_name: str, peer_name: str):
-    from src.integrations.whatsapp_rpa.phone_loop import persona_separation_note
+    from src.integrations.whatsapp_rpa.phone_loop import (
+        claims_peer_identity, peer_name_list, persona_separation_note,
+    )
 
     note = persona_separation_note(self_name, peer_name)
 
     async def wrapped(*, account_id: str, phone: str, last_inbound: str, persona_id: str = ""):
-        return await decide(
+        names = peer_name_list(peer_name, last_inbound, self_name)
+        result = await decide(
             account_id=account_id, phone=phone, last_inbound=last_inbound,
             persona_id=self_id or persona_id, agent_instruction=note,
-            self_name=self_name, peer_names=[peer_name] if peer_name else [],
+            self_name=self_name, peer_names=names,
         )
+        reply = str((result or {}).get("reply") or "")
+        if not claims_peer_identity(reply, names):
+            return result
+        again = await decide(
+            account_id=account_id, phone=phone, last_inbound=last_inbound,
+            persona_id=self_id or persona_id,
+            agent_instruction=note + "上一条用了对方的名字自称，整句重写，绝不能再出现这个名字。",
+            self_name=self_name, peer_names=names,
+        )
+        reply = str((again or {}).get("reply") or "")
+        if claims_peer_identity(reply, names):
+            return {"ok": False, "reply": "", "reason": "peer_name"}
+        return again
 
     return wrapped
 
@@ -345,10 +372,12 @@ def parser() -> argparse.ArgumentParser:
     pair.add_argument("--a-phone", required=True)
     pair.add_argument("--a-account", default="seat-a")
     pair.add_argument("--a-persona", default="")
+    pair.add_argument("--a-name", default="")
     pair.add_argument("--b-serial", required=True)
     pair.add_argument("--b-phone", required=True)
     pair.add_argument("--b-account", default="seat-b")
     pair.add_argument("--b-persona", default="")
+    pair.add_argument("--b-name", default="")
     pair.add_argument("--turns", type=int, default=2)
     pair.add_argument("--seed", default="你好，我在做链路验收")
     pair.add_argument("--max-seconds", type=float, default=540)
@@ -463,13 +492,22 @@ async def _dispatch(args, data, evidence, inbox, reader, decide, *, devices=None
         b_persona = str(getattr(args, "b_persona", "") or "")
         if not a_persona or not b_persona or a_persona == b_persona:
             raise SystemExit("pair-chat 需要两个不同的人设：--a-persona 和 --b-persona")
-        a_name = persona_display_name(None, a_persona)
-        b_name = persona_display_name(None, b_persona)
-        if getattr(args, "config", ""):
+        a_name = str(getattr(args, "a_name", "") or "").strip()
+        b_name = str(getattr(args, "b_name", "") or "").strip()
+        if not a_name:
+            a_name = persona_display_name(None, a_persona)
+        if not b_name:
+            b_name = persona_display_name(None, b_persona)
+        if getattr(args, "config", "") and (
+            not str(getattr(args, "a_name", "") or "").strip()
+            or not str(getattr(args, "b_name", "") or "").strip()
+        ):
             try:
                 named = load_acceptance_config(args.config, data)
-                a_name = persona_display_name(named, a_persona)
-                b_name = persona_display_name(named, b_persona)
+                if not str(getattr(args, "a_name", "") or "").strip():
+                    a_name = persona_display_name(named, a_persona)
+                if not str(getattr(args, "b_name", "") or "").strip():
+                    b_name = persona_display_name(named, b_persona)
             except Exception:
                 pass
         loop_a = make_loop(
@@ -482,7 +520,7 @@ async def _dispatch(args, data, evidence, inbox, reader, decide, *, devices=None
         )
         report = await run_pair_chat(
             loop_a, loop_b, args.a_phone, args.b_phone, args.turns, args.seed, evidence,
-            max_seconds=float(getattr(args, "max_seconds", 540) or 540),
+            max_seconds=_clamp_max_seconds(getattr(args, "max_seconds", 540)),
         )
     else:
         raise SystemExit(f"unknown command {args.command}")

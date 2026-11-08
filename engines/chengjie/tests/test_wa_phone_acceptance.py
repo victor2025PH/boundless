@@ -1936,6 +1936,113 @@ def test_real_norm_ocr_counts_as_chat_and_keeps_the_header():
     assert in_chat(stripped, phone)["ok"] is True
 
 
+def test_english_message_placeholder_is_in_chat():
+    from src.integrations.whatsapp_rpa.phone_acceptance import in_chat
+    from src.integrations.whatsapp_rpa.phone_send import composer_is_placeholder
+
+    phone = "+639543629194"
+    screen = lines_to_screen([
+        {"text": phone, "box": [96, 86, 430, 121]},
+        {"text": "Message", "box": [105, 1424, 265, 1476]},
+    ], 1080, 1600)
+    verdict = in_chat(screen, phone)
+    assert composer_is_placeholder("Message") is True
+    assert composer_is_placeholder("Mensaje") is True
+    assert composer_is_placeholder("Type a message") is True
+    assert verdict["ok"] is True
+    assert verdict["placeholder"] is True
+    assert verdict["boxes"]["composer"] == [105, 1424, 265, 1476]
+
+
+def test_quote_block_above_a_tall_composer_is_tapped_at_its_corner():
+    from src.integrations.whatsapp_rpa.phone_acceptance import input_bar_top, quote_close_point
+
+    lines = [
+        {"text": "你", "box": [52, 339, 87, 372]},
+        {"text": "早上好呀今天想出去走走", "box": [111, 475, 470, 506]},
+        {"text": "顺便把昨天的事说完", "box": [111, 520, 430, 552]},
+    ]
+    screen = lines_to_screen(
+        [{"text": "+639543629194", "box": [96, 86, 430, 121]}, *lines],
+        720, 1600,
+    )
+    assert "早上好" in screen.composer
+    assert "顺便" in screen.composer
+    top = input_bar_top(screen)
+    assert top == 475
+    point = quote_close_point(lines, 720, 1600, input_top=top)
+    assert point == (662, 351)
+
+
+def test_sent_history_is_not_searched_again(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import failed_history_texts
+    from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+
+    sentence = "对了，还没问你，平时怎么称呼你比较方便呀？"
+    ledger = PhoneLedger(tmp_path / "ledger.db")
+    key = sent_content_key("reply", PHONE_B, sentence)
+    ledger.reserve(
+        client_msg_id="old", phone=PHONE_B, account_id="a",
+        source="reply", content_key=key, body=sentence,
+    )
+    ledger.finish("old", "failed", error="bubble_missing")
+    ledger.mark_content_sent(key)
+    assert failed_history_texts(ledger) == []
+
+
+@pytest.mark.asyncio
+async def test_peer_name_is_not_sent(tmp_path: Path):
+    from scripts.wa_phone_loop_acceptance import bind_persona_decide
+    from src.integrations.whatsapp_rpa.phone_loop import claims_peer_identity, persona_separation_note
+
+    assert "对方叫顾嘉，你叫小界" in persona_separation_note("小界", "顾嘉")
+    assert claims_peer_identity("叫我顾嘉就行", ["顾嘉"]) is True
+    assert claims_peer_identity("叫我小界", ["顾嘉"]) is False
+    calls = []
+
+    async def decide(**kwargs):
+        calls.append(kwargs.get("agent_instruction") or "")
+        if len(calls) == 1:
+            return {"ok": True, "reply": "我是顾嘉，你呢"}
+        return {"ok": True, "reply": "我是小界"}
+
+    wrapped = bind_persona_decide(decide, "xiaojie", "小界", "顾嘉")
+    result = await wrapped(
+        account_id="seat", phone=PHONE_A, last_inbound="叫我嘉嘉", persona_id="",
+    )
+    assert result["reply"] == "我是小界"
+    assert len(calls) == 2
+
+    async def still_wrong(**kwargs):
+        return {"ok": True, "reply": "叫我顾嘉"}
+
+    skipped = await bind_persona_decide(still_wrong, "xiaojie", "小界", "顾嘉")(
+        account_id="seat", phone=PHONE_A, last_inbound="你好", persona_id="",
+    )
+    assert skipped["ok"] is False
+    assert skipped["reason"] == "peer_name"
+
+
+def test_max_seconds_can_be_set_up_to_1800():
+    from scripts.wa_phone_loop_acceptance import _clamp_max_seconds, parser
+
+    assert _clamp_max_seconds(540) == 540
+    assert _clamp_max_seconds(1800) == 1800
+    assert _clamp_max_seconds(4000) == 1800
+    args = parser().parse_args([
+        "pair-chat",
+        "--data-dir", "d", "--evidence-dir", "e",
+        "--a-serial", "A", "--a-phone", "+1",
+        "--b-serial", "B", "--b-phone", "+2",
+        "--a-persona", "p1", "--b-persona", "p2",
+        "--a-name", "小界", "--b-name", "顾嘉",
+        "--max-seconds", "1800",
+    ])
+    assert args.a_name == "小界"
+    assert args.b_name == "顾嘉"
+    assert args.max_seconds == 1800
+
+
 def test_keycap_w_is_not_the_composer():
     screen = lines_to_screen([
         {"text": "+639543629194", "box": [96, 86, 430, 121]},
@@ -2025,8 +2132,8 @@ async def test_keyboard_is_dismissed_once_before_clear(tmp_path: Path):
         ledger=PhoneLedger(tmp_path / "ledger.db"), now_fn=lambda: 1.0,
     )
     result = await prepare_phone(loop, phone)
-    assert seat.homes == 1
-    assert seat.opens == 1
+    assert seat.homes == 0
+    assert seat.opens == 0
     assert seat.escapes == 1
     assert seat.backs == 0
     assert seat.clears == 1
