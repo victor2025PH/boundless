@@ -181,7 +181,116 @@ def test_ui_tree_reads_entry_text_and_splits_bubbles_by_bounds():
     assert "<" not in screen.outgoing
     assert all("加密" not in line for line in screen.outgoing)
     assert screen.incoming == ["较方便?", sentence]
+    assert screen.bubbles[0]["side"] == "in"
+    assert screen.bubbles[1]["side"] == "out"
     assert screen_from_ui_xml(b"<hierarchy><node text='no entry'/></hierarchy>") is None
+
+
+def _hindi_chat_ui_xml() -> str:
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node bounds="[0,0][1080,2400]">
+    <node resource-id="com.whatsapp:id/conversation_contact_name" text="रिया" bounds="[180,96][760,168]" />
+    <node resource-id="com.whatsapp:id/menuitem_call" content-desc="通话" bounds="[900,80][1040,180]" />
+    <node resource-id="com.whatsapp:id/message_text" text="क्या हाल है?" bounds="[640,900][1040,1040]" />
+    <node resource-id="com.whatsapp:id/message_text" text="नमस्ते।" bounds="[36,1200][420,1340]" />
+    <node resource-id="com.whatsapp:id/entry" text="" bounds="[140,2196][920,2324]" />
+  </node>
+</hierarchy>
+"""
+
+
+def test_ui_tree_reads_devanagari_and_ignores_the_call_button():
+    from src.integrations.whatsapp_rpa.phone_acceptance import peer_after_last_own, screen_from_ui_xml
+    from src.integrations.whatsapp_rpa.phone_send import send_confirmed
+
+    screen = screen_from_ui_xml(_hindi_chat_ui_xml().encode("utf-8"))
+    assert screen is not None
+    assert screen.source == "uiautomator"
+    assert screen.header == "रिया"
+    assert screen.outgoing == ["क्या हाल है?"]
+    assert screen.incoming == ["नमस्ते।"]
+    assert "通话" not in screen.incoming
+    assert "通话" not in screen.outgoing
+    assert all(row["text"] != "通话" for row in screen.bubbles)
+    assert peer_after_last_own(screen) == ["नमस्ते।"]
+    assert send_confirmed(screen, "क्या हाल है?") is True
+
+
+@pytest.mark.asyncio
+async def test_hindi_bubbles_come_from_the_tree_not_ocr():
+    png = _png(32, 32)
+    xml = _hindi_chat_ui_xml().encode("utf-8")
+
+    def runner(argv):
+        remote = argv[-1]
+        if "uiautomator" in remote and "dump" in remote:
+            return 0, b"dumped\n", ""
+        if "cat" in remote and "wa_ui.xml" in remote:
+            return 0, xml, ""
+        return 0, b"", ""
+
+    def ocr(_image):
+        raise AssertionError("界面树已经有气泡，不应再走 OCR")
+
+    device = SshAdbPhoneDevice("hub176", "SERIAL_A", ocr, runner=runner)
+    screen = await device.read_screen(png)
+    assert screen.source == "uiautomator"
+    assert screen.incoming == ["नमस्ते।"]
+    assert screen.outgoing == ["क्या हाल है?"]
+
+
+def test_devanagari_quotes_danda_and_nfc_compare_as_one_sentence():
+    import unicodedata
+    from src.integrations.whatsapp_rpa.phone_send import compare_key, texts_close
+
+    assert compare_key("नमस्ते।") == compare_key("नमस्ते")
+    assert compare_key("“क्या हाल है?”") == compare_key("क्या हाल है?")
+    assert texts_close("«नमस्ते»", "नमस्ते")
+    assert compare_key("\u0958") == compare_key("क़")
+    nfd = unicodedata.normalize("NFD", "नमस्ते")
+    nfc = unicodedata.normalize("NFC", "नमस्ते")
+    assert compare_key(nfd) == compare_key(nfc)
+    assert texts_close(nfd, nfc)
+    assert texts_close("你好？", "你好?")
+    assert not texts_close("नमस्ते", "शुभ रात्रि")
+
+
+def test_devanagari_model_stays_out_of_the_shared_ocr_service():
+    from src.integrations.whatsapp_rpa.devanagari_ocr import (
+        DEVANAGARI_REC_MODEL, enabled, engine_kwargs, supplement_screen,
+    )
+
+    source = Path("scripts/ocr176/ocr_server.py").read_text(encoding="utf-8")
+    assert "devanagari" not in source.casefold()
+    assert "WA_DEVANAGARI_OCR" not in source
+    assert enabled() is False
+    assert engine_kwargs()["text_recognition_model_name"] == DEVANAGARI_REC_MODEL
+    assert engine_kwargs()["text_recognition_model_name"] != "PP-OCRv5_mobile_rec"
+    screen = PhoneScreen(composer="发消息", source="ocr")
+    assert supplement_screen(screen, b"png") is screen
+
+
+def test_isolated_devanagari_reader_fills_in_when_the_tree_has_no_text():
+    from src.integrations.whatsapp_rpa.devanagari_ocr import supplement_screen
+
+    garbage = PhoneScreen(composer="", incoming=["???"], source="ocr", shot_size=[720, 1600])
+
+    def reader(_png):
+        return [
+            {"text": "+14155550000", "box": [180, 96, 640, 150]},
+            {"text": "नमस्ते।", "box": [40, 900, 360, 980]},
+            {"text": "发消息", "box": [80, 1480, 220, 1540]},
+        ]
+
+    filled = supplement_screen(garbage, _png(720, 1600), recognize_fn=reader)
+    assert filled.source == "devanagari-ocr"
+    assert "नमस्ते" in "".join(filled.incoming)
+    assert supplement_screen(
+        PhoneScreen(incoming=["नमस्ते"], source="uiautomator"),
+        b"png",
+        recognize_fn=reader,
+    ).source == "uiautomator"
 
 
 @pytest.mark.asyncio

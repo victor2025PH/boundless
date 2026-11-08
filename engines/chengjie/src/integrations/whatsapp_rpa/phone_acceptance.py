@@ -1148,6 +1148,16 @@ def _is_message(resource_id: str) -> bool:
     return "message_text" in str(resource_id or "").lower()
 
 
+def _is_chrome_control(resource_id: str) -> bool:
+    """通话、视频、菜单、附件。这些节点的文字不是消息。"""
+    rid = str(resource_id or "").lower()
+    if not rid or "message_text" in rid:
+        return False
+    return any(key in rid for key in (
+        "menuitem", "/call", "video_call", "voice_call", "emoji", "attach",
+    ))
+
+
 def screen_from_ui_xml(raw: bytes) -> Optional[PhoneScreen]:
     """从 uiautomator 的 UI 树读精确文字。读不到输入框节点就返回 None，调用方改走 OCR。
 
@@ -1165,6 +1175,7 @@ def screen_from_ui_xml(raw: bytes) -> Optional[PhoneScreen]:
     except ET.ParseError:
         return None
     width = 0
+    height = 0
     titles: List[str] = []
     entry: Optional[str] = None
     entry_bottom = -1
@@ -1173,6 +1184,8 @@ def screen_from_ui_xml(raw: bytes) -> Optional[PhoneScreen]:
         bounds = _bounds(node.get("bounds") or "")
         if bounds and bounds[2] > width:
             width = bounds[2]
+        if bounds and bounds[3] > height:
+            height = bounds[3]
         rid = node.get("resource-id") or ""
         text = str(node.get("text") or "")
         if _is_entry(rid):
@@ -1185,6 +1198,8 @@ def screen_from_ui_xml(raw: bytes) -> Optional[PhoneScreen]:
         if _is_title(rid) and shown:
             titles.append(shown)
             continue
+        if _is_chrome_control(rid):
+            continue
         if not _is_message(rid) or not shown or not bounds:
             continue
         if shown in _CHEVRON or is_screen_chrome(shown):
@@ -1196,27 +1211,42 @@ def screen_from_ui_xml(raw: bytes) -> Optional[PhoneScreen]:
         width = 1080
     incoming: List[str] = []
     outgoing: List[str] = []
+    transcript: List[dict] = []
     for _top, bounds, shown in sorted(bubbles, key=lambda item: item[0]):
         left = float(bounds[0])
         right_gap = float(width) - float(bounds[2])
         if right_gap < left:
-            outgoing.append(shown)
+            side = "out"
         elif left < right_gap:
+            side = "in"
+        else:
+            continue
+        if side == "out":
+            outgoing.append(shown)
+        else:
             incoming.append(shown)
+        transcript.append({
+            "side": side, "text": shown,
+            "top": int(bounds[1]), "bottom": int(bounds[3]),
+            "box": [int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3])],
+        })
     return PhoneScreen(
         header=" ".join(titles),
         composer=entry,
         outgoing=outgoing,
         incoming=incoming,
         last_incoming=incoming[-1] if incoming else "",
+        bubbles=transcript,
         source="uiautomator",
+        shot_size=[int(width), int(height or 0)],
     )
 
 
 class SshAdbPhoneDevice:
     """通过 ssh 在远端执行 adb。测试注入 runner，不会真的连上主机。
 
-    读屏先 ``uiautomator dump`` 再 ``cat`` UI 树。树里没有输入框时才用 OCR。
+    读屏先 ``uiautomator dump`` 再 ``cat`` UI 树。有气泡、号码顶栏或输入框正文就用树。
+    这些都没有时才用 OCR。天城文模型只在隔离环境里补这一次，不改共享 OCR 服务。
     """
 
     def __init__(self, host: str, serial: str, read_screen_fn: Callable[[bytes], Any],
@@ -1410,7 +1440,7 @@ class SshAdbPhoneDevice:
 
     async def read_screen(self, png: bytes) -> PhoneScreen:
         parsed = screen_from_ui_xml(await self.dump_ui_xml())
-        if parsed is not None and _dump_has_chat_header(parsed):
+        if parsed is not None and _tree_text_usable(parsed):
             parsed.ui_dump = self.ui_dump_status
             shot_w, shot_h = png_size(png)
             if shot_w and shot_h:
@@ -1427,6 +1457,8 @@ class SshAdbPhoneDevice:
         shot_w, shot_h = png_size(png)
         if shot_w and shot_h and not screen.shot_size:
             screen.shot_size = [int(shot_w), int(shot_h)]
+        from src.integrations.whatsapp_rpa.devanagari_ocr import supplement_screen
+        screen = supplement_screen(screen, png)
         screen.ui_dump = self.ui_dump_status
         self._last_screen = screen
         return screen
@@ -1951,6 +1983,18 @@ def _dump_has_chat_header(screen: Any) -> bool:
     """界面树没有 + 号顶栏时不能拿来判定聊天页，改看这次截图的 OCR。"""
     from src.integrations.whatsapp_rpa.phone_identity import header_number_candidates
     return bool(header_number_candidates(str(getattr(screen, "header", "") or "")))
+
+
+def _tree_text_usable(screen: Any) -> bool:
+    """气泡、带号码的顶栏，或输入框里的正文。只有占位符和人名时改走 OCR。"""
+    from src.integrations.whatsapp_rpa.phone_send import composer_is_placeholder
+
+    if list(getattr(screen, "incoming", None) or []) or list(getattr(screen, "outgoing", None) or []):
+        return True
+    if _dump_has_chat_header(screen):
+        return True
+    composer = str(getattr(screen, "composer", "") or "").strip()
+    return bool(composer) and not composer_is_placeholder(composer)
 
 
 def _line_box(line: Dict[str, Any]):

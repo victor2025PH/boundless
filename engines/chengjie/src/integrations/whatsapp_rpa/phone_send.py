@@ -158,15 +158,22 @@ _PUNCT_FOLD = str.maketrans({
     "，": ",", "。": ".", "？": "?", "！": "!",
     "：": ":", "；": ";",
     "“": '"', "”": '"', "‘": "'", "’": "'",
+    "„": '"', "‟": '"', "«": '"', "»": '"',
+    "「": '"', "」": '"', "『": '"', "』": '"',
     "（": "(", "）": ")",
+    # 天城文句号和缩写号。先折成半角句号，再和别的标点一起丢掉。
+    "।": ".", "॥": ".", "॰": ".",
 })
-_PUNCT_DROP = re.compile(r"[^\w\u4e00-\u9fff]+", re.UNICODE)
+# 天城文的元音符号、鼻音点不在 \w 里。整段保留，避免「नमस्ते」被拆成辅音。
+_PUNCT_DROP = re.compile(r"[^\w\u0900-\u097F\u4e00-\u9fff]+", re.UNICODE)
 
 
 def compare_key(text: str) -> str:
-    """NFKC、全半角标点对齐，再去掉标点和空白。问号全角半角不再判成两句。"""
+    """NFKC 后再 NFC。全半角、中文和天城文标点对齐后去掉。问号和句号不再把同一句拆开。"""
     import unicodedata
-    folded = unicodedata.normalize("NFKC", composer_body(text)).translate(_PUNCT_FOLD)
+    folded = unicodedata.normalize(
+        "NFC", unicodedata.normalize("NFKC", composer_body(text)),
+    ).translate(_PUNCT_FOLD)
     return _PUNCT_DROP.sub("", folded)
 
 
