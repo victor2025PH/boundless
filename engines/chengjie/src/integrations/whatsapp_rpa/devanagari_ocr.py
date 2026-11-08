@@ -1,22 +1,26 @@
-"""可选的天城文识别。只在 117 的隔离 venv 里加载，不进共享 OCR 服务。
+"""可选的天城文识别。只在 117 的 zl_accept venv 里加载，不进共享 OCR 服务。
 
 共享的 ``scripts/ocr176/ocr_server.py`` 仍只收 ``image_b64``，模型仍是
-``PP-OCRv5_mobile_rec``。那个进程没有天城文字符，也不要往里面加语言参数。
+``PP-OCRv5_mobile_rec``。不要改那个进程，也不要往 :8766 加语言参数。
 
-117 上单独建一个环境再打开开关::
+在 117 上只给 zl_accept 装模型::
 
-    py -3 -m venv C:\\wa-ocr-hi\\venv
-    C:\\wa-ocr-hi\\venv\\Scripts\\python -m pip install paddleocr pillow numpy
+    powershell -File engines\\chengjie\\scripts\\install_devanagari_zl_accept.ps1
+
+装完后在跑验收的那个窗口里::
+
     set WA_DEVANAGARI_OCR=1
+    set PADDLE_PDX_CACHE_HOME=<脚本打印出来的 venv 内缓存目录>
 
-界面树已经读到气泡或输入框正文时不会调用这里。
+界面树已经读到文字时不会调用这里。打开开关后，只对气泡区域跑这个模型，
+认出天城文才替换那一块。键盘区域不送去识别。
 """
 
 from __future__ import annotations
 
 import os
 import re
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Sequence
 
 DEVANAGARI_REC_MODEL = "devanagari_PP-OCRv5_mobile_rec"
 DEVANAGARI_DET_MODEL = "PP-OCRv5_mobile_det"
@@ -102,6 +106,101 @@ def _lines_from_result(result) -> List[dict]:
         return lines
     except Exception:
         return lines
+
+
+def message_band_lines(screen: Any) -> List[dict]:
+    """顶栏以下、键盘以上的文字框。键盘和占位符不拿去跑天城文模型。"""
+    from src.integrations.whatsapp_rpa.phone_send import composer_is_placeholder, is_keycap
+
+    size = getattr(screen, "shot_size", None) or [0, 0]
+    height = float(size[1] or 0) if len(size) >= 2 else 0.0
+    chosen: List[dict] = []
+    for line in getattr(screen, "ocr_lines", None) or []:
+        if not isinstance(line, dict):
+            continue
+        text = str(line.get("text") or "")
+        box = line.get("box") or []
+        if len(box) < 4 or composer_is_placeholder(text) or is_keycap(text):
+            continue
+        top = float(box[1])
+        bottom = float(box[3])
+        cy = (top + bottom) / 2.0
+        if height:
+            if cy < height * 0.18 or cy > height * 0.70:
+                continue
+        elif top >= 1200:
+            continue
+        chosen.append(line)
+    return chosen
+
+
+def crop_png(png: bytes, box: Sequence) -> bytes:
+    import io
+    from PIL import Image
+    image = Image.open(io.BytesIO(png))
+    x1, y1, x2, y2 = (int(float(box[0])), int(float(box[1])), int(float(box[2])), int(float(box[3])))
+    x1 = max(0, min(x1, image.width - 1))
+    y1 = max(0, min(y1, image.height - 1))
+    x2 = max(x1 + 1, min(x2, image.width))
+    y2 = max(y1 + 1, min(y2, image.height))
+    buf = io.BytesIO()
+    image.crop((x1, y1, x2, y2)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _recognize_crop_text(png: bytes) -> str:
+    return "\n".join(
+        str(line.get("text") or "")
+        for line in recognize(png)
+        if has_devanagari(str(line.get("text") or ""))
+    )
+
+
+def apply_devanagari_bubbles(
+    screen: Any, png: bytes, recognize_crop: Optional[Callable[[bytes], str]] = None,
+) -> Any:
+    """只重认气泡区域。模型读出天城文才替换；中文气泡和键盘保持原样。"""
+    if screen_has_devanagari(screen) and str(getattr(screen, "source", "") or "") == "uiautomator":
+        return screen
+    reader = recognize_crop
+    if reader is None:
+        if not enabled():
+            return screen
+        reader = _recognize_crop_text
+    regions = message_band_lines(screen)
+    if not regions or not png:
+        return screen
+    region_ids = {id(line) for line in regions}
+    new_lines: List[dict] = []
+    changed = False
+    for line in getattr(screen, "ocr_lines", None) or []:
+        if not isinstance(line, dict) or id(line) not in region_ids:
+            new_lines.append(line)
+            continue
+        try:
+            text = str(reader(crop_png(png, line.get("box") or [])) or "").strip()
+        except Exception:
+            text = ""
+        if has_devanagari(text):
+            new_lines.append({"text": text, "box": list(line.get("box") or [])})
+            changed = True
+        else:
+            new_lines.append(line)
+    if not changed:
+        return screen
+    from src.integrations.whatsapp_rpa.phone_acceptance import lines_to_screen, png_size
+    width, height = png_size(png)
+    if width <= 0 or height <= 0:
+        size = getattr(screen, "shot_size", None) or [0, 0]
+        width = int(size[0] or 0) if size else 0
+        height = int(size[1] or 0) if len(size) >= 2 else 0
+    if width <= 0 or height <= 0:
+        return screen
+    parsed = lines_to_screen(new_lines, width, height, png)
+    parsed.ocr_lines = new_lines
+    parsed.source = "devanagari-ocr"
+    parsed.ui_dump = str(getattr(screen, "ui_dump", "") or "")
+    return parsed
 
 
 def supplement_screen(screen: Any, png: bytes, recognize_fn: Optional[Callable[[bytes], List[dict]]] = None) -> Any:

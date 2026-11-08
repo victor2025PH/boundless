@@ -30,8 +30,8 @@ from src.integrations.whatsapp_rpa.phone_send import (
 
 logger = logging.getLogger("wa_phone_acceptance")
 
-_FORBIDDEN_ADB = frozenset({"kill-server", "start-server", "connect"})
-_ALLOWED_ADB = frozenset({"shell", "exec-out", "pull"})
+_FORBIDDEN_ADB = frozenset({"kill-server", "start-server", "connect", "--remove-all"})
+_ALLOWED_ADB = frozenset({"shell", "exec-out", "pull", "forward"})
 TOKEN_ENV_NAMES = ("WA_DECIDE_TOKEN", "BOUNDLESS_BUS_TOKEN")
 
 
@@ -45,7 +45,7 @@ def ssh_adb_argv(host: str, serial: str, adb_args: Sequence[str]) -> List[str]:
     for arg in adb_args:
         tokens.extend(str(arg).split())
     if not tokens or tokens[0] not in _ALLOWED_ADB:
-        raise ValueError("adb command must be shell, exec-out, or pull")
+        raise ValueError("adb command must be shell, exec-out, pull, or forward")
     for token in tokens:
         if token in _FORBIDDEN_ADB:
             raise ValueError(f"forbidden adb command: {token}")
@@ -1114,6 +1114,7 @@ def subprocess_runner(argv: Sequence[str]) -> tuple:
 
 
 _UI_XML_PATH = "/sdcard/wa_ui.xml"
+_ATX_PORTS = (7912, 9008)
 _TITLE_KEYS = (
     "conversation_contact_name",
     "contact_name",
@@ -1121,6 +1122,36 @@ _TITLE_KEYS = (
     "action_bar_title",
 )
 _CHEVRON = {"<", "‹", "＜", ">"}
+
+
+def parse_listening_ports(proc_net_tcp: str) -> set:
+    """从 /proc/net/tcp 里找出已经在听的 7912 和 9008。0A 才是 LISTEN。"""
+    wanted = {f"{port:04X}": port for port in _ATX_PORTS}
+    found = set()
+    for line in str(proc_net_tcp or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4 or parts[3].upper() != "0A" or ":" not in parts[1]:
+            continue
+        hexport = parts[1].rsplit(":", 1)[-1].upper()
+        if hexport in wanted:
+            found.add(wanted[hexport])
+    return found
+
+
+def hierarchy_from_body(body: bytes) -> bytes:
+    """atx 的 /dump/hierarchy 直接是 XML。jsonrpc dumpWindowHierarchy 包在 result 里。"""
+    raw = body or b""
+    stripped = raw.lstrip()
+    if stripped.startswith(b"<") or stripped.startswith(b"\xef\xbb\xbf<"):
+        return _xml_payload(raw)
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+    except (ValueError, UnicodeError):
+        return b""
+    result = data.get("result") if isinstance(data, dict) else None
+    if isinstance(result, str) and "<" in result:
+        return result.encode("utf-8")
+    return b""
 
 
 def _xml_payload(raw: bytes) -> bytes:
@@ -1267,9 +1298,12 @@ class SshAdbPhoneDevice:
         self.read_screen_fn = read_screen_fn
         self.runner = runner or subprocess_runner
         self.ui_dump_status = ""
+        self.ui_dump_source = ""
         self.ui_dump_error: Dict[str, Any] = {}
         self.ui_dump_attempts: List[Dict[str, Any]] = []
+        self.automation_diag: Dict[str, Any] = {}
         self.dump_pause = 0.5
+        self.http_get = None
         self.last_tap: Dict[str, Any] = {}
         self._last_screen: Optional[PhoneScreen] = None
 
@@ -1448,16 +1482,116 @@ class SshAdbPhoneDevice:
             return f"exit:{code}"
         return ""
 
+    async def collect_automation_diag(self) -> Dict[str, Any]:
+        """只读。不杀进程，不重启 atx，也不新开 UiAutomation。"""
+        code, out, err = await self._run([
+            "shell", "ps -A | grep -i -E 'uiautomator|atx|u2' || true",
+        ])
+        processes = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out or "")
+        port_code, port_out, _port_err = await self._run([
+            "shell", "cat /proc/net/tcp /proc/net/tcp6",
+        ])
+        listing = port_out.decode("utf-8", "replace") if isinstance(port_out, (bytes, bytearray)) else str(port_out or "")
+        listening = parse_listening_ports(listing)
+        diag = {
+            "processes": processes.strip(),
+            "ps_code": int(code),
+            "ps_stderr": err if isinstance(err, str) else str(err or ""),
+            "ports": {str(port): port in listening for port in _ATX_PORTS},
+            "port_code": int(port_code),
+        }
+        self.automation_diag = diag
+        return diag
+
+    async def _fetch_hierarchy(self, local_port: int, remote_port: int) -> bytes:
+        getter = getattr(self, "http_get", None)
+        if getter is not None:
+            data = getter(local_port, remote_port)
+            return data if isinstance(data, (bytes, bytearray)) else str(data or "").encode("utf-8")
+        return await self._fetch_hierarchy_on_host(local_port)
+
+    async def _fetch_hierarchy_on_host(self, local_port: int) -> bytes:
+        """forward 落在 adb 那台机器上，所以 HTTP 也在那台机器上发，只读。"""
+        port = int(local_port)
+        # 先试 atx-agent 的只读 hierarchy，再试 jsonrpc。失败不改服务状态。
+        script = (
+            "import json,sys,urllib.request\n"
+            f"base='http://127.0.0.1:{port}'\n"
+            "def get(url, data=None):\n"
+            "    req=urllib.request.Request(url, data=data, headers={'Content-Type':'application/json'})\n"
+            "    with urllib.request.urlopen(req, timeout=8) as resp:\n"
+            "        return resp.read()\n"
+            "try:\n"
+            "    body=get(base+'/dump/hierarchy')\n"
+            "    if b'<' in body:\n"
+            "        sys.stdout.buffer.write(body); raise SystemExit(0)\n"
+            "except Exception:\n"
+            "    pass\n"
+            "payload=json.dumps({'jsonrpc':'2.0','id':1,'method':'dumpWindowHierarchy','params':[False]}).encode()\n"
+            "sys.stdout.buffer.write(get(base+'/jsonrpc/0', payload))\n"
+        )
+        remote = "python3 -c " + shlex.quote(script)
+        argv = [
+            "ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
+            self.host, remote,
+        ]
+        import asyncio
+        code, out, err = await asyncio.to_thread(self.runner, argv)
+        stderr = err if isinstance(err, str) else str(err or "")
+        stdout = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out or "")
+        shown = stdout if "<hierarchy" not in stdout and len(stdout) <= 240 else stdout[:240]
+        self.ui_dump_error = {
+            "code": int(code), "argv": [str(part) for part in argv],
+            "stdout": shown, "stderr": stderr[:500],
+        }
+        self.ui_dump_attempts.append(self.ui_dump_error)
+        if isinstance(out, str):
+            out = out.encode("utf-8")
+        return bytes(out or b"")
+
+    async def _dump_via_atx(self, listening: set) -> bytes:
+        """借用已经在听的 atx。adb forward 只在本机加一条隧道，读完就删这条，不动手机上的服务。"""
+        import zlib
+        for remote_port in _ATX_PORTS:
+            if remote_port not in listening:
+                continue
+            local = 28000 + (zlib.crc32(f"{self.serial}:{remote_port}".encode()) % 500)
+            args = ["forward", f"tcp:{local}", f"tcp:{remote_port}"]
+            code, out, err = await self._run(args)
+            self._dump_attempt(args, code, out, err)
+            if code != 0:
+                continue
+            try:
+                body = await self._fetch_hierarchy(local, remote_port)
+            finally:
+                await self._run(["forward", "--remove", f"tcp:{local}"])
+            xml = hierarchy_from_body(body)
+            if xml and (b"<hierarchy" in xml or b"<node" in xml):
+                self.ui_dump_source = "atx-http"
+                return xml
+        return b""
+
     async def dump_ui_xml(self) -> bytes:
-        """先写文件再 exec-out cat。不行就 dump 到 /dev/tty。失败再试 2 次，间隔 0.5 秒。"""
+        """已经有 atx 就只读它的 HTTP。否则写文件再 exec-out cat，不行就 /dev/tty，失败再试 2 次。"""
         import asyncio
         self.ui_dump_attempts = []
+        diag = await self.collect_automation_diag()
+        listening = {int(port) for port, open_ in (diag.get("ports") or {}).items() if open_}
+        if listening:
+            xml = await self._dump_via_atx(listening)
+            if xml:
+                self.ui_dump_status = "ok"
+                self.ui_dump_error = {}
+                return xml
+            self.ui_dump_status = "atx-failed"
+            return b""
         pause = float(getattr(self, "dump_pause", 0.5) or 0)
         last_status = "exit:1"
         for round_index in range(3):
             xml, status = await self._dump_via_file()
             if xml and not status:
                 self.ui_dump_status = "ok"
+                self.ui_dump_source = "uiautomator"
                 self.ui_dump_error = {}
                 return xml
             if status and status != "no-entry":
@@ -1465,6 +1599,7 @@ class SshAdbPhoneDevice:
             tty_xml, tty_status = await self._dump_via_tty()
             if tty_xml and not tty_status:
                 self.ui_dump_status = "ok"
+                self.ui_dump_source = "uiautomator"
                 self.ui_dump_error = {}
                 return tty_xml
             if tty_status and tty_status != "no-entry":
@@ -1551,8 +1686,10 @@ class SshAdbPhoneDevice:
         shot_w, shot_h = png_size(png)
         if shot_w and shot_h and not screen.shot_size:
             screen.shot_size = [int(shot_w), int(shot_h)]
-        from src.integrations.whatsapp_rpa.devanagari_ocr import supplement_screen
-        screen = supplement_screen(screen, png)
+        from src.integrations.whatsapp_rpa.devanagari_ocr import apply_devanagari_bubbles, supplement_screen
+        screen = apply_devanagari_bubbles(screen, png)
+        if str(getattr(screen, "source", "") or "") != "devanagari-ocr":
+            screen = supplement_screen(screen, png)
         screen.ui_dump = self.ui_dump_status
         screen.ui_dump_error = dict(self.ui_dump_error or {})
         self._last_screen = screen
@@ -2679,6 +2816,8 @@ async def run_ui_probe(device: Any, evidence: EvidenceLog) -> Dict[str, Any]:
         "parse_error": summary.get("parse_error") or "",
         "error": report.get("error") or {},
         "ui_dump": report,
+        "source": str(getattr(device, "ui_dump_source", "") or ""),
+        "diagnostics": dict(getattr(device, "automation_diag", None) or {}),
         "turns": [],
         "history": [],
     })

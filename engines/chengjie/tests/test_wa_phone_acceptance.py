@@ -144,9 +144,15 @@ def test_ssh_adb_never_uses_local_adb_or_server_commands():
     assert "hub176" in argv
     assert argv[-1].startswith("adb -s SERIAL_A")
     assert "kill-server" not in argv[-1]
-    for blocked in (["kill-server"], ["start-server"], ["connect", "1.2.3.4:5555"], ["install", "app.apk"]):
+    for blocked in (
+        ["kill-server"], ["start-server"], ["connect", "1.2.3.4:5555"],
+        ["install", "app.apk"], ["forward", "--remove-all"],
+    ):
         with pytest.raises(ValueError):
             ssh_adb_argv("hub176", "SERIAL_A", blocked)
+    forwarded = ssh_adb_argv("hub176", "SERIAL_A", ["forward", "tcp:28001", "tcp:7912"])
+    assert "forward tcp:28001 tcp:7912" in forwarded[-1]
+    assert "--remove-all" not in forwarded[-1]
 
 
 def _pair_chat_ui_xml() -> str:
@@ -254,6 +260,43 @@ def test_devanagari_quotes_danda_and_nfc_compare_as_one_sentence():
     assert texts_close(nfd, nfc)
     assert texts_close("你好？", "你好?")
     assert not texts_close("नमस्ते", "शुभ रात्रि")
+
+
+def test_devanagari_model_is_installed_only_inside_zl_accept():
+    script = Path("scripts/install_devanagari_zl_accept.ps1").read_text(encoding="utf-8")
+    assert "zl_accept" in script
+    assert "devanagari_PP-OCRv5_mobile_rec" in script
+    assert "paddleocr-cache" in script
+    assert "Scripts\\python.exe" in script
+    assert "ocr_server" not in script
+    assert "8766" not in script
+    assert "kill" not in script.casefold()
+
+
+def test_devanagari_rereads_only_the_message_band():
+    from src.integrations.whatsapp_rpa.devanagari_ocr import apply_devanagari_bubbles
+
+    screen = lines_to_screen([
+        {"text": "+14155552671", "box": [80, 80, 400, 130]},
+        {"text": "这是一句中文气泡呀", "box": [400, 500, 680, 560]},
+        {"text": "????", "box": [40, 700, 280, 760]},
+        {"text": "读度毒", "box": [80, 1280, 280, 1340]},
+        {"text": "?123", "box": [18, 1421, 95, 1461]},
+    ], 720, 1600)
+    calls = {"n": 0}
+
+    def reader(_crop: bytes) -> str:
+        calls["n"] += 1
+        return "" if calls["n"] == 1 else "नमस्ते"
+
+    filled = apply_devanagari_bubbles(screen, _png(720, 1600), recognize_crop=reader)
+    visible = "\n".join(filled.outgoing + filled.incoming + [filled.composer])
+    assert calls["n"] == 2
+    assert filled.source == "devanagari-ocr"
+    assert "中文" in visible
+    assert "नमस्ते" in visible
+    assert "读度毒" not in filled.composer
+    assert "?123" not in filled.composer
 
 
 def test_devanagari_model_stays_out_of_the_shared_ocr_service():
@@ -439,6 +482,27 @@ async def test_idle_dump_retries_twice_then_uses_the_file(tmp_path: Path):
     assert device.ui_dump_attempts[0]["argv"]
 
 
+def test_ocr_bubbles_keep_resume_order_and_keyboard_text_out():
+    """没有界面树时，续聊方向和键盘排除仍看 OCR 分出来的气泡。"""
+    from src.integrations.whatsapp_rpa.phone_acceptance import last_speaker_label
+
+    def shot(own, own_box, peer, peer_box):
+        return lines_to_screen([
+            {"text": "+14155552671", "box": [80, 80, 400, 130]},
+            {"text": own, "box": own_box},
+            {"text": peer, "box": peer_box},
+            {"text": "读度毒", "box": [80, 1280, 280, 1340]},
+            {"text": "?123", "box": [18, 1421, 95, 1461]},
+            {"text": "发消息", "box": [40, 1500, 200, 1560]},
+        ], 720, 1600)
+
+    screen_a = shot("早就发过的一句呀", [400, 500, 680, 560], "我刚说完这句呀", [40, 900, 320, 960])
+    screen_b = shot("我刚说完这句呀", [400, 900, 680, 960], "早就发过的一句呀", [40, 500, 360, 560])
+    assert "读度毒" not in screen_a.composer
+    assert "?123" not in screen_a.composer
+    assert last_speaker_label(screen_a, screen_b, None, None) == "B"
+
+
 def test_keyboard_region_is_not_the_composer():
     screen = lines_to_screen([
         {"text": "+14155552671", "box": [80, 80, 400, 130]},
@@ -562,6 +626,51 @@ async def test_ui_probe_counts_nodes_and_does_not_tap(tmp_path: Path):
     assert report["message_text"] == 2
     assert phone.taps == 0
     assert phone.urls == []
+
+
+@pytest.mark.asyncio
+async def test_ui_probe_reads_atx_http_without_spawning_dump(tmp_path: Path):
+    from scripts.wa_phone_loop_acceptance import async_main, parser
+
+    calls = []
+
+    def runner(argv):
+        remote = argv[-1]
+        calls.append(remote)
+        assert "kill" not in remote.casefold()
+        assert "force-stop" not in remote
+        assert "--remove-all" not in remote
+        if "ps -A" in remote:
+            return 0, "u0_a12  4312  atx-agent\n".encode(), ""
+        if "proc/net/tcp" in remote:
+            line = "   0: 0100007F:1EE8 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 1 1 0000000000000000 100 0 0 10 0\n"
+            return 0, line.encode(), ""
+        if "uiautomator dump" in remote:
+            raise AssertionError("已经有 atx，不能再启动 uiautomator dump")
+        return 0, b"", ""
+
+    device = SshAdbPhoneDevice("hub176", "SERIAL_A", lambda _image: PhoneScreen(), runner=runner)
+    device.dump_pause = 0
+    device.http_get = lambda _local, remote: (
+        b'{"jsonrpc":"2.0","id":1,"result":' + json.dumps(_hindi_chat_ui_xml()).encode() + b"}"
+        if remote == 7912 else b""
+    )
+    args = parser().parse_args([
+        "ui-probe",
+        "--data-dir", str(tmp_path / "data"),
+        "--evidence-dir", str(tmp_path / "evidence"),
+        "--adb-ssh-host", "hub176",
+        "--serial", "SERIAL_A",
+    ])
+    report = await async_main(args, devices={"a": device})
+    assert report["ok"] is True
+    assert report["source"] == "atx-http"
+    assert report["message_text"] == 2
+    assert report["diagnostics"]["ports"]["7912"] is True
+    assert "atx-agent" in report["diagnostics"]["processes"]
+    assert any("forward tcp:" in call and "tcp:7912" in call for call in calls)
+    assert any("forward --remove tcp:" in call for call in calls)
+    assert not any("uiautomator dump" in call for call in calls)
 
 
 def test_ocr_box_is_scaled_into_device_pixels_before_tap():
