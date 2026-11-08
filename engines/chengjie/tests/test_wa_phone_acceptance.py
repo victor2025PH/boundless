@@ -1839,6 +1839,261 @@ async def test_acceptance_inits_ai_without_telegram(tmp_path: Path, monkeypatch)
     assert callable(decide)
 
 
+@pytest.mark.asyncio
+async def test_inprocess_decide_accepts_the_persona_names(tmp_path: Path, monkeypatch):
+    """pair-chat 会把 self_name 传进进程内 decide。签名对不上会在真机上直接崩溃。"""
+    from scripts.wa_phone_loop_acceptance import bind_persona_decide, build_inprocess_decide
+
+    path = _write_ai_only_config(tmp_path)
+    captured = {}
+
+    class ReadyAI:
+        def __init__(self, config):
+            self._oa_client = None
+
+        async def initialize(self):
+            self._oa_client = object()
+            return True
+
+    class Skill:
+        def __init__(self, manager, ai):
+            self.ai = ai
+
+        async def initialize(self):
+            return True
+
+    async def fake_decide(app, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "reply": "在的"}
+
+    monkeypatch.setattr("src.ai.ai_client.AIClient", ReadyAI)
+    monkeypatch.setattr("src.skills.skill_manager.SkillManager", Skill)
+    monkeypatch.setattr(
+        "src.integrations.whatsapp_rpa.phone_loop.decide_whatsapp", fake_decide,
+    )
+    decide = await build_inprocess_decide(path, tmp_path / "data", object())
+    wrapped = bind_persona_decide(decide, "xiaojie", "小界", "顾嘉")
+    result = await wrapped(
+        account_id="seat-b", phone=PHONE_A, last_inbound="叫我顾嘉", persona_id="other",
+    )
+    assert result["reply"] == "在的"
+    assert captured["self_name"] == "小界"
+    assert captured["peer_names"] == ["顾嘉"]
+    assert captured["persona_id"] == "xiaojie"
+    assert "小界" in captured["agent_instruction"]
+    assert "顾嘉" in captured["agent_instruction"]
+
+
+def test_keyboard_keys_stay_out_of_the_composer():
+    screen = lines_to_screen([
+        {"text": "+639543629194", "box": [80, 70, 420, 120]},
+        {"text": "发消息", "box": [40, 1280, 220, 1330]},
+        {"text": "?123", "box": [18, 1421, 95, 1461]},
+        {"text": "空格", "box": [280, 1500, 460, 1560]},
+        {"text": "中/英", "box": [20, 1500, 110, 1560]},
+    ], 720, 1600)
+    assert "发消息" in screen.composer
+    assert "?123" not in screen.composer
+    assert "空格" not in screen.composer
+    assert "中/英" not in screen.composer
+    assert "?123" not in "".join(screen.outgoing)
+
+
+def test_split_bubble_matches_the_failed_sentence():
+    from src.integrations.whatsapp_rpa.phone_acceptance import screen_matches_target
+
+    sentence = "对了，还没问你，平时怎么称呼你比较方便呀？"
+    screen = PhoneScreen(
+        header=PHONE_B,
+        composer="发消息",
+        ocr_lines=[
+            {"text": "对了，还没问你，平时怎么称呼你比较方便", "box": [135, 822, 645, 856]},
+            {"text": "呀？", "box": [132, 868, 279, 903]},
+        ],
+    )
+    assert screen_matches_target(screen, sentence) is True
+
+
+@pytest.mark.asyncio
+async def test_failed_history_is_found_within_three_screens(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import reconcile_failed_history
+    from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+
+    sentence = "对了，还没问你，平时怎么称呼你比较方便呀？"
+    visible = PhoneScreen(
+        header=PHONE_B,
+        composer="发消息",
+        ocr_lines=[
+            {"text": "对了，还没问你，平时怎么称呼你比较方便", "box": [135, 822, 645, 856]},
+            {"text": "呀？", "box": [132, 868, 279, 903]},
+        ],
+    )
+    blank = PhoneScreen(header=PHONE_B, composer="发消息")
+
+    class Pager:
+        def __init__(self, pages):
+            self.pages = list(pages)
+            self.index = 0
+            self.scrolls = 0
+            self.taps = 0
+
+        async def open_url(self, url):
+            return None
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return self.pages[min(self.index, len(self.pages) - 1)]
+
+        async def scroll_older(self):
+            self.scrolls += 1
+            self.index += 1
+
+        async def scroll_to_latest(self):
+            return None
+
+        async def press_back(self):
+            return None
+
+        async def tap_send(self):
+            self.taps += 1
+
+    store = InboxStore(tmp_path / "inbox.db")
+    ledger = PhoneLedger(tmp_path / "ledger.db")
+    key = sent_content_key("reply", PHONE_B, sentence)
+    slot = ledger.reserve(
+        client_msg_id="old-0735", phone=PHONE_B, account_id="seat-a",
+        source="reply", content_key=key, body=sentence,
+    )
+    assert slot["reserved"] is True
+    ledger.finish("old-0735", "failed", error="bubble_missing")
+    device = Pager([blank, visible, blank])
+    loop_a = WaPhoneLoop(
+        account_id="seat-a", inbox=store, device=device, decide_fn=None,
+        cfg={"enabled": True}, ledger=ledger, now_fn=lambda: 1.0,
+    )
+    loop_b = WaPhoneLoop(
+        account_id="seat-b", inbox=store, device=Pager([blank]), decide_fn=None,
+        cfg={"enabled": True}, ledger=PhoneLedger(tmp_path / "b.db"), now_fn=lambda: 1.0,
+    )
+    found = await reconcile_failed_history(loop_a, loop_b, PHONE_A, PHONE_B)
+    assert sentence in found
+    assert device.scrolls == 1
+    assert device.scrolls <= 2
+    assert device.taps == 0
+    assert ledger.has_sent_content(key) is True
+
+
+@pytest.mark.asyncio
+async def test_normalize_ui_backs_out_of_the_menu_and_confirms_placeholder(tmp_path: Path):
+    from scripts.wa_phone_loop_acceptance import async_main, parser
+
+    class Phone:
+        def __init__(self):
+            self.phase = "menu"
+            self.backs = 0
+            self.clears = 0
+            self.taps = 0
+
+        async def open_url(self, url):
+            return None
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            if self.phase == "menu":
+                return PhoneScreen(
+                    header="", composer="编辑",
+                    ocr_lines=[{"text": "编辑", "box": [138, 1406, 216, 1447]}],
+                    shot_size=[720, 1600],
+                )
+            if self.phase == "draft":
+                return PhoneScreen(
+                    header=PHONE_A, composer="无关的长草稿还挂着引用",
+                    ocr_lines=[
+                        {"text": PHONE_A, "box": [80, 80, 400, 130]},
+                        {"text": "X", "box": [640, 1480, 670, 1510]},
+                        {"text": "无关的长草稿还挂着引用", "box": [40, 1360, 520, 1410]},
+                        {"text": "?123", "box": [18, 1421, 95, 1461]},
+                    ],
+                    shot_size=[720, 1600],
+                )
+            return PhoneScreen(
+                header=PHONE_A, composer="发消息",
+                ocr_lines=[
+                    {"text": PHONE_A, "box": [80, 80, 400, 130]},
+                    {"text": "发消息", "box": [40, 1500, 220, 1550]},
+                ],
+                shot_size=[720, 1600],
+            )
+
+        async def press_back(self):
+            self.backs += 1
+            self.phase = "draft"
+
+        async def dismiss_keyboard(self):
+            return None
+
+        async def tap_xy(self, x, y):
+            return None
+
+        async def clear_composer(self):
+            self.clears += 1
+            self.phase = "cleared"
+
+        async def tap_send(self):
+            self.taps += 1
+
+    phone = Phone()
+    args = parser().parse_args([
+        "normalize-ui",
+        "--data-dir", str(tmp_path / "data"),
+        "--evidence-dir", str(tmp_path / "evidence"),
+        "--adb-ssh-host", "hub176",
+        "--serial", "SERIAL_A",
+        "--phone", PHONE_A,
+    ])
+    report = await async_main(args, devices={"a": phone})
+    assert phone.backs == 1
+    assert phone.clears == 1
+    assert phone.taps == 0
+    assert report["cleared"] is True
+    assert report["composer"] == "发消息"
+    assert report["tapped"] is False
+    assert any(row["step"] == "back_to_chat" and isinstance(row["ms"], int) for row in report["timings"])
+    assert any(row["step"] == "clear_composer" for row in report["timings"])
+
+
+@pytest.mark.asyncio
+async def test_clear_composer_long_presses_then_selects_all():
+    calls = []
+
+    def runner(argv):
+        remote = argv[-1]
+        calls.append(remote)
+        if "uiautomator" in remote:
+            return 137, b"Killed", ""
+        if "screencap" in remote:
+            return 0, _png(8, 8), ""
+        if "wm" in remote and "size" in remote:
+            return 0, b"Physical size: 1080x2400\n", ""
+        return 0, b"", ""
+
+    device = SshAdbPhoneDevice(
+        "hub176", "SERIAL_A",
+        lambda image: PhoneScreen(ocr_lines=[{"text": "全选", "box": [100, 1400, 180, 1450]}]),
+        runner=runner,
+    )
+    await device.clear_composer()
+    joined = "\n".join(calls)
+    assert "swipe" in joined and "800" in joined
+    assert "input tap 140 1425" in joined
+    assert "keyevent 67" in joined
+    assert "keyevent 123" not in joined
+
+
 def test_cli_dry_run_uses_injected_device(tmp_path: Path):
     from scripts.wa_phone_loop_acceptance import async_main, parser
     import asyncio

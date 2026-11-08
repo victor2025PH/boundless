@@ -43,6 +43,26 @@ _RATE_LIMIT_MARKERS = (
 )
 
 
+def is_keycap(text: str) -> bool:
+    """键盘键帽，不是输入框正文。?123、中/英、空格都在键盘上。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    folded = raw.casefold().replace(" ", "")
+    if folded in {"?123", "123", "abc", "#+=", "space", "emoji"}:
+        return True
+    if raw in {"空格", "中/英", "英/中", "符", "返回"}:
+        return True
+    return re.fullmatch(r"[?？]123", raw) is not None
+
+
+def keyboard_present(screen: "PhoneScreen") -> bool:
+    for line in getattr(screen, "ocr_lines", None) or []:
+        if is_keycap(str((line or {}).get("text") or "")):
+            return True
+    return False
+
+
 def _is_hint_line(line: str) -> bool:
     """整行是系统提示才丢掉。正文里出现「发消息」这三个字时保留。"""
     cleaned = _norm(line).casefold()
@@ -412,6 +432,7 @@ async def wait_for_chat(
     profile_confirmed = False
     stable_tries = 0
     placeholder_seen = 0
+    keyboard_dismissed = False
     while True:
         deadline = getattr(device, "deadline_at", None)
         if deadline and float(clock()) >= float(deadline):
@@ -448,6 +469,12 @@ async def wait_for_chat(
                 await sleep(0.4)
                 continue
         transient = screen_is_transient(screen)
+        if keyboard_present(screen) and not keyboard_dismissed:
+            dismiss = getattr(device, "dismiss_keyboard", None)
+            if dismiss is not None:
+                keyboard_dismissed = True
+                await dismiss()
+                continue
         header_ok = profile_confirmed or header_matches(screen.header, phone=phone)
         if not transient and header_ok and expected and composer_is_placeholder(screen.composer):
             placeholder_seen += 1

@@ -509,6 +509,32 @@ def _bubble_side(box: Sequence[float], width: float, png: bytes) -> str:
     return "out"
 
 
+_MENU_LABELS = frozenset({"编辑", "转发", "删除", "收藏", "贴纸", "查看贴纸", "添加到收藏"})
+
+
+def _split_keyboard(items: Sequence[tuple], height: float):
+    """键帽不进输入框。输入栏只取键盘顶边以上的那一条。"""
+    from src.integrations.whatsapp_rpa.phone_send import is_keycap
+
+    keys = [item for item in items if is_keycap(item[0])]
+    rest = [item for item in items if not is_keycap(item[0])]
+    if not keys:
+        return rest, [], False
+    keyboard_top = min(float(item[1][1]) for item in keys)
+    band = max(140.0, float(height) * 0.10)
+    bar: List[tuple] = []
+    above: List[tuple] = []
+    for text, box in rest:
+        cy = _box_cy(box)
+        if cy >= keyboard_top:
+            continue
+        if cy >= keyboard_top - band:
+            bar.append((text, box))
+        else:
+            above.append((text, box))
+    return bar, above, True
+
+
 def _header_noise(text: str) -> bool:
     """在线状态和加密提示不是号码，也不拿去当联系人名。"""
     raw = str(text or "").strip()
@@ -537,7 +563,7 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
     对方在左侧，己方在右侧，看文字框靠哪一边，不看中心点是否过半。
     输入框只取底部输入栏。时间、日期、勾号和加密提示不进气泡。
     """
-    from src.integrations.whatsapp_rpa.phone_send import is_bubble_boundary, is_screen_chrome
+    from src.integrations.whatsapp_rpa.phone_send import is_bubble_boundary, is_keycap, is_screen_chrome
 
     header: List[str] = []
     composer_items: List[tuple] = []
@@ -566,12 +592,22 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
         if is_screen_chrome(text):
             notes.append(text)
             continue
+        if text in _MENU_LABELS:
+            notes.append(text)
+            continue
         composer_items.append((text, box))
-    cluster = _composer_cluster(composer_items)
+    bar, above, keyboard = _split_keyboard(composer_items, float(height))
+    if keyboard:
+        cluster = _composer_cluster(bar) if bar else []
+        bubbles = list(above)
+    else:
+        cluster = _composer_cluster(composer_items)
+        bubbles = []
     kept_composer = _without_input_icons(cluster, float(width))
-    composer = [text for text, _box in kept_composer]
+    composer = [text for text, _box in kept_composer if not is_keycap(text)]
     cluster_ids = {id(item) for item in cluster}
-    bubbles = [item for item in composer_items if id(item) not in cluster_ids]
+    if not keyboard:
+        bubbles = [item for item in composer_items if id(item) not in cluster_ids]
     incoming, outgoing, transcript = _merge_bubbles(
         list(bubbles) + list(boundaries), float(width), png,
     )
@@ -608,7 +644,13 @@ def peer_after_last_own(screen: Any) -> List[str]:
         if str(row.get("side") or "") == "out":
             last_own = float(row.get("bottom") or 0)
     if last_own is None:
-        return []
+        incoming_rows = [
+            row for row in rows
+            if str(row.get("side") or "") == "in" and len(composer_body(str(row.get("text") or ""))) >= 2
+        ]
+        if not incoming_rows:
+            return []
+        return [str(incoming_rows[-1].get("text") or "").strip()]
     fresh: List[str] = []
     for row in rows:
         if str(row.get("side") or "") != "in":
@@ -693,7 +735,10 @@ def make_http_decide(url: str, token: str = "",
                      post_json: Optional[Callable[..., Dict[str, Any]]] = None):
     """向已经在跑的 decide 接口要草稿。token 只放请求头，不进日志。"""
 
-    async def decide(*, account_id: str, phone: str, last_inbound: str, persona_id: str = ""):
+    async def decide(*, account_id: str, phone: str, last_inbound: str, persona_id: str = "",
+                     agent_instruction: str = "", self_name: str = "",
+                     peer_names: Optional[list] = None):
+        del agent_instruction, self_name, peer_names
         body = decide_request_body(
             account_id=account_id, phone=phone, last_inbound=last_inbound,
             persona_id=persona_id,
@@ -1112,12 +1157,35 @@ class SshAdbPhoneDevice:
         await self._run(["shell", "input", "keyevent", "111"])
 
     async def clear_composer(self) -> None:
-        """先点输入栏，光标移到末尾，再删掉未发出的草稿。"""
+        """长按输入框。出现「全选」就点掉再删除，否则把光标移到末尾再连续删除。"""
         await self.dismiss_keyboard()
         width, height = await self._device_size()
         x, y = max(1, int(width * 0.42)), max(1, int(height * 0.91))
-        deletes = " ".join(["input keyevent 67"] * 100)
-        await self._run(["shell", f"input tap {x} {y}; input keyevent 123; {deletes}"])
+        await self._run([
+            "shell", "input", "swipe", str(x), str(y), str(x), str(y), "800",
+        ])
+        point = None
+        try:
+            screen = await self.read_screen(await self.screencap())
+            point = select_all_point(getattr(screen, "ocr_lines", None) or [])
+        except Exception:
+            point = None
+        if point is not None:
+            await self.tap_xy(point[0], point[1])
+            await self._run(["shell", "input", "keyevent", "67"])
+            return
+        deletes = "; ".join(["input keyevent 67"] * 40)
+        await self._run(["shell", f"input keyevent 123; {deletes}"])
+
+    async def scroll_older(self) -> None:
+        """手指向下滑动，露出更早的消息。一次大约一屏。"""
+        width, height = await self._device_size()
+        if width <= 0 or height <= 0:
+            return
+        x = max(1, int(width * 0.50))
+        y_from = max(1, int(height * 0.32))
+        y_to = max(1, int(height * 0.78))
+        await self._run(["shell", "input", "swipe", str(x), str(y_from), str(x), str(y_to), "280"])
 
     async def prefill_text(self, text: str) -> None:
         """当前页只打英文。汉字不走剪贴板，改由 wa.me 预填。"""
@@ -1697,6 +1765,109 @@ def ledger_history(*ledgers: Any) -> List[Dict[str, Any]]:
     return report
 
 
+class StepTimer:
+    """每一步的毫秒。报告里的 timings 用这个，不再只留一个总数。"""
+
+    def __init__(self) -> None:
+        self.rows: List[Dict[str, Any]] = []
+        self._last = time.monotonic()
+
+    def mark(self, step: str) -> None:
+        now = time.monotonic()
+        self.rows.append({"step": step, "ms": int((now - self._last) * 1000)})
+        self._last = now
+
+
+def select_all_point(lines: Sequence[Dict[str, Any]]):
+    """长按后弹出的「全选」。"""
+    for line in lines or []:
+        text = str((line or {}).get("text") or "").strip()
+        box = (line or {}).get("box") or []
+        if text not in {"全选", "Select all", "Select All"} or len(box) < 4:
+            continue
+        return (
+            int((float(box[0]) + float(box[2])) / 2),
+            int((float(box[1]) + float(box[3])) / 2),
+        )
+    return None
+
+
+def chat_page_ready(screen: Any, phone: str = "") -> bool:
+    """顶栏有 + 号，底部是输入栏，并且没有贴纸菜单盖在上面。"""
+    from src.integrations.whatsapp_rpa.phone_identity import header_matches
+    from src.integrations.whatsapp_rpa.phone_send import composer_body, composer_is_placeholder
+
+    header = str(getattr(screen, "header", "") or "")
+    plus = header_matches(header, phone=phone) or (
+        "+" in header and any(ch.isdigit() for ch in header)
+    )
+    if not plus:
+        return False
+    texts = [
+        str((line or {}).get("text") or "").strip()
+        for line in (getattr(screen, "ocr_lines", None) or [])
+    ]
+    if any(text in _MENU_LABELS for text in texts):
+        return False
+    composer = str(getattr(screen, "composer", "") or "")
+    if composer_is_placeholder(composer) or composer_body(composer):
+        return True
+    if any("发消息" in text or "type a message" in text.casefold() for text in texts):
+        return True
+    return not texts
+
+
+def screen_matches_target(screen: Any, target: str) -> bool:
+    """整屏文字拼起来做规范化比对。拆成两行的气泡也能对上。"""
+    from src.integrations.whatsapp_rpa.phone_send import is_keycap, is_screen_chrome, texts_close
+
+    pieces: List[str] = []
+    for line in getattr(screen, "ocr_lines", None) or []:
+        text = str((line or {}).get("text") or "").strip()
+        if not text or is_keycap(text) or is_screen_chrome(text) or text in _MENU_LABELS:
+            continue
+        pieces.append(text)
+    pieces.extend(str(item or "") for item in (getattr(screen, "outgoing", None) or []))
+    pieces.extend(str(item or "") for item in (getattr(screen, "incoming", None) or []))
+    pieces = [item for item in pieces if item.strip()]
+    if any(texts_close(item, target) for item in pieces):
+        return True
+    joined = "".join(pieces)
+    if texts_close(joined, target):
+        return True
+    for start in range(len(pieces)):
+        window = "".join(pieces[start:start + 4])
+        if texts_close(window, target):
+            return True
+    return False
+
+
+def failed_history_texts(*ledgers: Any) -> List[str]:
+    """台账里 failed / bubble_missing 的原文，加上历史表里仍是这两种状态的句子。"""
+    texts: List[str] = []
+    seen = set()
+
+    def add(text: str) -> None:
+        body = str(text or "").strip()
+        if len(body) < 2 or body in seen:
+            return
+        seen.add(body)
+        texts.append(body)
+
+    for ledger in ledgers:
+        rows = ledger.list_sends() if hasattr(ledger, "list_sends") else []
+        for row in rows:
+            status = str(row.get("status") or "")
+            error = str(row.get("error") or "")
+            if status not in {"failed", "bubble_missing"} and "bubble_missing" not in error:
+                continue
+            add(str(row.get("body") or ""))
+        for item in ledger_history(ledger):
+            if str(item.get("status") or "") in {"failed", "bubble_missing"}:
+                add(str(item.get("text") or ""))
+    return texts
+
+
 def quote_close_point(lines: Sequence[Dict[str, Any]], width: float, height: float):
     """引用回复横条右上角的 X。点它关掉贴纸，不点正文。"""
     if width <= 0 or height <= 0:
@@ -1718,13 +1889,72 @@ def quote_close_point(lines: Sequence[Dict[str, Any]], width: float, height: flo
     return None
 
 
-async def clean_composer_on_start(loop: Any, peer: str) -> None:
-    """启动时关掉引用横条。草稿和台账待发不一致就清空。"""
+async def ensure_chat_page(device: Any, phone: str, *, max_backs: int = 4) -> Any:
+    """KEYCODE_BACK 关掉菜单和弹层，直到顶栏是号码、底部是输入栏。"""
+    screen = PhoneScreen()
+    for _ in range(max_backs + 1):
+        try:
+            screen = await device.read_screen(await device.screencap())
+        except Exception:
+            return screen
+        if chat_page_ready(screen, phone):
+            return screen
+        back = getattr(device, "press_back", None)
+        if back is None:
+            return screen
+        try:
+            await back()
+        except Exception:
+            return screen
+    return screen
+
+
+async def scan_history_pages(device: Any, targets: Sequence[str], *, limit: int = 3) -> List[str]:
+    """从当前屏往更早的消息找，最多看 limit 屏。找到的句子返回原文。"""
+    pending = [str(item) for item in targets if str(item or "").strip()]
+    found: List[str] = []
+    pages = max(1, int(limit))
+    for page in range(pages):
+        try:
+            screen = await device.read_screen(await device.screencap())
+        except Exception:
+            break
+        hit = [text for text in pending if screen_matches_target(screen, text)]
+        found.extend(hit)
+        pending = [text for text in pending if text not in hit]
+        if not pending or page + 1 >= pages:
+            break
+        older = getattr(device, "scroll_older", None)
+        if older is None:
+            break
+        try:
+            await older()
+        except Exception:
+            break
+    return found
+
+
+async def prepare_phone(loop: Any, peer: str, timer: Optional[StepTimer] = None) -> Dict[str, Any]:
+    """回到聊天页，关掉引用条，草稿对不上才清。清完看到「发消息」才算 cleared。"""
+    from src.integrations.whatsapp_rpa.phone_send import composer_body, composer_is_placeholder
+
+    phone = normalize_e164(peer)
     try:
         await open_peer_chat(loop.device, peer)
-        screen = await loop.device.read_screen(await loop.device.screencap())
     except Exception:
-        return
+        return {"cleared": False, "chat": False, "composer": ""}
+    screen = await ensure_chat_page(loop.device, phone)
+    if timer is not None:
+        timer.mark("back_to_chat")
+    dismiss = getattr(loop.device, "dismiss_keyboard", None)
+    if dismiss is not None:
+        try:
+            await dismiss()
+            screen = await loop.device.read_screen(await loop.device.screencap())
+        except Exception:
+            pass
+    if timer is not None:
+        timer.mark("dismiss_keyboard")
     lines = list(getattr(screen, "ocr_lines", None) or [])
     size = getattr(screen, "shot_size", None) or [0, 0]
     point = quote_close_point(lines, float(size[0] or 0), float(size[1] or 0))
@@ -1735,18 +1965,85 @@ async def clean_composer_on_start(loop: Any, peer: str) -> None:
             screen = await loop.device.read_screen(await loop.device.screencap())
         except Exception:
             pass
-    from src.integrations.whatsapp_rpa.phone_send import composer_body
+    if timer is not None:
+        timer.mark("dismiss_quote")
     draft = str(getattr(screen, "composer", "") or "")
-    if not composer_body(draft):
-        return
-    phone = normalize_e164(peer)
-    if not _bubble_matches_unsent(loop, phone, draft):
+    if composer_body(draft) and not _bubble_matches_unsent(loop, phone, draft):
         clear = getattr(loop.device, "clear_composer", None)
         if clear is not None:
             try:
                 await clear()
             except Exception:
                 pass
+        try:
+            screen = await loop.device.read_screen(await loop.device.screencap())
+        except Exception:
+            pass
+    if timer is not None:
+        timer.mark("clear_composer")
+    composer = str(getattr(screen, "composer", "") or "")
+    return {
+        "cleared": composer_is_placeholder(composer),
+        "chat": chat_page_ready(screen, phone),
+        "composer": composer,
+    }
+
+
+async def reconcile_failed_history(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
+                                   timer: Optional[StepTimer] = None) -> List[str]:
+    """启动时把仍是 failed 或 bubble_missing 的句子在屏幕上找回来，找到就改成 sent。"""
+    targets = failed_history_texts(loop_a.ledger, loop_b.ledger)
+    found: List[str] = []
+    if targets:
+        for loop, peer in ((loop_a, phone_b), (loop_b, phone_a)):
+            try:
+                await open_peer_chat(loop.device, peer)
+                await ensure_chat_page(loop.device, normalize_e164(peer))
+                found.extend(await scan_history_pages(loop.device, targets, limit=3))
+            except Exception:
+                continue
+            latest = getattr(loop.device, "scroll_to_latest", None)
+            if latest is not None:
+                try:
+                    await latest()
+                except Exception:
+                    pass
+    if found:
+        absorb_visible_texts(loop_a.ledger, normalize_e164(phone_b), found)
+        absorb_visible_texts(loop_b.ledger, normalize_e164(phone_a), found)
+    if timer is not None:
+        timer.mark("search_failed")
+    return found
+
+
+async def run_normalize_ui(loop: Any, phone: str, evidence: EvidenceLog) -> Dict[str, Any]:
+    """只回到聊天页、清掉无关草稿、截图。不生成回复，也不点发送。"""
+    timer = StepTimer()
+    prepared = await prepare_phone(loop, phone, timer)
+    try:
+        png = await loop.device.screencap()
+        screen = await loop.device.read_screen(png)
+    except Exception:
+        png, screen = b"", PhoneScreen()
+    if not isinstance(png, (bytes, bytearray)):
+        png = b""
+    evidence.save("normalize", bytes(png), screen if isinstance(screen, PhoneScreen) else PhoneScreen())
+    timer.mark("screenshot")
+    composer = str(getattr(screen, "composer", "") or prepared.get("composer") or "")
+    chat = chat_page_ready(screen, normalize_e164(phone))
+    cleared = bool(prepared.get("cleared")) and chat
+    return evidence.finish({
+        "command": "normalize-ui",
+        "ok": cleared,
+        "cleared": cleared,
+        "chat": chat,
+        "header": str(getattr(screen, "header", "") or ""),
+        "composer": composer,
+        "tapped": False,
+        "timings": timer.rows,
+        "turns": [],
+        "history": ledger_history(loop.ledger),
+    })
 
 
 async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
@@ -1770,8 +2067,10 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
     loops = {"A": loop_a, "B": loop_b}
     results = []
     baselines: Dict[str, List[str]] = {"A": [], "B": []}
-    await clean_composer_on_start(loop_a, phone_b)
-    await clean_composer_on_start(loop_b, phone_a)
+    startup = StepTimer()
+    await prepare_phone(loop_a, phone_b, startup)
+    await prepare_phone(loop_b, phone_a, startup)
+    await reconcile_failed_history(loop_a, loop_b, phone_a, phone_b, startup)
     await reconcile_pair(loop_a, loop_b, phone_a, phone_b)
     timings: List[Dict[str, Any]] = []
 
@@ -1793,7 +2092,7 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
                 "turn": row.get("turn"), "seat": row.get("seat"),
                 "status": row.get("status"), **timing,
             })
-        timings[:] = collected
+        timings[:] = list(startup.rows) + collected
         evidence.checkpoint(publish())
 
     flush()

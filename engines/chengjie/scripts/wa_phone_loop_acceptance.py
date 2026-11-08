@@ -96,6 +96,7 @@ from src.integrations.whatsapp_rpa.phone_acceptance import (
     run_convert_pending,
     run_dry,
     run_first_touch_cap,
+    run_normalize_ui,
     run_pair_chat,
     run_rate_limit_check,
     run_stop_test,
@@ -249,11 +250,13 @@ async def build_inprocess_decide(config_path: Path, data_dir: Path, inbox):
     ))
 
     async def decide(*, account_id: str, phone: str, last_inbound: str, persona_id: str = "",
-                     agent_instruction: str = ""):
+                     agent_instruction: str = "", self_name: str = "",
+                     peer_names: Optional[list] = None):
         return await decide_whatsapp(
             app, account_id=account_id, phone=phone,
             last_inbound=last_inbound, persona_id=persona_id,
             agent_instruction=agent_instruction,
+            self_name=self_name, peer_names=list(peer_names or []),
         )
 
     return decide
@@ -350,6 +353,8 @@ def parser() -> argparse.ArgumentParser:
     pair.add_argument("--seed", default="你好，我在做链路验收")
     pair.add_argument("--max-seconds", type=float, default=540)
 
+    sub.add_parser("normalize-ui", parents=[common])
+
     cap = sub.add_parser("first-touch-cap", parents=[common])
     cap.add_argument("--cap", type=int, default=2)
     cap.add_argument("--text", action="append", default=[])
@@ -441,6 +446,12 @@ async def _dispatch(args, data, evidence, inbox, reader, decide, *, devices=None
     elif args.command == "rate-limit-check":
         device = (devices or {}).get("a") or build_device(args, evidence, serial=args.serial, label="a", reader=reader)
         report = await run_rate_limit_check(device, evidence)
+    elif args.command == "normalize-ui":
+        if not getattr(args, "phone", ""):
+            raise SystemExit("normalize-ui 需要 --phone")
+        device = (devices or {}).get("a") or build_device(args, evidence, serial=args.serial, label="a", reader=reader)
+        loop = make_loop(args, inbox, device, data / "ledger.db", args.account, decide or _unused_decide)
+        report = await run_normalize_ui(loop, args.phone, evidence)
     elif args.command == "pair-chat":
         if decide is None:
             decide = await build_decide(args, inbox)
