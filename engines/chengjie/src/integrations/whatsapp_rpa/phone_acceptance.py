@@ -512,27 +512,52 @@ def _bubble_side(box: Sequence[float], width: float, png: bytes) -> str:
 _MENU_LABELS = frozenset({"编辑", "转发", "删除", "收藏", "贴纸", "查看贴纸", "添加到收藏"})
 
 
-def _split_keyboard(items: Sequence[tuple], height: float):
-    """键帽不进输入框。输入栏只取键盘顶边以上的那一条。"""
+def _keyboard_zone_top(items: Sequence[tuple], width: float, height: float):
+    """下半屏挤满单字符框，或出现 ?123 这类键帽，就是键盘。返回键盘顶边。"""
     from src.integrations.whatsapp_rpa.phone_send import is_keycap
 
-    keys = [item for item in items if is_keycap(item[0])]
-    rest = [item for item in items if not is_keycap(item[0])]
-    if not keys:
-        return rest, [], False
-    keyboard_top = min(float(item[1][1]) for item in keys)
-    band = max(140.0, float(height) * 0.10)
-    bar: List[tuple] = []
-    above: List[tuple] = []
-    for text, box in rest:
-        cy = _box_cy(box)
-        if cy >= keyboard_top:
+    singles: List[Sequence[float]] = []
+    caps: List[Sequence[float]] = []
+    for text, box in items:
+        if _box_cy(box) < float(height) * 0.40:
             continue
-        if cy >= keyboard_top - band:
-            bar.append((text, box))
-        else:
-            above.append((text, box))
-    return bar, above, True
+        if is_keycap(text):
+            caps.append(box)
+            continue
+        if len(text) <= 1 and _box_width(box) <= max(56.0, float(width) * 0.14):
+            singles.append(box)
+    if caps:
+        return min(float(box[1]) for box in caps)
+    if len(singles) < 4:
+        return None
+    return min(float(box[1]) for box in singles)
+
+
+def _send_button_present(lines: Sequence[Dict[str, Any]], width: float, height: float) -> bool:
+    """输入栏右侧的发送钮或麦克风圆。键盘区里的键帽不算。"""
+    from src.integrations.whatsapp_rpa.phone_send import is_keycap
+
+    items = []
+    for line in lines or []:
+        text = str((line or {}).get("text") or "").strip()
+        box = (line or {}).get("box") or []
+        if len(box) < 4:
+            continue
+        items.append((text, box))
+    zone = _keyboard_zone_top(items, width, height) if width and height else None
+    for text, box in items:
+        if is_keycap(text):
+            continue
+        cy = _box_cy(box)
+        if zone is not None and cy >= float(zone) - 2:
+            continue
+        cx = (float(box[0]) + float(box[2])) / 2.0
+        if width <= 0 or cx < float(width) * 0.82:
+            continue
+        if _box_width(box) > max(72.0, float(width) * 0.16):
+            continue
+        return True
+    return False
 
 
 def _header_noise(text: str) -> bool:
@@ -596,18 +621,20 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
             notes.append(text)
             continue
         composer_items.append((text, box))
-    bar, above, keyboard = _split_keyboard(composer_items, float(height))
-    if keyboard:
-        cluster = _composer_cluster(bar) if bar else []
-        bubbles = list(above)
-    else:
-        cluster = _composer_cluster(composer_items)
-        bubbles = []
+    zone = _keyboard_zone_top(composer_items, float(width), float(height))
+    if zone is not None:
+        kept_items: List[tuple] = []
+        for text, box in composer_items:
+            if _box_cy(box) >= float(zone) - 2:
+                notes.append(text)
+                continue
+            kept_items.append((text, box))
+        composer_items = kept_items
+    cluster = _composer_cluster(composer_items)
     kept_composer = _without_input_icons(cluster, float(width))
     composer = [text for text, _box in kept_composer if not is_keycap(text)]
     cluster_ids = {id(item) for item in cluster}
-    if not keyboard:
-        bubbles = [item for item in composer_items if id(item) not in cluster_ids]
+    bubbles = [item for item in composer_items if id(item) not in cluster_ids]
     incoming, outgoing, transcript = _merge_bubbles(
         list(bubbles) + list(boundaries), float(width), png,
     )
@@ -1151,6 +1178,10 @@ class SshAdbPhoneDevice:
         if code != 0 or not out:
             raise RuntimeError(redact_text(err or "screencap failed", []))
         return out
+
+    async def press_home(self) -> None:
+        """先回安卓桌面，再打开 wa.me，避免从设置页或别的 App 里找返回。"""
+        await self._run(["shell", "input", "keyevent", "KEYCODE_HOME"])
 
     async def dismiss_keyboard(self) -> None:
         """ESC。预填会把键盘顶起来，建议条会挡住输入栏。"""
@@ -1792,29 +1823,68 @@ def select_all_point(lines: Sequence[Dict[str, Any]]):
     return None
 
 
-def chat_page_ready(screen: Any, phone: str = "") -> bool:
-    """顶栏有 + 号，底部是输入栏，并且没有贴纸菜单盖在上面。"""
-    from src.integrations.whatsapp_rpa.phone_identity import header_matches
-    from src.integrations.whatsapp_rpa.phone_send import composer_body, composer_is_placeholder
-
-    header = str(getattr(screen, "header", "") or "")
-    plus = header_matches(header, phone=phone) or (
-        "+" in header and any(ch.isdigit() for ch in header)
-    )
-    if not plus:
-        return False
-    texts = [
+def _screen_lines(screen: Any) -> List[str]:
+    return [
         str((line or {}).get("text") or "").strip()
         for line in (getattr(screen, "ocr_lines", None) or [])
     ]
-    if any(text in _MENU_LABELS for text in texts):
-        return False
+
+
+def has_input_bar(screen: Any) -> bool:
+    """占位「发消息」，或这一行右侧有发送/麦克风圆钮。桌面文字不算输入栏。"""
+    from src.integrations.whatsapp_rpa.phone_send import composer_body, composer_is_placeholder
+
     composer = str(getattr(screen, "composer", "") or "")
-    if composer_is_placeholder(composer) or composer_body(composer):
+    texts = _screen_lines(screen)
+    if composer_is_placeholder(composer) or any(
+        "发消息" in text or "type a message" in text.casefold() for text in texts
+    ):
         return True
-    if any("发消息" in text or "type a message" in text.casefold() for text in texts):
+    size = getattr(screen, "shot_size", None) or [0, 0]
+    width = float(size[0] or 0)
+    height = float(size[1] or 0)
+    lines = list(getattr(screen, "ocr_lines", None) or [])
+    if width > 0 and _send_button_present(lines, width, height or 1):
         return True
-    return not texts
+    if not lines and (composer_is_placeholder(composer) or composer_body(composer) or composer == ""):
+        return True
+    return False
+
+
+def chat_page_ready(screen: Any, phone: str = "") -> bool:
+    """顶栏的 + 号必须对上对方号码，同时要有输入栏。菜单、设置和桌面都不是。"""
+    from src.integrations.whatsapp_rpa.phone_identity import header_matches
+
+    header = str(getattr(screen, "header", "") or "")
+    if not header_matches(header, phone=phone):
+        return False
+    if any(text in _MENU_LABELS for text in _screen_lines(screen)):
+        return False
+    return has_input_bar(screen)
+
+
+def recognized_popup(screen: Any) -> bool:
+    """已经认出的弹层。只允许按一次返回把它关掉，不能用来退出设置或桌面。"""
+    texts = _screen_lines(screen)
+    if any(text in _MENU_LABELS for text in texts):
+        return True
+    blob = " ".join([str(getattr(screen, "header", "") or ""), str(getattr(screen, "composer", "") or ""), *texts])
+    return any(marker in blob for marker in ("发送给", "正在搜索", "选择联系人"))
+
+
+def input_bar_top(screen: Any):
+    """输入栏文字的上沿。键盘弹起后它会停在屏幕中部，而不是最底一行。"""
+    composer = str(getattr(screen, "composer", "") or "").strip()
+    best = None
+    for line in getattr(screen, "ocr_lines", None) or []:
+        text = str((line or {}).get("text") or "").strip()
+        box = (line or {}).get("box") or []
+        if len(box) < 4 or not text:
+            continue
+        if text == composer or "发消息" in text or (composer and composer.split("\n")[0] in text):
+            top = float(box[1])
+            best = top if best is None else min(best, top)
+    return best
 
 
 def screen_matches_target(screen: Any, target: str) -> bool:
@@ -1868,45 +1938,91 @@ def failed_history_texts(*ledgers: Any) -> List[str]:
     return texts
 
 
-def quote_close_point(lines: Sequence[Dict[str, Any]], width: float, height: float):
-    """引用回复横条右上角的 X。点它关掉贴纸，不点正文。"""
+def quote_close_point(lines: Sequence[Dict[str, Any]], width: float, height: float,
+                      input_top: Optional[float] = None):
+    """引用块右上角的 X。键盘把输入栏顶到中部时，X 跟着输入栏，不在屏幕最底。"""
     if width <= 0 or height <= 0:
         return None
+    marks = {"X", "×", "x", "✕", "✖"}
+    found = None
     for line in lines or []:
         text = str((line or {}).get("text") or "").strip()
         box = (line or {}).get("box") or []
-        if text not in {"X", "×", "x", "✕", "✖"} or len(box) < 4:
+        if text not in marks or len(box) < 4:
             continue
         cy = (float(box[1]) + float(box[3])) / 2.0
         cx = (float(box[0]) + float(box[2])) / 2.0
-        if cy < height * 0.72 or cy > height * 0.98:
+        if cx < width * 0.55 or float(box[2]) - float(box[0]) > width * 0.08:
             continue
-        if cx < width * 0.55:
+        if input_top is not None and float(input_top) < height * 0.75:
+            if not (float(input_top) - 220 <= cy <= float(input_top) + 12):
+                continue
+        elif cy < height * 0.20 or cy > height * 0.98:
             continue
-        if float(box[2]) - float(box[0]) > width * 0.08:
+        found = (int(cx), int(cy))
+    if found is not None:
+        return found
+    if input_top is None or float(input_top) >= height * 0.75:
+        return None
+    band = []
+    for line in lines or []:
+        text = str((line or {}).get("text") or "").strip()
+        box = (line or {}).get("box") or []
+        if not text or text in marks or len(box) < 4 or "发消息" in text:
             continue
-        return int(cx), int(cy)
-    return None
+        cy = _box_cy(box)
+        if float(input_top) - 180 <= cy <= float(input_top) - 8:
+            band.append(text)
+    if not band:
+        return None
+    return int(width * 0.92), int(float(input_top) - 36)
 
 
-async def ensure_chat_page(device: Any, phone: str, *, max_backs: int = 4) -> Any:
-    """KEYCODE_BACK 关掉菜单和弹层，直到顶栏是号码、底部是输入栏。"""
+async def _press_home(device: Any) -> None:
+    home = getattr(device, "press_home", None)
+    if home is not None:
+        await home()
+        return
+    run = getattr(device, "_run", None)
+    if run is not None:
+        await run(["shell", "input", "keyevent", "KEYCODE_HOME"])
+
+
+async def _read(device: Any) -> Any:
+    try:
+        return await device.read_screen(await device.screencap())
+    except Exception:
+        return PhoneScreen()
+
+
+async def enter_chat(device: Any, phone: str) -> Dict[str, Any]:
+    """先回桌面，再用 wa.me 打开会话。返回键最多一次，而且只关已经认出的弹层。
+
+    不在聊天页就再打开一次 wa.me。仍然不对，就停，不去点屏幕上的字。
+    """
     screen = PhoneScreen()
-    for _ in range(max_backs + 1):
+    used_back = False
+    for _attempt in range(2):
         try:
-            screen = await device.read_screen(await device.screencap())
+            await _press_home(device)
+            await open_peer_chat(device, phone)
         except Exception:
-            return screen
+            return {"ok": False, "screen": screen, "reason": "not_in_chat"}
+        screen = await _read(device)
         if chat_page_ready(screen, phone):
-            return screen
-        back = getattr(device, "press_back", None)
-        if back is None:
-            return screen
-        try:
-            await back()
-        except Exception:
-            return screen
-    return screen
+            return {"ok": True, "screen": screen, "reason": ""}
+        if not used_back and recognized_popup(screen):
+            used_back = True
+            back = getattr(device, "press_back", None)
+            if back is not None:
+                try:
+                    await back()
+                except Exception:
+                    pass
+                screen = await _read(device)
+                if chat_page_ready(screen, phone):
+                    return {"ok": True, "screen": screen, "reason": ""}
+    return {"ok": False, "screen": screen, "reason": "not_in_chat"}
 
 
 async def scan_history_pages(device: Any, targets: Sequence[str], *, limit: int = 3) -> List[str]:
@@ -1935,36 +2051,48 @@ async def scan_history_pages(device: Any, targets: Sequence[str], *, limit: int 
 
 
 async def prepare_phone(loop: Any, peer: str, timer: Optional[StepTimer] = None) -> Dict[str, Any]:
-    """回到聊天页，关掉引用条，草稿对不上才清。清完看到「发消息」才算 cleared。"""
+    """回到聊天页，关掉引用条，草稿对不上才清。不在聊天页就停，不去点。"""
     from src.integrations.whatsapp_rpa.phone_send import composer_body, composer_is_placeholder
 
     phone = normalize_e164(peer)
-    try:
-        await open_peer_chat(loop.device, peer)
-    except Exception:
-        return {"cleared": False, "chat": False, "composer": ""}
-    screen = await ensure_chat_page(loop.device, phone)
+    opened = await enter_chat(loop.device, phone)
+    screen = opened.get("screen") or PhoneScreen()
     if timer is not None:
-        timer.mark("back_to_chat")
-    dismiss = getattr(loop.device, "dismiss_keyboard", None)
-    if dismiss is not None:
-        try:
-            await dismiss()
-            screen = await loop.device.read_screen(await loop.device.screencap())
-        except Exception:
-            pass
-    if timer is not None:
-        timer.mark("dismiss_keyboard")
+        timer.mark("open_chat")
+    if not opened.get("ok"):
+        return {
+            "cleared": False, "chat": False, "composer": str(getattr(screen, "composer", "") or ""),
+            "reason": "not_in_chat", "quote_closed": False,
+        }
+    if not chat_page_ready(screen, phone):
+        return {
+            "cleared": False, "chat": False, "composer": str(getattr(screen, "composer", "") or ""),
+            "reason": "not_in_chat", "quote_closed": False,
+        }
     lines = list(getattr(screen, "ocr_lines", None) or [])
     size = getattr(screen, "shot_size", None) or [0, 0]
-    point = quote_close_point(lines, float(size[0] or 0), float(size[1] or 0))
+    width = float(size[0] or 0)
+    height = float(size[1] or 0)
+    point = quote_close_point(lines, width, height, input_bar_top(screen))
+    quote_closed = point is None
     tap = getattr(loop.device, "tap_xy", None)
     if point and tap is not None:
         try:
             await tap(point[0], point[1])
             screen = await loop.device.read_screen(await loop.device.screencap())
         except Exception:
-            pass
+            screen = screen
+        if not chat_page_ready(screen, phone):
+            return {
+                "cleared": False, "chat": False,
+                "composer": str(getattr(screen, "composer", "") or ""),
+                "reason": "not_in_chat", "quote_closed": False,
+            }
+        lines = list(getattr(screen, "ocr_lines", None) or [])
+        size = getattr(screen, "shot_size", None) or [width, height]
+        quote_closed = quote_close_point(
+            lines, float(size[0] or 0), float(size[1] or 0), input_bar_top(screen),
+        ) is None
     if timer is not None:
         timer.mark("dismiss_quote")
     draft = str(getattr(screen, "composer", "") or "")
@@ -1982,10 +2110,12 @@ async def prepare_phone(loop: Any, peer: str, timer: Optional[StepTimer] = None)
     if timer is not None:
         timer.mark("clear_composer")
     composer = str(getattr(screen, "composer", "") or "")
+    chat = chat_page_ready(screen, phone)
+    cleared = chat and composer_is_placeholder(composer) and quote_closed
+    reason = "" if cleared else ("quote_open" if chat and not quote_closed else "")
     return {
-        "cleared": composer_is_placeholder(composer),
-        "chat": chat_page_ready(screen, phone),
-        "composer": composer,
+        "cleared": cleared, "chat": chat, "composer": composer,
+        "reason": reason, "quote_closed": quote_closed,
     }
 
 
@@ -1997,8 +2127,12 @@ async def reconcile_failed_history(loop_a: Any, loop_b: Any, phone_a: str, phone
     if targets:
         for loop, peer in ((loop_a, phone_b), (loop_b, phone_a)):
             try:
-                await open_peer_chat(loop.device, peer)
-                await ensure_chat_page(loop.device, normalize_e164(peer))
+                opened = await enter_chat(loop.device, normalize_e164(peer))
+            except Exception:
+                continue
+            if not opened.get("ok"):
+                continue
+            try:
                 found.extend(await scan_history_pages(loop.device, targets, limit=3))
             except Exception:
                 continue
@@ -2030,13 +2164,17 @@ async def run_normalize_ui(loop: Any, phone: str, evidence: EvidenceLog) -> Dict
     evidence.save("normalize", bytes(png), screen if isinstance(screen, PhoneScreen) else PhoneScreen())
     timer.mark("screenshot")
     composer = str(getattr(screen, "composer", "") or prepared.get("composer") or "")
-    chat = chat_page_ready(screen, normalize_e164(phone))
+    chat = bool(prepared.get("chat")) and chat_page_ready(screen, normalize_e164(phone))
     cleared = bool(prepared.get("cleared")) and chat
+    reason = str(prepared.get("reason") or "")
+    if not chat:
+        reason = "not_in_chat"
     return evidence.finish({
         "command": "normalize-ui",
         "ok": cleared,
         "cleared": cleared,
         "chat": chat,
+        "reason": reason,
         "header": str(getattr(screen, "header", "") or ""),
         "composer": composer,
         "tapped": False,

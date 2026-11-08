@@ -1899,6 +1899,47 @@ def test_keyboard_keys_stay_out_of_the_composer():
     assert "?123" not in "".join(screen.outgoing)
 
 
+def test_raised_keyboard_keeps_the_real_composer_and_drops_keycaps():
+    """键盘弹起后输入栏在 y≈930，「C」在 y≈1340，不能当成草稿。"""
+    from src.integrations.whatsapp_rpa.phone_acceptance import chat_page_ready, quote_close_point
+
+    screen = lines_to_screen([
+        {"text": "+639543629194", "box": [80, 70, 420, 120]},
+        {"text": "发消息", "box": [106, 911, 225, 963]},
+        {"text": "C", "box": [270, 1326, 309, 1361]},
+        {"text": "V", "box": [320, 1326, 359, 1361]},
+        {"text": "B", "box": [370, 1326, 409, 1361]},
+        {"text": "N", "box": [420, 1326, 459, 1361]},
+        {"text": "M", "box": [470, 1326, 509, 1361]},
+    ], 720, 1600)
+    assert screen.composer.strip() == "发消息"
+    assert "C" not in screen.composer
+    assert "C" not in "".join(screen.outgoing + screen.incoming)
+    desktop = PhoneScreen(
+        header="全部笔记", composer="GMO",
+        ocr_lines=[
+            {"text": "全部笔记", "box": [40, 200, 280, 260]},
+            {"text": "GMO", "box": [80, 900, 180, 960]},
+        ],
+        shot_size=[720, 1600],
+    )
+    settings = PhoneScreen(
+        header="隐私", composer="",
+        ocr_lines=[{"text": "隐私", "box": [40, 300, 180, 360]}],
+        shot_size=[720, 1600],
+    )
+    assert chat_page_ready(desktop, "+639543629194") is False
+    assert chat_page_ready(settings, "+639543629194") is False
+    point = quote_close_point(
+        [
+            {"text": "发消息", "box": [106, 911, 225, 963]},
+            {"text": "X", "box": [640, 820, 670, 852]},
+        ],
+        720, 1600, input_top=911,
+    )
+    assert point == (655, 836)
+
+
 def test_split_bubble_matches_the_failed_sentence():
     from src.integrations.whatsapp_rpa.phone_acceptance import screen_matches_target
 
@@ -1993,11 +2034,17 @@ async def test_normalize_ui_backs_out_of_the_menu_and_confirms_placeholder(tmp_p
         def __init__(self):
             self.phase = "menu"
             self.backs = 0
+            self.homes = 0
             self.clears = 0
             self.taps = 0
+            self.urls = []
+            self.quote = True
+
+        async def press_home(self):
+            self.homes += 1
 
         async def open_url(self, url):
-            return None
+            self.urls.append(url)
 
         async def screencap(self):
             return b"png"
@@ -2010,15 +2057,17 @@ async def test_normalize_ui_backs_out_of_the_menu_and_confirms_placeholder(tmp_p
                     shot_size=[720, 1600],
                 )
             if self.phase == "draft":
+                lines = [
+                    {"text": PHONE_A, "box": [80, 80, 400, 130]},
+                    {"text": "无关的长草稿还挂着引用", "box": [40, 1360, 520, 1410]},
+                    {"text": "●", "box": [640, 1360, 690, 1420]},
+                    {"text": "?123", "box": [18, 1421, 95, 1461]},
+                ]
+                if self.quote:
+                    lines.append({"text": "X", "box": [640, 1480, 670, 1510]})
                 return PhoneScreen(
                     header=PHONE_A, composer="无关的长草稿还挂着引用",
-                    ocr_lines=[
-                        {"text": PHONE_A, "box": [80, 80, 400, 130]},
-                        {"text": "X", "box": [640, 1480, 670, 1510]},
-                        {"text": "无关的长草稿还挂着引用", "box": [40, 1360, 520, 1410]},
-                        {"text": "?123", "box": [18, 1421, 95, 1461]},
-                    ],
-                    shot_size=[720, 1600],
+                    ocr_lines=lines, shot_size=[720, 1600],
                 )
             return PhoneScreen(
                 header=PHONE_A, composer="发消息",
@@ -2037,7 +2086,7 @@ async def test_normalize_ui_backs_out_of_the_menu_and_confirms_placeholder(tmp_p
             return None
 
         async def tap_xy(self, x, y):
-            return None
+            self.quote = False
 
         async def clear_composer(self):
             self.clears += 1
@@ -2056,14 +2105,88 @@ async def test_normalize_ui_backs_out_of_the_menu_and_confirms_placeholder(tmp_p
         "--phone", PHONE_A,
     ])
     report = await async_main(args, devices={"a": phone})
+    assert phone.homes == 1
     assert phone.backs == 1
     assert phone.clears == 1
     assert phone.taps == 0
+    assert phone.urls and "wa.me/" in phone.urls[0] and "text=" not in phone.urls[0]
     assert report["cleared"] is True
     assert report["composer"] == "发消息"
     assert report["tapped"] is False
-    assert any(row["step"] == "back_to_chat" and isinstance(row["ms"], int) for row in report["timings"])
+    assert any(row["step"] == "open_chat" and isinstance(row["ms"], int) for row in report["timings"])
     assert any(row["step"] == "clear_composer" for row in report["timings"])
+
+
+@pytest.mark.asyncio
+async def test_desktop_and_settings_are_not_cleaned(tmp_path: Path):
+    from scripts.wa_phone_loop_acceptance import async_main, parser
+
+    class Stuck:
+        def __init__(self, kind):
+            self.kind = kind
+            self.homes = 0
+            self.backs = 0
+            self.clears = 0
+            self.taps = 0
+            self.urls = []
+
+        async def press_home(self):
+            self.homes += 1
+
+        async def open_url(self, url):
+            self.urls.append(url)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            if self.kind == "desktop":
+                return PhoneScreen(
+                    header="全部笔记", composer="GMO",
+                    ocr_lines=[
+                        {"text": "全部笔记", "box": [40, 180, 280, 240]},
+                        {"text": "GMO", "box": [90, 880, 180, 940]},
+                    ],
+                    shot_size=[720, 1600],
+                )
+            return PhoneScreen(
+                header="隐私", composer="",
+                ocr_lines=[{"text": "隐私", "box": [48, 280, 180, 340]}],
+                shot_size=[720, 1600],
+            )
+
+        async def press_back(self):
+            self.backs += 1
+
+        async def tap_xy(self, x, y):
+            self.taps += 1
+
+        async def clear_composer(self):
+            self.clears += 1
+
+        async def tap_send(self):
+            self.taps += 1
+
+    for kind in ("desktop", "settings"):
+        phone = Stuck(kind)
+        args = parser().parse_args([
+            "normalize-ui",
+            "--data-dir", str(tmp_path / kind / "data"),
+            "--evidence-dir", str(tmp_path / kind / "evidence"),
+            "--adb-ssh-host", "hub176",
+            "--serial", "SERIAL_A",
+            "--phone", PHONE_A,
+        ])
+        report = await async_main(args, devices={"a": phone})
+        assert phone.homes == 2
+        assert phone.backs == 0
+        assert phone.clears == 0
+        assert phone.taps == 0
+        assert len(phone.urls) == 2
+        assert all("wa.me/" in url and "text=" not in url for url in phone.urls)
+        assert report["ok"] is False
+        assert report["reason"] == "not_in_chat"
+        assert report["cleared"] is False
 
 
 @pytest.mark.asyncio
