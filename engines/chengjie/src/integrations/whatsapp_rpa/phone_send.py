@@ -834,6 +834,62 @@ async def _switch_prefill(device: Any, url: str, body: str, placed: str) -> str:
     return "wa_me"
 
 
+async def _confirm_tapped_send(device: Any, body: str, timings: Dict[str, Any], url: str) -> SendOutcome:
+    """点过发送之后只读确认。读屏断线就是未知，不再补点。"""
+
+    async def _look():
+        return await device.read_screen(await device.screencap())
+
+    try:
+        after = await _look()
+    except Exception:
+        return SendOutcome(
+            status="unknown", reason="confirm_unread", tapped=True, url=url, timings=timings,
+        )
+    if voice_permission_popup(after):
+        back = getattr(device, "press_back", None)
+        if back is not None:
+            try:
+                await back()
+            except Exception:
+                pass
+        try:
+            after = await _look()
+        except Exception:
+            return SendOutcome(
+                status="unknown", reason="confirm_unread", tapped=True, url=url, timings=timings,
+            )
+    if send_confirmed(after, body):
+        return SendOutcome(status="sent", reason="", tapped=True, url=url, timings=timings)
+    # 屏幕确实还留着这句草稿，才再点一次。读不到确认结果时不补点。
+    if composer_still_has_draft(after, body) and not voice_permission_popup(after):
+        await device.tap_send()
+        try:
+            after = await _look()
+        except Exception:
+            return SendOutcome(
+                status="unknown", reason="confirm_unread", tapped=True, url=url, timings=timings,
+            )
+        if voice_permission_popup(after):
+            back = getattr(device, "press_back", None)
+            if back is not None:
+                try:
+                    await back()
+                except Exception:
+                    pass
+            try:
+                after = await _look()
+            except Exception:
+                return SendOutcome(
+                    status="unknown", reason="confirm_unread", tapped=True, url=url, timings=timings,
+                )
+        if send_confirmed(after, body):
+            return SendOutcome(status="sent", reason="", tapped=True, url=url, timings=timings)
+    return SendOutcome(
+        status="failed", reason="bubble_missing", tapped=True, url=url, timings=timings,
+    )
+
+
 async def deliver_via_wa_me(
     device: PhoneDevice,
     phone: str,
@@ -907,37 +963,10 @@ async def deliver_via_wa_me(
         )
 
     await device.tap_send()
-    after = await device.read_screen(await device.screencap())
-    if voice_permission_popup(after):
-        back = getattr(device, "press_back", None)
-        if back is not None:
-            try:
-                await back()
-            except Exception:
-                pass
-        after = await device.read_screen(await device.screencap())
-    if send_confirmed(after, body):
-        timings["total_ms"] = int((time.monotonic() - started) * 1000)
-        return SendOutcome(status="sent", reason="", tapped=True, url=used_url, timings=timings)
-    # 只有输入框里还留着这句，才再点一次。发送键变成麦克风之后不能补点。
-    if composer_still_has_draft(after, body) and not voice_permission_popup(after):
-        await device.tap_send()
-        after = await device.read_screen(await device.screencap())
-        if voice_permission_popup(after):
-            back = getattr(device, "press_back", None)
-            if back is not None:
-                try:
-                    await back()
-                except Exception:
-                    pass
-            after = await device.read_screen(await device.screencap())
-        if send_confirmed(after, body):
-            timings["total_ms"] = int((time.monotonic() - started) * 1000)
-            return SendOutcome(status="sent", reason="", tapped=True, url=used_url, timings=timings)
+    outcome = await _confirm_tapped_send(device, body, timings, used_url)
     timings["total_ms"] = int((time.monotonic() - started) * 1000)
-    return SendOutcome(
-        status="failed", reason="bubble_missing", tapped=True, url=used_url, timings=timings,
-    )
+    outcome.timings = timings
+    return outcome
 
 
 def _png_of(image) -> bytes:

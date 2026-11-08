@@ -24,8 +24,27 @@ adb 只通过 ssh 在远端执行，禁止 kill-server、start-server、connect�
       --adb-ssh-host hub176 --ocr-url http://192.168.0.176:8766 ^
       --config D:\\chengjie-instances\\zhiliao\\config\\config.yaml ^
       --a-serial SERIAL_A --a-phone +639000000001 --a-account seat-a ^
+      --a-persona PERSONA_A --a-name NAME_A ^
       --b-serial SERIAL_B --b-phone +639000000002 --b-account seat-b ^
-      --turns 4 --seed 你好，我在做链路验收
+      --b-persona PERSONA_B --b-name NAME_B ^
+      --reply-language-strategy fixed --reply-language hi ^
+      --turns 4 --seed 第一句原文
+
+只写 ``--reply-language hi`` 时等同 fixed。账号各自的默认语言::
+
+    --reply-language-strategy account_default ^
+    --a-reply-language hi --b-reply-language ar
+
+跟随对方最新一条，检测失败时用明确回退，不会改成中文或英语::
+
+    --reply-language-strategy follow_peer --reply-language-fallback hi
+
+这些策略只在 ``--config`` 进程内生成时生效。不传任何语言参数则保持原来的自动判断。
+``--decide-url`` 传不了语言策略和人设隔离，一起出现会直接退出、不发送。
+号码国码不参与选语言。能力探测（不发送、不连网）::
+
+    python scripts\\wa_phone_loop_acceptance.py capabilities
+    python scripts\\wa_phone_loop_acceptance.py pair-chat --help
 
     python scripts\\wa_phone_loop_acceptance.py pair-chat ^
       --data-dir D:\\wa-accept\\data --evidence-dir D:\\wa-accept\\pair ^
@@ -110,6 +129,7 @@ from src.integrations.whatsapp_rpa.phone_acceptance import (
 )
 from src.integrations.whatsapp_rpa.phone_ledger import PhoneLedger
 from src.integrations.whatsapp_rpa.phone_loop import WaPhoneLoop
+from src.integrations.whatsapp_rpa.reply_language import canonical_tag, capabilities_payload, load_registry
 
 
 def read_token() -> str:
@@ -118,6 +138,93 @@ def read_token() -> str:
         if value:
             return value
     return ""
+
+
+def _language_fields(args) -> dict:
+    return {
+        "strategy": str(getattr(args, "reply_language_strategy", "") or "").strip(),
+        "reply_language": str(getattr(args, "reply_language", "") or "").strip(),
+        "fallback": str(getattr(args, "reply_language_fallback", "") or "").strip(),
+        "a": str(getattr(args, "a_reply_language", "") or "").strip(),
+        "b": str(getattr(args, "b_reply_language", "") or "").strip(),
+    }
+
+
+def _require_known_tag(raw: str, label: str) -> str:
+    tag = canonical_tag(raw)
+    if not tag:
+        raise SystemExit(f"不认识的{label}，验收停止，不会发送。")
+    from src.integrations.whatsapp_rpa.reply_language import capability_block_reason, lookup_language
+
+    reason = capability_block_reason(lookup_language(tag))
+    if reason:
+        raise SystemExit(f"{label} 的能力标记为不支持，验收停止，不会发送。")
+    return tag
+
+
+def compile_reply_language_policies(args) -> dict:
+    """两个人设各一份策略。什么都没写就返回空策略，发送链保持原样。"""
+    fields = _language_fields(args)
+    used = any(fields.values())
+    legacy = {"strategy": "", "requested": ""}
+    if not used:
+        return {"a": dict(legacy), "b": dict(legacy)}
+    if str(getattr(args, "decide_url", "") or "").strip():
+        raise SystemExit(
+            "回复语言策略不能和 --decide-url 一起用。"
+            "已运行的 decide 传不了语言策略和人设隔离，请只使用 --config。"
+        )
+    if not str(getattr(args, "config", "") or "").strip():
+        raise SystemExit("回复语言策略需要 --config，在本进程里生成回复。")
+    strategy = fields["strategy"]
+    if not strategy:
+        only_fixed = fields["reply_language"] and not any(
+            fields[key] for key in ("fallback", "a", "b")
+        )
+        if not only_fixed:
+            raise SystemExit(
+                "回复语言任务必须写 --reply-language-strategy："
+                "fixed、account_default 或 follow_peer。"
+            )
+        strategy = "fixed"
+    if strategy == "fixed":
+        if not fields["reply_language"] or any(fields[key] for key in ("fallback", "a", "b")):
+            raise SystemExit("fixed 只使用 --reply-language。")
+        tag = _require_known_tag(fields["reply_language"], "--reply-language")
+        policy = {"strategy": "fixed", "requested": tag}
+        return {"a": dict(policy), "b": dict(policy)}
+    if strategy == "account_default":
+        if not fields["a"] or not fields["b"] or fields["reply_language"] or fields["fallback"]:
+            raise SystemExit(
+                "account_default 必须分别提供 --a-reply-language 和 --b-reply-language。"
+            )
+        return {
+            "a": {
+                "strategy": "account_default",
+                "requested": _require_known_tag(fields["a"], "--a-reply-language"),
+            },
+            "b": {
+                "strategy": "account_default",
+                "requested": _require_known_tag(fields["b"], "--b-reply-language"),
+            },
+        }
+    if strategy == "follow_peer":
+        if not fields["fallback"] or any(fields[key] for key in ("reply_language", "a", "b")):
+            raise SystemExit(
+                "follow_peer 必须提供 --reply-language-fallback，"
+                "并且不能再写 --reply-language。"
+            )
+        tag = _require_known_tag(fields["fallback"], "--reply-language-fallback")
+        policy = {"strategy": "follow_peer", "requested": tag}
+        return {"a": dict(policy), "b": dict(policy)}
+    raise SystemExit(
+        "不认识的 --reply-language-strategy。可选 fixed、account_default、follow_peer。"
+    )
+
+
+def capabilities_report() -> dict:
+    """给智拓探测用。不读账号配置，不连 adb，不发送。"""
+    return capabilities_payload(load_registry())
 
 
 async def build_decide(args, inbox):
@@ -258,12 +365,13 @@ async def build_inprocess_decide(config_path: Path, data_dir: Path, inbox):
 
     async def decide(*, account_id: str, phone: str, last_inbound: str, persona_id: str = "",
                      agent_instruction: str = "", self_name: str = "",
-                     peer_names: Optional[list] = None):
+                     peer_names: Optional[list] = None, reply_lang: str = ""):
         return await decide_whatsapp(
             app, account_id=account_id, phone=phone,
             last_inbound=last_inbound, persona_id=persona_id,
             agent_instruction=agent_instruction,
             self_name=self_name, peer_names=list(peer_names or []),
+            reply_lang=reply_lang,
         )
 
     return decide
@@ -295,7 +403,8 @@ def build_device(args, evidence: EvidenceLog, *, serial: str, label: str, reader
     return RecordingDevice(inner, evidence, label)
 
 
-def make_loop(args, inbox, device, ledger_path: Path, account: str, decide, persona_id: str = ""):
+def make_loop(args, inbox, device, ledger_path: Path, account: str, decide, persona_id: str = "",
+              policy: dict | None = None):
     return WaPhoneLoop(
         account_id=account,
         inbox=inbox,
@@ -306,6 +415,7 @@ def make_loop(args, inbox, device, ledger_path: Path, account: str, decide, pers
             "hourly_cap": int(getattr(args, "cap", 2) or 2),
             "daily_cap": 80,
             "reply_mode": "auto",
+            "reply_language_policy": dict(policy or {"strategy": "", "requested": ""}),
         },
         ledger_path=ledger_path,
         persona_id=str(persona_id or getattr(args, "persona_id", "") or ""),
@@ -331,12 +441,13 @@ def bind_persona_decide(decide, self_id: str, self_name: str, peer_name: str):
 
     note = persona_separation_note(self_name, peer_name)
 
-    async def wrapped(*, account_id: str, phone: str, last_inbound: str, persona_id: str = ""):
+    async def wrapped(*, account_id: str, phone: str, last_inbound: str, persona_id: str = "",
+                      reply_lang: str = ""):
         names = peer_name_list(peer_name, last_inbound, self_name)
         result = await decide(
             account_id=account_id, phone=phone, last_inbound=last_inbound,
             persona_id=self_id or persona_id, agent_instruction=note,
-            self_name=self_name, peer_names=names,
+            self_name=self_name, peer_names=names, reply_lang=reply_lang,
         )
         reply = str((result or {}).get("reply") or "")
         if not claims_peer_identity(reply, names):
@@ -345,7 +456,7 @@ def bind_persona_decide(decide, self_id: str, self_name: str, peer_name: str):
             account_id=account_id, phone=phone, last_inbound=last_inbound,
             persona_id=self_id or persona_id,
             agent_instruction=note + "上一条用了对方的名字自称，整句重写，绝不能再出现这个名字。",
-            self_name=self_name, peer_names=names,
+            self_name=self_name, peer_names=names, reply_lang=reply_lang,
         )
         reply = str((again or {}).get("reply") or "")
         if claims_peer_identity(reply, names):
@@ -374,7 +485,10 @@ def parser() -> argparse.ArgumentParser:
     dry = sub.add_parser("dry-run", parents=[common])
     dry.add_argument("--text", default="你好，这是验收")
 
-    pair = sub.add_parser("pair-chat", parents=[common])
+    pair = sub.add_parser(
+        "pair-chat", parents=[common],
+        description="contract wa-pair-reply-language/2。语言策略见 capabilities。",
+    )
     pair.add_argument("--a-serial", required=True)
     pair.add_argument("--a-phone", required=True)
     pair.add_argument("--a-account", default="seat-a")
@@ -388,6 +502,25 @@ def parser() -> argparse.ArgumentParser:
     pair.add_argument("--turns", type=int, default=2)
     pair.add_argument("--seed", default="你好，我在做链路验收")
     pair.add_argument("--max-seconds", type=float, default=540)
+    pair.add_argument(
+        "--reply-language", default="",
+        help="fixed 的标准语言标签或别名，例如 hi 或 印地语。单独使用时等同 fixed。",
+    )
+    pair.add_argument(
+        "--reply-language-strategy", default="",
+        help="fixed、account_default 或 follow_peer。不传且没有其它语言参数时保持原行为。",
+    )
+    pair.add_argument(
+        "--reply-language-fallback", default="",
+        help="follow_peer 在认不出对方语言时使用的标签。必须显式给出。",
+    )
+    pair.add_argument("--a-reply-language", default="", help="A 账号登记的默认回复语言。")
+    pair.add_argument("--b-reply-language", default="", help="B 账号登记的默认回复语言。")
+
+    sub.add_parser(
+        "capabilities",
+        help="打印回复语言契约。不发送，不连网，不读配置。",
+    )
 
     sub.add_parser("normalize-ui", parents=[common])
     sub.add_parser("ui-probe", parents=[common])
@@ -408,6 +541,16 @@ def parser() -> argparse.ArgumentParser:
 
 
 async def async_main(args, *, devices=None, decide_fn=None, ocr_reader=None) -> dict:
+    if args.command == "pair-chat":
+        if (
+            not str(getattr(args, "a_persona", "") or "").strip()
+            or not str(getattr(args, "b_persona", "") or "").strip()
+            or str(args.a_persona) == str(args.b_persona)
+        ):
+            raise SystemExit("pair-chat 需要两个不同的人设：--a-persona 和 --b-persona")
+        policies = compile_reply_language_policies(args)
+        args.reply_language_policy_a = policies["a"]
+        args.reply_language_policy_b = policies["b"]
     if not getattr(args, "run_id", ""):
         args.run_id = uuid.uuid4().hex[:12]
     data = Path(args.data_dir)
@@ -526,10 +669,12 @@ async def _dispatch(args, data, evidence, inbox, reader, decide, *, devices=None
         loop_a = make_loop(
             args, inbox, device_a, data / "ledger-a.db", args.a_account,
             bind_persona_decide(decide, a_persona, a_name, b_name), persona_id=a_persona,
+            policy=getattr(args, "reply_language_policy_a", None),
         )
         loop_b = make_loop(
             args, inbox, device_b, data / "ledger-b.db", args.b_account,
             bind_persona_decide(decide, b_persona, b_name, a_name), persona_id=b_persona,
+            policy=getattr(args, "reply_language_policy_b", None),
         )
         loop_a.peer_names = [b_name] if b_name else []
         loop_b.peer_names = [a_name] if a_name else []
@@ -549,6 +694,9 @@ async def _unused_decide(**kwargs):
 
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "capabilities":
+        print(json.dumps(capabilities_report(), ensure_ascii=False))
+        return 0
     report = asyncio.run(async_main(args))
     return 0 if report.get("ok") else 1
 

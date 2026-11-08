@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wa-pair-reply-language/2",
+  "title": "WhatsApp pair-chat reply language capability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "command",
+    "contract",
+    "base_commit",
+    "send",
+    "http_decide_language_policy",
+    "strategies",
+    "legacy_when_unconfigured",
+    "country_does_not_select_language",
+    "flags",
+    "compatibility",
+    "languages"
+  ],
+  "properties": {
+    "command": {"const": "capabilities"},
+    "contract": {"const": "wa-pair-reply-language/2"},
+    "base_commit": {"type": "string", "minLength": 7},
+    "send": {"const": false},
+    "http_decide_language_policy": {"const": false},
+    "strategies": {
+      "type": "array",
+      "items": {"enum": ["fixed", "account_default", "follow_peer"]}
+    },
+    "legacy_when_unconfigured": {"const": true},
+    "country_does_not_select_language": {"const": true},
+    "flags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reply_language",
+        "strategy",
+        "fallback",
+        "account_a",
+        "account_b"
+      ],
+      "properties": {
+        "reply_language": {"const": "--reply-language"},
+        "strategy": {"const": "--reply-language-strategy"},
+        "fallback": {"const": "--reply-language-fallback"},
+        "account_a": {"const": "--a-reply-language"},
+        "account_b": {"const": "--b-reply-language"}
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reply_language_without_strategy"],
+      "properties": {
+        "reply_language_without_strategy": {"const": "fixed"}
+      }
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tag",
+          "display_name",
+          "direction",
+          "aliases",
+          "offline_acceptance",
+          "capabilities"
+        ],
+        "properties": {
+          "tag": {"type": "string", "minLength": 2},
+          "display_name": {"type": "string"},
+          "direction": {"enum": ["ltr", "rtl"]},
+          "aliases": {"type": "array", "items": {"type": "string"}},
+          "offline_acceptance": {"type": "boolean"},
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["model_generation", "phone_screen_read", "unicode_input"],
+            "properties": {
+              "model_generation": {"enum": ["supported", "unsupported", "unverified"]},
+              "phone_screen_read": {"enum": ["supported", "unsupported", "unverified"]},
+              "unicode_input": {"enum": ["supported", "unsupported", "unverified"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}
