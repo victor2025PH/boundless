@@ -12,7 +12,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-CONTRACT = "wa-pair-reply-language/2"
+SCHEMA_VERSION = "wa-reply-language/1"
+CONTRACT = SCHEMA_VERSION
 BASE_COMMIT = "cbb9e8534da3089292c98c0d799136469546b6b5"
 STRATEGIES = ("fixed", "account_default", "follow_peer")
 CAPABILITY_KEYS = ("model_generation", "phone_screen_read", "unicode_input")
@@ -221,23 +222,33 @@ def public_language_row(entry: dict) -> dict:
 
 
 def capabilities_payload(registry: Optional[List[dict]] = None) -> dict:
+    """引擎真实可接受的策略和语言。languages 是标签列表，细节在 language_details。"""
     rows = registry if registry is not None else load_registry()
     return {
-        "command": "capabilities",
-        "contract": CONTRACT,
-        "base_commit": BASE_COMMIT,
-        "send": False,
-        "http_decide_language_policy": False,
+        "schema_version": SCHEMA_VERSION,
         "strategies": list(STRATEGIES),
-        "legacy_when_unconfigured": True,
-        "country_does_not_select_language": True,
+        "languages": [row["tag"] for row in rows],
         "flags": {
-            "reply_language": "--reply-language",
+            "language": "--reply-language",
             "strategy": "--reply-language-strategy",
             "fallback": "--reply-language-fallback",
             "account_a": "--a-reply-language",
             "account_b": "--b-reply-language",
         },
+        "language_details": [public_language_row(row) for row in rows],
+        "offline_acceptance": [row["tag"] for row in rows if row["offline_acceptance"]],
+        "device_verified": [],
+        "country_does_not_select_language": True,
+        "legacy_when_unconfigured": True,
         "compatibility": {"reply_language_without_strategy": "fixed"},
-        "languages": [public_language_row(row) for row in rows],
+        "http_decide_language_policy": False,
+        "send": False,
+        "command": "capabilities",
+        "base_commit": BASE_COMMIT,
+        "note": (
+            "languages 来自引擎注册表，不按国家码生成。"
+            "offline_acceptance 只含离线参数测试通过的标签。"
+            "model_generation、phone_screen_read、unicode_input 为 unverified 时不表示真机可用。"
+            "本 manifest 未与智拓联合运行验证。"
+        ),
     }

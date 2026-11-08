@@ -352,7 +352,7 @@ def test_cli_contract_examples_and_legacy_default():
     assert caught.value.code == 0
     text = buf.getvalue()
     assert "--reply-language" in text
-    assert "wa-pair-reply-language/2" in text
+    assert "wa-reply-language/1" in text
     assert "--a-reply-language" in text
     assert "--reply-language-fallback" in text
 
@@ -364,17 +364,32 @@ def test_capabilities_payload_matches_the_contract_file():
     schema = json.loads(Path(
         "src/integrations/whatsapp_rpa/reply_language_contract.json"
     ).read_text(encoding="utf-8"))
-    assert payload["contract"] == CONTRACT == schema["$id"]
+    checked_in = json.loads(Path(
+        "src/integrations/whatsapp_rpa/wa_reply_language_capabilities.json"
+    ).read_text(encoding="utf-8"))
+    assert payload == checked_in
+    assert payload["schema_version"] == CONTRACT == schema["$id"]
+    assert payload["flags"] == {
+        "language": "--reply-language",
+        "strategy": "--reply-language-strategy",
+        "fallback": "--reply-language-fallback",
+        "account_a": "--a-reply-language",
+        "account_b": "--b-reply-language",
+    }
     assert payload["send"] is False
     assert payload["http_decide_language_policy"] is False
     assert payload["country_does_not_select_language"] is True
     assert payload["strategies"] == ["fixed", "account_default", "follow_peer"]
+    assert payload["languages"] == [row["tag"] for row in load_registry()]
+    assert payload["offline_acceptance"] == ["hi"]
+    assert payload["device_verified"] == []
     assert payload["compatibility"]["reply_language_without_strategy"] == "fixed"
-    tags = {row["tag"]: row for row in payload["languages"]}
+    tags = {row["tag"]: row for row in payload["language_details"]}
+    assert list(tags) == payload["languages"]
     assert tags["hi"]["offline_acceptance"] is True
     assert tags["ar"]["direction"] == "rtl"
     assert tags["zh-Hant"]["offline_acceptance"] is False
-    for row in payload["languages"]:
+    for row in payload["language_details"]:
         assert set(row["capabilities"]) == {
             "model_generation", "phone_screen_read", "unicode_input",
         }

@@ -487,7 +487,7 @@ def parser() -> argparse.ArgumentParser:
 
     pair = sub.add_parser(
         "pair-chat", parents=[common],
-        description="contract wa-pair-reply-language/2。语言策略见 capabilities。",
+        description="schema wa-reply-language/1。语言策略见 capabilities。",
     )
     pair.add_argument("--a-serial", required=True)
     pair.add_argument("--a-phone", required=True)
@@ -695,7 +695,7 @@ async def _unused_decide(**kwargs):
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     if args.command == "capabilities":
-        print(json.dumps(capabilities_report(), ensure_ascii=False))
+        print(json.dumps(capabilities_report(), ensure_ascii=False, indent=2))
         return 0
     report = asyncio.run(async_main(args))
     return 0 if report.get("ok") else 1
