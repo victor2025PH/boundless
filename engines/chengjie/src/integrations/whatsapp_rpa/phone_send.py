@@ -309,25 +309,65 @@ def is_bubble_boundary(text: str) -> bool:
     )
 
 
-def send_confirmed(screen: "PhoneScreen", expected: str) -> bool:
-    """输入框已经空出来，并且屏幕上的文字和待发对得上。
-
-    初次会话往往只有一条气泡，左缘又靠左，颜色判不准。
-    这时只要输入框是占位「发消息」，任一气泡的规范化文本对上就算发出。
-    """
+def composer_still_has_draft(screen: "PhoneScreen", expected: str) -> bool:
+    """输入框里还留着待发正文。空了或只剩占位符，就不能再点发送键。"""
     composer = str(getattr(screen, "composer", "") or "")
-    outgoing = [str(item or "") for item in (getattr(screen, "outgoing", None) or [])]
-    incoming = [str(item or "") for item in (getattr(screen, "incoming", None) or [])]
-    bubbles = [item for item in outgoing + incoming if compare_key(item)]
-    placeholder = composer_is_placeholder(composer) or not compare_key(composer)
-    if placeholder and any(texts_close(item, expected) for item in bubbles):
-        return True
-    if len(bubbles) <= 1 and placeholder and bubbles and texts_close(bubbles[0], expected):
-        return True
-    if not placeholder and composer_matches(composer, expected):
+    if composer_is_placeholder(composer) or not compare_key(composer):
         return False
-    bottom = outgoing[-1] if outgoing else (incoming[-1] if incoming else "")
-    return texts_close(bottom, expected)
+    return texts_close(composer, expected)
+
+
+def voice_permission_popup(screen: "PhoneScreen") -> bool:
+    """点到麦克风之后弹出的录音授权。按返回关掉，不去点允许。"""
+    parts = [
+        getattr(screen, "header", ""),
+        getattr(screen, "composer", ""),
+        *list(getattr(screen, "notes", None) or []),
+        *list(getattr(screen, "outgoing", None) or []),
+        *list(getattr(screen, "incoming", None) or []),
+    ]
+    for line in getattr(screen, "ocr_lines", None) or []:
+        parts.append(str((line or {}).get("text") or ""))
+    blob = "\n".join(str(part or "") for part in parts)
+    return "要录制语音" in blob or ("语音消息" in blob and "允许" in blob)
+
+
+def delivery_seen(screen: "PhoneScreen", expected: str) -> Dict[str, bool]:
+    """发送后三件事同时成立才算发出：占位符、底部新气泡、规范化文本对得上。"""
+    composer = str(getattr(screen, "composer", "") or "")
+    placeholder = composer_is_placeholder(composer) or not compare_key(composer)
+    candidates: List[str] = []
+    rows = list(getattr(screen, "bubbles", None) or [])
+    if rows:
+        bottom = max(rows, key=lambda row: float(row.get("bottom") or 0))
+        candidates.append(str(bottom.get("text") or ""))
+    candidates.extend(str(item or "") for item in (getattr(screen, "outgoing", None) or []))
+    candidates.extend(str(item or "") for item in (getattr(screen, "incoming", None) or []))
+    height = 0.0
+    size = getattr(screen, "shot_size", None) or []
+    if len(size) >= 2:
+        height = float(size[1] or 0)
+    for line in getattr(screen, "ocr_lines", None) or []:
+        text = str((line or {}).get("text") or "")
+        box = (line or {}).get("box") or []
+        if len(box) < 4 or composer_is_placeholder(text):
+            continue
+        if height and (float(box[1]) + float(box[3])) / 2.0 < height * 0.45:
+            continue
+        candidates.append(text)
+    text_match = any(texts_close(item, expected) for item in candidates if compare_key(item))
+    new_bubble = text_match
+    return {
+        "placeholder": placeholder,
+        "new_bubble": new_bubble,
+        "text_match": text_match,
+        "ok": bool(placeholder and new_bubble and text_match),
+    }
+
+
+def send_confirmed(screen: "PhoneScreen", expected: str) -> bool:
+    """输入框回到占位符，底部新气泡的规范化文本和待发对得上。"""
+    return bool(delivery_seen(screen, expected)["ok"])
 
 
 def bubble_visible(outgoing: List[str], expected: str) -> bool:
@@ -415,6 +455,7 @@ async def wait_for_chat(
     expected: str = "",
     timeout: Optional[float] = None,
     interval: Optional[float] = None,
+    fast: bool = False,
 ) -> Dict[str, Any]:
     """wa.me 打开之后轮询，直到顶栏是目标号码且输入框就绪。
 
@@ -461,6 +502,17 @@ async def wait_for_chat(
         last = screen
         polls += 1
         jittery = screen_is_sliding(screen)
+        if fast and not jittery and not screen_is_transient(screen):
+            from src.integrations.whatsapp_rpa.phone_acceptance import in_chat
+            if (
+                in_chat(screen, phone).get("header_matches_peer")
+                and composer_settled(screen.composer, expected)
+            ):
+                return _wait_result(
+                    True, "ready", "", polls, screen, profile_confirmed,
+                    started, clock, stable_tries,
+                    match=(not expected) or composer_matches(screen.composer, expected),
+                )
         if frame_boxes(screen) and not jittery and stable_tries < 3:
             await sleep(0.4)
             png2 = await device.screencap()
@@ -762,8 +814,8 @@ async def deliver_via_wa_me(
     dismiss = getattr(device, "dismiss_keyboard", None)
     if dismiss is not None:
         await dismiss()
-    limit = 8.0 if placed in {"typed", "held", "keyboard"} or stay else 20.0
-    ready = await wait_for_chat(device, phone, expected=body, timeout=limit)
+    limit = 8.0
+    ready = await wait_for_chat(device, phone, expected=body, timeout=limit, fast=True)
     if (
         not ready.get("ready")
         and ready.get("reason") == "composer_not_ready"
@@ -773,7 +825,7 @@ async def deliver_via_wa_me(
         switched = await _switch_prefill(device, url, body, placed)
         placed = switched
         if switched != "gave_up":
-            ready = await wait_for_chat(device, phone, expected=body, timeout=8.0)
+            ready = await wait_for_chat(device, phone, expected=body, timeout=8.0, fast=True)
     timings = dict(ready.get("timings") or {})
     timings["place"] = placed
     timings["retried"] = retried
@@ -798,14 +850,29 @@ async def deliver_via_wa_me(
 
     await device.tap_send()
     after = await device.read_screen(await device.screencap())
+    if voice_permission_popup(after):
+        back = getattr(device, "press_back", None)
+        if back is not None:
+            try:
+                await back()
+            except Exception:
+                pass
+        after = await device.read_screen(await device.screencap())
     if send_confirmed(after, body):
         timings["total_ms"] = int((time.monotonic() - started) * 1000)
         return SendOutcome(status="sent", reason="", tapped=True, url=used_url, timings=timings)
-    # 原文还在输入框、也没有新气泡：这一下没点中发送按钮，重新定位再点一次。
-    # 输入框已经空了就绝不补发，气泡可能只是没被读出来。
-    if composer_matches(after.composer, body):
+    # 只有输入框里还留着这句，才再点一次。发送键变成麦克风之后不能补点。
+    if composer_still_has_draft(after, body) and not voice_permission_popup(after):
         await device.tap_send()
         after = await device.read_screen(await device.screencap())
+        if voice_permission_popup(after):
+            back = getattr(device, "press_back", None)
+            if back is not None:
+                try:
+                    await back()
+                except Exception:
+                    pass
+            after = await device.read_screen(await device.screencap())
         if send_confirmed(after, body):
             timings["total_ms"] = int((time.monotonic() - started) * 1000)
             return SendOutcome(status="sent", reason="", tapped=True, url=used_url, timings=timings)

@@ -163,19 +163,28 @@ def persona_separation_note(self_name: str, peer_name: str) -> str:
     them = str(peer_name or "").strip() or "另一个人"
     return (
         f"你是{you}。对方是{them}，是另一个人。"
-        f"对方叫{them}，你叫{you}，绝不用对方名字自称。"
+        f"对方叫{them}，你叫{you}。"
+        f"绝不能说喊我{them}、叫我{them}、我是{them}，也不能把{you}和{them}并列成自己的名字。"
         "不要复述对方的自我介绍，不要把对方刚告诉你的名字当成自己的名字。"
     )
 
 
+_SELF_NAME_VERBS = r"(?:就喊我|喊我|称呼我|叫我|我叫|我是)"
+
+
 def claims_peer_identity(text: str, peer_names: Sequence[str]) -> bool:
-    """回复里用「我叫 / 叫我 / 我是」接上对方的名字。这种不能发出去。"""
+    """把对方的名字当成自己的称呼。喊我、叫我、我是、我叫、称呼我，以及「或者」并列，都算。"""
     body = str(text or "")
     for name in peer_names or []:
         token = str(name or "").strip()
         if len(token) < 1:
             continue
-        if re.search(r"(?:我叫|叫我|我是)\s*" + re.escape(token), body):
+        if re.search(_SELF_NAME_VERBS + r".{0,16}" + re.escape(token), body):
+            return True
+        if re.search(
+            _SELF_NAME_VERBS + r".{0,30}或者\s*" + re.escape(token),
+            body,
+        ):
             return True
     return False
 
@@ -188,7 +197,7 @@ def peer_name_list(peer_name: str, last_inbound: str, self_name: str = "") -> Li
     if configured and configured != own:
         names.append(configured)
     for found in re.findall(
-        r"(?:我叫|叫我|我是)\s*([\u4e00-\u9fffA-Za-z·]{1,8})",
+        r"(?:就喊我|喊我|称呼我|我叫|叫我|我是)\s*([\u4e00-\u9fffA-Za-z·]{1,8})",
         str(last_inbound or ""),
     ):
         if found and found != own and found not in names:

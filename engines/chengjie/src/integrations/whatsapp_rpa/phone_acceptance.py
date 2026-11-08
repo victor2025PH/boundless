@@ -1531,6 +1531,18 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
         source = ""
     header = str(getattr(screen, "header", "") or "")
     composer = str(getattr(screen, "composer", "") or "") if screen is not None else ""
+    if text and not _heard_reliable(text):
+        screen = await _read(device)
+        retried = "\n".join(new_left_bubbles(peer_after_last_own(screen), baseline))
+        if _heard_reliable(retried):
+            text = retried
+            source = "screenshot"
+        else:
+            return {
+                "ok": False, "reason": "low_confidence", "text": "",
+                "header": str(getattr(screen, "header", "") or header),
+                "composer": str(getattr(screen, "composer", "") or composer),
+            }
     if not text:
         return {
             "ok": False, "reason": "empty_text", "text": "",
@@ -1540,6 +1552,19 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
         "ok": True, "text": text, "header": header,
         "source": source, "composer": composer,
     }
+
+
+def _heard_reliable(text: str) -> bool:
+    """乱码或几乎没有汉字的识别结果不能直接拿去回复。"""
+    raw = str(text or "").strip()
+    cjk = re.findall(r"[\u4e00-\u9fff]", raw)
+    if len(cjk) < 2:
+        return False
+    if re.search(r"[A-Za-zāáàēéěīíìōóòūúùü]", raw) and len(cjk) <= 4:
+        return False
+    if re.match(r"^[（(【\[\]）)]", raw) and len(cjk) < 6:
+        return False
+    return True
 
 
 def cold_texts(texts: Sequence[str], cap: int) -> List[str]:
@@ -2009,6 +2034,16 @@ def _keyboard_open(screen: Any) -> bool:
     return _keyboard_zone_top(items, width, height) is not None
 
 
+def _left_chat(screen: Any, phone: str) -> bool:
+    """按返回之后离开了会话，例如掉进「语音输入」设置。"""
+    parts = [getattr(screen, "header", ""), getattr(screen, "composer", "")]
+    parts.extend(_screen_lines(screen))
+    blob = "\n".join(str(part or "") for part in parts)
+    if "语音输入" in blob:
+        return True
+    return not in_chat(screen, phone).get("ok")
+
+
 def menu_is_open(screen: Any) -> bool:
     """聊天页右上角菜单。这时不能把关闭引用的点击打到菜单上。"""
     return any(text in _MENU_LABELS for text in _screen_lines(screen))
@@ -2255,11 +2290,17 @@ async def prepare_phone(loop: Any, peer: str, timer: Optional[StepTimer] = None)
             try:
                 await back()
                 screen = await loop.device.read_screen(await loop.device.screencap())
-                verdict = in_chat(screen, phone)
             except Exception:
                 pass
         if timer is not None:
             timer.mark("dismiss_keyboard")
+        if _left_chat(screen, phone):
+            try:
+                await open_peer_chat(loop.device, phone)
+                screen = await loop.device.read_screen(await loop.device.screencap())
+            except Exception:
+                pass
+        verdict = in_chat(screen, phone)
         if not verdict.get("ok"):
             return {
                 "cleared": False, "chat": False,

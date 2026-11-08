@@ -1998,6 +1998,9 @@ async def test_peer_name_is_not_sent(tmp_path: Path):
     assert "对方叫顾嘉，你叫小界" in persona_separation_note("小界", "顾嘉")
     assert claims_peer_identity("叫我顾嘉就行", ["顾嘉"]) is True
     assert claims_peer_identity("叫我小界", ["顾嘉"]) is False
+    assert claims_peer_identity("那你就喊我顾嘉，或者小界也行", ["顾嘉", "嘉嘉"]) is True
+    assert claims_peer_identity("喊我小界，或者顾嘉也行", ["顾嘉"]) is True
+    assert claims_peer_identity("那你就喊我小界吧", ["顾嘉"]) is False
     calls = []
 
     async def decide(**kwargs):
@@ -2059,6 +2062,108 @@ def test_b_read6_header_is_the_same_in_chat_decision():
     assert verdict["boxes"]["composer"] == [107, 1486, 222, 1529]
     assert _dump_has_chat_header(PhoneScreen(header="", composer="发消息")) is False
     assert _dump_has_chat_header(screen) is True
+
+
+def test_delivered_bubble_counts_when_placeholder_and_text_match():
+    from src.integrations.whatsapp_rpa.phone_send import (
+        composer_still_has_draft, delivery_seen, send_confirmed, voice_permission_popup,
+    )
+
+    sentence = "这个点起床刚刚好，我这边也才醒。"
+    screen = PhoneScreen(
+        composer="发消息",
+        outgoing=["更早的一句"],
+        ocr_lines=[
+            {"text": sentence, "box": [180, 1320, 640, 1388]},
+            {"text": "发消息", "box": [107, 1486, 222, 1529]},
+        ],
+        shot_size=[720, 1600],
+    )
+    seen = delivery_seen(screen, sentence)
+    assert seen["placeholder"] is True
+    assert seen["new_bubble"] is True
+    assert seen["text_match"] is True
+    assert send_confirmed(screen, sentence) is True
+    assert composer_still_has_draft(screen, sentence) is False
+    popup = PhoneScreen(
+        composer="",
+        ocr_lines=[{"text": "要录制语音消息，请允许", "box": [80, 700, 640, 780]}],
+        shot_size=[720, 1600],
+    )
+    assert voice_permission_popup(popup) is True
+
+
+def test_garbage_heard_is_not_reliable():
+    from src.integrations.whatsapp_rpa.phone_acceptance import _heard_reliable
+
+    assert _heard_reliable("（ā更新") is False
+    assert _heard_reliable("这个点起床刚刚好") is True
+
+
+@pytest.mark.asyncio
+async def test_back_from_keyboard_returns_with_wa_me_if_settings_open(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import prepare_phone
+
+    phone = "+639543629194"
+
+    class Seat:
+        def __init__(self):
+            self.phase = "keys"
+            self.opens = 0
+            self.backs = 0
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            if self.phase == "keys":
+                return PhoneScreen(
+                    header=phone, composer="发消息",
+                    ocr_lines=[
+                        {"text": phone, "box": [96, 86, 430, 121]},
+                        {"text": "发消息", "box": [107, 900, 222, 960]},
+                        {"text": "词", "box": [27, 1314, 88, 1365]},
+                    ],
+                    shot_size=[720, 1600],
+                )
+            if self.phase == "settings":
+                return PhoneScreen(
+                    header="语音输入", composer="",
+                    ocr_lines=[{"text": "语音输入", "box": [42, 284, 276, 352]}],
+                    shot_size=[720, 1600],
+                )
+            return PhoneScreen(
+                header=phone, composer="发消息",
+                ocr_lines=[
+                    {"text": phone, "box": [96, 86, 430, 121]},
+                    {"text": "发消息", "box": [107, 1486, 222, 1529]},
+                ],
+                shot_size=[720, 1600],
+            )
+
+        async def press_back(self):
+            self.backs += 1
+            self.phase = "settings"
+
+        async def open_url(self, url):
+            self.opens += 1
+            assert "text=" not in url
+            self.phase = "chat"
+
+        async def press_home(self):
+            raise AssertionError("回到会话只用 wa.me，不再回桌面")
+
+    seat = Seat()
+    loop = WaPhoneLoop(
+        account_id="a", inbox=InboxStore(tmp_path / "inbox.db"), device=seat,
+        decide_fn=None, cfg={"enabled": True},
+        ledger=PhoneLedger(tmp_path / "ledger.db"), now_fn=lambda: 1.0,
+    )
+    result = await prepare_phone(loop, phone)
+    assert seat.backs == 1
+    assert seat.opens == 1
+    assert result["chat"] is True
+    assert result["composer"] == "发消息"
 
 
 def test_keycap_below_1200_is_not_the_composer():
