@@ -259,7 +259,7 @@ class PhoneLedger:
             return 1
 
     def has_sent_content(self, content_key: str) -> bool:
-        """同一句话已经发出去过。失败且没点发送的记录不算。"""
+        """同一句话已经记成 sent。"""
         key = str(content_key or "").strip()
         if not key:
             return False
@@ -269,6 +269,27 @@ class PhoneLedger:
                 (key,),
             ).fetchone()
         return row is not None
+
+    def has_seen_text(self, phone: str, text: str, content_key: str = "") -> bool:
+        """这句话在台账里出现过，不管是 sent、failed 还是 bubble_missing。出现过就不再自动发。"""
+        from src.integrations.whatsapp_rpa.phone_send import texts_close
+
+        wanted = str(text or "").strip()
+        key = str(content_key or "").strip()
+        if not wanted and not key:
+            return False
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT phone, body, content_key, status FROM sends",
+            ).fetchall()
+        for row in rows:
+            if key and str(row["content_key"] or "") == key:
+                return True
+            body = str(row["body"] or "")
+            if wanted and body and texts_close(body, wanted):
+                if not phone or str(row["phone"] or "") in {"", phone}:
+                    return True
+        return False
 
     def reserve(self, *, client_msg_id: str, phone: str, account_id: str,
                 source: str, now: Optional[float] = None, cold: bool = False,

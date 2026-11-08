@@ -32,6 +32,8 @@ from src.integrations.whatsapp_rpa.phone_send import (
     PhoneDevice,
     PhoneScreen,
     deliver_via_wa_me,
+    forward_page as _forward_page,
+    outgoing_matches,
     texts_close,
 )
 
@@ -508,14 +510,41 @@ class WaPhoneLoop:
             if hour_count >= caps["hourly_cap"] or day_count >= caps["daily_cap"]:
                 which = "hourly_cap" if hour_count >= caps["hourly_cap"] else "daily_cap"
                 return {**base, "status": "capped", "reason": which, "retry": True}
-        content_key = ""
-        if self.run_id:
-            content_key = sent_content_key(source, e164, body)
-            if self.ledger.has_sent_content(content_key):
-                return {
-                    **base, "status": "sent", "reason": "duplicate",
-                    "delivered": True, "tapped": False, "retry": False,
-                }
+        content_key = sent_content_key(source, e164, body)
+        existing = self.ledger.get_send(client_msg_id)
+        if existing is not None:
+            previous = str(existing.get("status") or "duplicate")
+            return {
+                **base, "status": previous, "reason": "duplicate",
+                "delivered": previous == "sent", "tapped": False, "retry": False,
+            }
+        try:
+            fresh = await self.device.read_screen(await self.device.screencap())
+        except Exception:
+            fresh = None
+        if fresh is not None and outgoing_matches(fresh, body):
+            if content_key:
+                self.ledger.mark_content_sent(content_key, now=now)
+            return {
+                **base, "status": "sent", "reason": "already_visible",
+                "delivered": True, "tapped": False, "retry": False,
+            }
+        if self.ledger.has_seen_text(e164, body, content_key):
+            return {
+                **base, "status": "skipped", "reason": "already_recorded",
+                "delivered": False, "tapped": False, "retry": False,
+            }
+        if fresh is not None and _forward_page(fresh):
+            back = getattr(self.device, "press_back", None)
+            if back is not None:
+                try:
+                    await back()
+                except Exception:
+                    pass
+            return {
+                **base, "status": "skipped", "reason": "forward_page",
+                "delivered": False, "tapped": False, "retry": False,
+            }
         pending_ok = False
         if finish_pending:
             for row in self.ledger.unsent_rows(e164):

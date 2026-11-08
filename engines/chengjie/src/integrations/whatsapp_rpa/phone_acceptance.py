@@ -705,11 +705,31 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
     )
 
 
+_NOT_INBOUND = frozenset({
+    "通话", "视频通话", "语音通话", "视频", "搜索", "发送给", "转发",
+    "更多", "编辑", "静音", "壁纸", "查看联系人", "菜单",
+})
+
+
+def _not_inbound_text(text: str) -> bool:
+    """顶栏、底栏、菜单、弹窗和通话按钮都不是对方说的话。"""
+    raw = str(text or "").strip()
+    if not raw or raw in _NOT_INBOUND:
+        return True
+    if raw in _MENU_LABELS:
+        return True
+    return False
+
+
 def peer_after_last_own(screen: Any) -> List[str]:
-    """只取最后一条己方气泡下面的对方气泡。单字和更短的孤立框丢掉。"""
+    """只取最后一条己方气泡下面的对方气泡。界面按钮和单字丢掉。"""
     from src.integrations.whatsapp_rpa.phone_send import composer_body
 
     rows = list(getattr(screen, "bubbles", None) or [])
+    height = 0.0
+    size = getattr(screen, "shot_size", None) or []
+    if len(size) >= 2:
+        height = float(size[1] or 0)
     last_own = None
     for row in rows:
         if str(row.get("side") or "") == "out":
@@ -717,7 +737,9 @@ def peer_after_last_own(screen: Any) -> List[str]:
     if last_own is None:
         incoming_rows = [
             row for row in rows
-            if str(row.get("side") or "") == "in" and len(composer_body(str(row.get("text") or ""))) >= 2
+            if str(row.get("side") or "") == "in"
+            and not _not_inbound_text(str(row.get("text") or ""))
+            and len(composer_body(str(row.get("text") or ""))) >= 2
         ]
         if not incoming_rows:
             return []
@@ -729,7 +751,10 @@ def peer_after_last_own(screen: Any) -> List[str]:
         if float(row.get("top") or 0) < last_own - 4:
             continue
         text = str(row.get("text") or "").strip()
-        if len(composer_body(text)) < 2:
+        top = float(row.get("top") or 0)
+        if height and (top < height * 0.18 or top > height * 0.88):
+            continue
+        if _not_inbound_text(text) or len(composer_body(text)) < 2:
             continue
         fresh.append(text)
     return fresh
@@ -743,7 +768,7 @@ def new_left_bubbles(incoming: Sequence[str], baseline: Sequence[str]) -> List[s
     fresh: List[str] = []
     for raw in incoming or []:
         text = str(raw or "").strip()
-        if not text or is_screen_chrome(text):
+        if not text or is_screen_chrome(text) or _not_inbound_text(text):
             continue
         if text in pending:
             pending.remove(text)
@@ -1232,24 +1257,22 @@ class SshAdbPhoneDevice:
         await self._run(["shell", "input", "keyevent", "111"])
 
     async def clear_composer(self) -> None:
-        """长按输入框。出现「全选」就点掉再删除，否则把光标移到末尾再连续删除。"""
-        await self.dismiss_keyboard()
-        width, height = await self._device_size()
-        x, y = max(1, int(width * 0.42)), max(1, int(height * 0.91))
-        await self._run([
-            "shell", "input", "swipe", str(x), str(y), str(x), str(y), "800",
-        ])
-        point = None
+        """全选后删除。不长按，也不按返回。长按气泡会打开「发送给」。"""
+        from src.integrations.whatsapp_rpa.phone_send import forward_page
+        looked = None
         try:
-            screen = await self.read_screen(await self.screencap())
-            point = select_all_point(getattr(screen, "ocr_lines", None) or [])
+            looked = await self.read_screen(await self.screencap())
         except Exception:
-            point = None
+            looked = None
+        if looked is not None and forward_page(looked):
+            await self.press_back()
+            return
+        point = select_all_point(getattr(looked, "ocr_lines", None) or []) if looked is not None else None
         if point is not None:
             await self.tap_xy(point[0], point[1])
             await self._run(["shell", "input", "keyevent", "67"])
             return
-        codes = " ".join(["67"] * 30)
+        codes = " ".join(["67"] * 40)
         await self._run(["shell", f"input keyevent 123 {codes}"])
 
     async def scroll_older(self) -> None:
@@ -1489,6 +1512,15 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
     import time
 
     screen = await _read(device)
+    from src.integrations.whatsapp_rpa.phone_send import forward_page
+    if forward_page(screen):
+        back = getattr(device, "press_back", None)
+        if back is not None:
+            try:
+                await back()
+            except Exception:
+                pass
+        screen = await _read(device)
     if not in_chat(screen, wanted).get("ok"):
         opened = await enter_chat(device, wanted)
         screen = opened.get("screen") or screen
@@ -2285,21 +2317,14 @@ async def prepare_phone(loop: Any, peer: str, timer: Optional[StepTimer] = None)
             "reason": "not_in_chat", "quote_closed": False, "in_chat": verdict,
         }
     if _keyboard_open(screen):
-        back = getattr(loop.device, "press_back", None)
-        if back is not None:
-            try:
-                await back()
-                screen = await loop.device.read_screen(await loop.device.screencap())
-            except Exception:
-                pass
+        try:
+            await _press_home(loop.device)
+            await open_peer_chat(loop.device, phone)
+            screen = await loop.device.read_screen(await loop.device.screencap())
+        except Exception:
+            pass
         if timer is not None:
             timer.mark("dismiss_keyboard")
-        if _left_chat(screen, phone):
-            try:
-                await open_peer_chat(loop.device, phone)
-                screen = await loop.device.read_screen(await loop.device.screencap())
-            except Exception:
-                pass
         verdict = in_chat(screen, phone)
         if not verdict.get("ok"):
             return {
@@ -2507,6 +2532,35 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
         other = "B" if label == "A" else "A"
         if index == 0:
             baselines[other] = await snapshot_incoming(loops[other].device, own)
+            opened = await enter_chat(loop.device, normalize_e164(peer))
+            opener_screen = opened.get("screen") or PhoneScreen()
+            own_bubbles = [
+                str(item or "") for item in (getattr(opener_screen, "outgoing", None) or [])
+                if str(item or "").strip()
+            ]
+            from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+            from src.integrations.whatsapp_rpa.phone_send import outgoing_matches
+            seed_on_screen = outgoing_matches(opener_screen, seed)
+            peer_id = normalize_e164(peer)
+            seed_key = sent_content_key("acceptance", peer_id, seed)
+            if own_bubbles or loop.ledger.has_seen_text(peer_id, seed, seed_key):
+                if seed_on_screen:
+                    loop.ledger.mark_content_sent(seed_key)
+                reason = "already_recorded"
+                status = "skipped"
+                if seed_on_screen:
+                    reason = "already_visible"
+                    status = "sent"
+                elif own_bubbles:
+                    reason = "own_bubbles_present"
+                results.append({
+                    "turn": index, "seat": label, "status": status,
+                    "reason": reason,
+                    "delivered": seed_on_screen, "tapped": False,
+                    "phone": peer_id,
+                })
+                flush()
+                continue
             if await _seed_already_visible(loop, peer, seed):
                 from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
                 peer_id = normalize_e164(peer)
@@ -2588,6 +2642,8 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
             "send": send, "ok": send.get("status") == "sent",
         })
         flush()
+        if send.get("reason") == "bubble_missing":
+            break
     ok = (
         not stopped
         and len(results) == int(turns)

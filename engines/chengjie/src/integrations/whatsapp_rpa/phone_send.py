@@ -317,6 +317,19 @@ def composer_still_has_draft(screen: "PhoneScreen", expected: str) -> bool:
     return texts_close(composer, expected)
 
 
+def forward_page(screen: "PhoneScreen") -> bool:
+    """长按消息会打开「发送给 / 转发」。这里不能点任何东西，只能返回。"""
+    parts = [
+        getattr(screen, "header", ""),
+        getattr(screen, "composer", ""),
+        *list(getattr(screen, "notes", None) or []),
+    ]
+    for line in getattr(screen, "ocr_lines", None) or []:
+        parts.append(str((line or {}).get("text") or ""))
+    blob = "\n".join(str(part or "") for part in parts)
+    return "发送给" in blob or "转发" in blob
+
+
 def voice_permission_popup(screen: "PhoneScreen") -> bool:
     """点到麦克风之后弹出的录音授权。按返回关掉，不去点允许。"""
     parts = [
@@ -332,36 +345,72 @@ def voice_permission_popup(screen: "PhoneScreen") -> bool:
     return "要录制语音" in blob or ("语音消息" in blob and "允许" in blob)
 
 
-def delivery_seen(screen: "PhoneScreen", expected: str) -> Dict[str, bool]:
-    """发送后三件事同时成立才算发出：占位符、底部新气泡、规范化文本对得上。"""
+def outgoing_matches(screen: "PhoneScreen", expected: str) -> bool:
+    """屏上右侧气泡的规范化文本里已经有这句。分类丢了就看靠右的 OCR。"""
+    texts = [str(item or "") for item in (getattr(screen, "outgoing", None) or [])]
+    for row in getattr(screen, "bubbles", None) or []:
+        if str((row or {}).get("side") or "") == "out":
+            texts.append(str((row or {}).get("text") or ""))
+    width = 0.0
+    size = getattr(screen, "shot_size", None) or []
+    if size:
+        width = float(size[0] or 0)
     composer = str(getattr(screen, "composer", "") or "")
-    placeholder = composer_is_placeholder(composer) or not compare_key(composer)
-    candidates: List[str] = []
+    for line in getattr(screen, "ocr_lines", None) or []:
+        text = str((line or {}).get("text") or "")
+        if composer_is_placeholder(text) or not compare_key(text):
+            continue
+        if compare_key(composer) and texts_close(text, composer):
+            continue
+        box = (line or {}).get("box") or []
+        if not width or len(box) < 4:
+            continue
+        cx = (float(box[0]) + float(box[2])) / 2.0
+        if cx < width * 0.45:
+            continue
+        texts.append(text)
+    return any(texts_close(item, expected) for item in texts if compare_key(item))
+
+
+def _bottom_bubble_texts(screen: "PhoneScreen", count: int = 3) -> List[str]:
+    """靠下的几条气泡。分类丢了的字，用屏幕下半部的 OCR 补上。"""
     rows = list(getattr(screen, "bubbles", None) or [])
-    if rows:
-        bottom = max(rows, key=lambda row: float(row.get("bottom") or 0))
-        candidates.append(str(bottom.get("text") or ""))
-    candidates.extend(str(item or "") for item in (getattr(screen, "outgoing", None) or []))
-    candidates.extend(str(item or "") for item in (getattr(screen, "incoming", None) or []))
+    ordered = sorted(rows, key=lambda row: float((row or {}).get("bottom") or 0))
+    texts = [str((row or {}).get("text") or "") for row in ordered[-count:]]
     height = 0.0
     size = getattr(screen, "shot_size", None) or []
     if len(size) >= 2:
         height = float(size[1] or 0)
+    lower: List[str] = []
     for line in getattr(screen, "ocr_lines", None) or []:
         text = str((line or {}).get("text") or "")
         box = (line or {}).get("box") or []
-        if len(box) < 4 or composer_is_placeholder(text):
+        if len(box) < 4 or composer_is_placeholder(text) or not compare_key(text):
             continue
-        if height and (float(box[1]) + float(box[3])) / 2.0 < height * 0.45:
+        cy = (float(box[1]) + float(box[3])) / 2.0
+        if height and cy < height * 0.55:
             continue
-        candidates.append(text)
-    text_match = any(texts_close(item, expected) for item in candidates if compare_key(item))
-    new_bubble = text_match
+        lower.append(text)
+    if len(texts) < count:
+        texts.extend(lower)
+    if not texts:
+        texts = [str(item or "") for item in (getattr(screen, "outgoing", None) or [])]
+        texts.extend(str(item or "") for item in (getattr(screen, "incoming", None) or []))
+        texts = texts[-count:]
+    return texts
+
+
+def delivery_seen(screen: "PhoneScreen", expected: str) -> Dict[str, bool]:
+    """输入框已经空了，并且底部三条气泡里有一条对得上，就算发出。"""
+    composer = str(getattr(screen, "composer", "") or "")
+    empty = composer_is_placeholder(composer) or not compare_key(composer)
+    bottoms = _bottom_bubble_texts(screen, 3)
+    text_match = any(texts_close(item, expected) for item in bottoms if compare_key(item))
     return {
-        "placeholder": placeholder,
-        "new_bubble": new_bubble,
+        "placeholder": empty,
+        "new_bubble": text_match,
         "text_match": text_match,
-        "ok": bool(placeholder and new_bubble and text_match),
+        "ok": bool(empty and text_match),
     }
 
 

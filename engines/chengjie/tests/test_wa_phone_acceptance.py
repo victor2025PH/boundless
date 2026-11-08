@@ -1039,8 +1039,9 @@ async def test_same_inbound_cannot_send_twice_and_stale_draft_is_finished(tmp_pa
     )
     other_loop.ledger.finish("draft-b", "failed", error="bubble_missing")
     settled = await settle_stale_draft(other_loop, PHONE_A)
-    assert settled["status"] == "sent"
-    assert other.taps == 1
+    assert settled["status"] == "skipped"
+    assert settled["reason"] == "already_recorded"
+    assert other.taps == 0
 
     other.screen = PhoneScreen(header=PHONE_A, composer="这是一句不在台账里的草稿")
     other.taps = 0
@@ -1386,8 +1387,9 @@ async def test_pending_second_segment_is_sent_without_a_new_inbound(tmp_path: Pa
         now_fn=lambda: 1_700_000_000.0, run_id="b",
     )
     settled = await settle_stale_draft(loop, phone)
-    assert settled["status"] == "sent"
-    assert device.taps == 1
+    assert settled["status"] == "skipped"
+    assert settled["reason"] == "already_recorded"
+    assert device.taps == 0
     assert device.urls == []
 
     device.screen = PhoneScreen(header=phone, composer="过时的另一句")
@@ -2093,6 +2095,39 @@ def test_delivered_bubble_counts_when_placeholder_and_text_match():
     assert voice_permission_popup(popup) is True
 
 
+def test_call_button_is_not_an_inbound_and_forward_page_is_recognized():
+    from src.integrations.whatsapp_rpa.phone_acceptance import peer_after_last_own
+    from src.integrations.whatsapp_rpa.phone_send import forward_page
+
+    screen = PhoneScreen(
+        bubbles=[
+            {"side": "out", "text": "在吗", "top": 800, "bottom": 860},
+            {"side": "in", "text": "通话", "top": 900, "bottom": 940},
+            {"side": "in", "text": "周末想出去走走", "top": 980, "bottom": 1040},
+        ],
+        shot_size=[720, 1600],
+    )
+    assert peer_after_last_own(screen) == ["周末想出去走走"]
+    picker = PhoneScreen(header="发送给", ocr_lines=[{"text": "转发", "box": [40, 200, 160, 260]}])
+    assert forward_page(picker) is True
+
+
+def test_empty_composer_and_one_of_three_bottom_bubbles_counts_as_sent():
+    from src.integrations.whatsapp_rpa.phone_send import send_confirmed
+
+    sentence = "哈喽，周末有什么安排吗"
+    screen = PhoneScreen(
+        composer="",
+        bubbles=[
+            {"side": "out", "text": "更早的一句", "top": 700, "bottom": 760},
+            {"side": "out", "text": "另一句旧的", "top": 800, "bottom": 860},
+            {"side": "out", "text": sentence, "top": 1100, "bottom": 1180},
+        ],
+        shot_size=[720, 1600],
+    )
+    assert send_confirmed(screen, sentence) is True
+
+
 def test_garbage_heard_is_not_reliable():
     from src.integrations.whatsapp_rpa.phone_acceptance import _heard_reliable
 
@@ -2151,7 +2186,7 @@ async def test_back_from_keyboard_returns_with_wa_me_if_settings_open(tmp_path: 
             self.phase = "chat"
 
         async def press_home(self):
-            raise AssertionError("回到会话只用 wa.me，不再回桌面")
+            self.phase = "home"
 
     seat = Seat()
     loop = WaPhoneLoop(
@@ -2160,7 +2195,7 @@ async def test_back_from_keyboard_returns_with_wa_me_if_settings_open(tmp_path: 
         ledger=PhoneLedger(tmp_path / "ledger.db"), now_fn=lambda: 1.0,
     )
     result = await prepare_phone(loop, phone)
-    assert seat.backs == 1
+    assert seat.backs == 0
     assert seat.opens == 1
     assert result["chat"] is True
     assert result["composer"] == "发消息"
@@ -2382,10 +2417,10 @@ async def test_keyboard_is_dismissed_once_before_clear(tmp_path: Path):
         ledger=PhoneLedger(tmp_path / "ledger.db"), now_fn=lambda: 1.0,
     )
     result = await prepare_phone(loop, phone)
-    assert seat.homes == 0
-    assert seat.opens == 0
+    assert seat.homes == 1
+    assert seat.opens == 1
     assert seat.escapes == 0
-    assert seat.backs == 1
+    assert seat.backs == 0
     assert seat.clears == 1
     assert result["in_chat"]["placeholder"] is True
     assert result["in_chat"]["header_matches_peer"] is True
@@ -2598,8 +2633,8 @@ async def test_normalize_ui_backs_out_of_the_menu_and_confirms_placeholder(tmp_p
         "--phone", PHONE_A,
     ])
     report = await async_main(args, devices={"a": phone})
-    assert phone.homes == 1
-    assert phone.backs == 2
+    assert phone.homes == 2
+    assert phone.backs == 1
     assert phone.clears == 1
     assert phone.taps == 0
     assert phone.urls and "wa.me/" in phone.urls[0] and "text=" not in phone.urls[0]
@@ -2704,10 +2739,159 @@ async def test_clear_composer_long_presses_then_selects_all():
     )
     await device.clear_composer()
     joined = "\n".join(calls)
-    assert "swipe" in joined and "800" in joined
+    assert "800" not in joined
     assert "input tap 140 1425" in joined
     assert "keyevent 67" in joined
-    assert "keyevent 123" not in joined
+    assert "KEYCODE_BACK" not in joined
+    assert "keyevent 111" not in joined
+
+
+@pytest.mark.asyncio
+async def test_clear_composer_backs_out_of_forward_page_without_tapping():
+    calls = []
+
+    def runner(argv):
+        remote = argv[-1]
+        calls.append(remote)
+        if "screencap" in remote:
+            return 0, _png(8, 8), ""
+        return 0, b"", ""
+
+    device = SshAdbPhoneDevice(
+        "hub176", "SERIAL_A",
+        lambda image: PhoneScreen(
+            header="发送给",
+            ocr_lines=[{"text": "转发", "box": [40, 200, 160, 260]}],
+        ),
+        runner=runner,
+    )
+    await device.clear_composer()
+    joined = "\n".join(calls)
+    assert "KEYCODE_BACK" in joined
+    assert "input tap" not in joined
+    assert "800" not in joined
+
+
+class _StillScreen:
+    def __init__(self, screen: PhoneScreen):
+        self.screen = screen
+        self.taps = 0
+        self.urls = []
+
+    async def open_url(self, url: str) -> None:
+        self.urls.append(url)
+
+    async def screencap(self) -> bytes:
+        return b"png"
+
+    async def read_screen(self, png: bytes) -> PhoneScreen:
+        return self.screen
+
+    async def tap_send(self) -> None:
+        self.taps += 1
+
+    async def press_back(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_right_bubble_on_a_fresh_shot_is_not_sent_again(tmp_path: Path):
+    sentence = "哈喽，周末有什么安排吗"
+    device = _StillScreen(PhoneScreen(
+        header=PHONE_B, composer="发消息",
+        ocr_lines=[{"text": sentence, "box": [420, 900, 680, 980]}],
+        shot_size=[720, 1600],
+    ))
+    loop = _loop(tmp_path, device, "seat-a")
+    sent = await loop.send_prepared(
+        phone=PHONE_B, text=sentence, source="acceptance",
+        client_msg_id="fresh-opener",
+    )
+    assert sent["status"] == "sent"
+    assert sent["reason"] == "already_visible"
+    assert sent["tapped"] is False
+    assert device.taps == 0
+
+
+@pytest.mark.asyncio
+async def test_bubble_missing_ledger_row_is_never_resent(tmp_path: Path):
+    sentence = "哈喽，周末有什么安排吗"
+    ledger = PhoneLedger(tmp_path / "ledger.db")
+    ledger.reserve(
+        client_msg_id="old", phone=PHONE_B, account_id="seat-a",
+        source="acceptance", body=sentence, content_key="old-key",
+    )
+    ledger.finish("old", "failed", error="bubble_missing")
+    device = _StillScreen(PhoneScreen(header=PHONE_B, composer=sentence))
+    loop = WaPhoneLoop(
+        account_id="seat-a", inbox=InboxStore(tmp_path / "inbox.db"),
+        device=device, decide_fn=None, cfg={"enabled": True}, ledger=ledger,
+        now_fn=lambda: 1.0, run_id="later",
+    )
+    blocked = await loop.send_prepared(
+        phone=PHONE_B, text=sentence, source="acceptance",
+        client_msg_id="new-run",
+    )
+    assert blocked["status"] == "skipped"
+    assert blocked["reason"] == "already_recorded"
+    assert blocked["tapped"] is False
+    assert device.taps == 0
+
+    from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+    other = "另一句只在台账里，屏上没有"
+    key = sent_content_key("acceptance", PHONE_B, other)
+    ledger.reserve(
+        client_msg_id="key-only", phone=PHONE_B, account_id="seat-a",
+        source="acceptance", body="", content_key=key,
+    )
+    ledger.finish("key-only", "failed", error="bubble_missing")
+    again = await loop.send_prepared(
+        phone=PHONE_B, text=other, source="acceptance",
+        client_msg_id="key-only-retry",
+    )
+    assert again["reason"] == "already_recorded"
+    assert device.taps == 0
+
+
+@pytest.mark.asyncio
+async def test_opener_waits_until_the_chat_has_no_own_bubble(tmp_path: Path):
+    sentence = "哈喽，周末有什么安排吗"
+
+    class Stay(LinkPhone):
+        def __init__(self):
+            super().__init__("a", PHONE_A, {})
+            self.screen = PhoneScreen(
+                header=PHONE_B, composer="发消息",
+                outgoing=["早就发过的另一句"],
+                ocr_lines=[
+                    {"text": PHONE_B, "box": [80, 80, 400, 130]},
+                    {"text": "发消息", "box": [40, 1500, 220, 1550]},
+                ],
+                shot_size=[720, 1600],
+            )
+
+        async def press_home(self):
+            return None
+
+    device_a = Stay()
+    device_b = LinkPhone("b", PHONE_B, {})
+    store = InboxStore(tmp_path / "inbox.db")
+
+    def make(name, account, device):
+        return WaPhoneLoop(
+            account_id=account, inbox=store, device=device, decide_fn=None,
+            cfg={"enabled": True}, ledger=PhoneLedger(tmp_path / f"{name}.db"),
+            now_fn=lambda: 1.0, run_id="run",
+        )
+
+    report = await run_pair_chat(
+        make("a", "seat-a", device_a), make("b", "seat-b", device_b),
+        PHONE_A, PHONE_B, 1, sentence, EvidenceLog(tmp_path / "opener"),
+    )
+    assert report["turns"][0]["status"] == "skipped"
+    assert report["turns"][0]["reason"] == "own_bubbles_present"
+    assert report["turns"][0]["tapped"] is False
+    assert device_a.taps == 0
 
 
 def test_cli_dry_run_uses_injected_device(tmp_path: Path):

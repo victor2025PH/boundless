@@ -317,26 +317,14 @@ async def test_new_run_retries_untapped_failure_but_blocks_a_sent_line(tmp_path:
         PhoneScreen(header=PHONE, outgoing=[text]),
     )
     second = _loop(tmp_path, ready, ledger=ledger, run_id="run-b")
-    sent = await second.send_prepared(
+    blocked = await second.send_prepared(
         phone=PHONE, text=text, source="acceptance",
         client_msg_id=second.scoped_msg_id("acceptance", PHONE, text, "seed"),
     )
-    assert sent["status"] == "sent"
-    assert sent["client_msg_id"] != failed["client_msg_id"]
-    assert ready.taps == 1
-
-    again_device = FakeDevice(
-        PhoneScreen(header=PHONE, composer=text),
-        PhoneScreen(header=PHONE, outgoing=[text]),
-    )
-    third = _loop(tmp_path, again_device, ledger=ledger, run_id="run-c")
-    blocked = await third.send_prepared(
-        phone=PHONE, text=text, source="acceptance",
-        client_msg_id=third.scoped_msg_id("acceptance", PHONE, text, "seed"),
-    )
-    assert blocked["reason"] == "duplicate"
-    assert blocked["delivered"] is True
-    assert again_device.taps == 0
+    assert blocked["status"] == "skipped"
+    assert blocked["reason"] == "already_recorded"
+    assert blocked["tapped"] is False
+    assert ready.taps == 0
     assert composer_matches("你好呀", "你好呀")
     assert composer_matches("你好呀。", "你好呀")
     assert composer_matches(
@@ -580,8 +568,9 @@ async def test_care_and_wake_use_the_same_sender(tmp_path: Path):
         device.screen = PhoneScreen(header=PHONE, composer="最近还好吗")
         device.after = PhoneScreen(header=PHONE, outgoing=["最近还好吗"])
         woke = await loop.wake_silent()
-        assert woke[0]["status"] == "sent"
-        assert device.taps == 2
+        assert woke[0]["status"] == "skipped"
+        assert woke[0]["reason"] == "already_recorded"
+        assert device.taps == 1
         assert all("wa.me/14155552671" in url for url in device.urls)
     finally:
         unregister_phone_loop(ACCOUNT)
@@ -617,8 +606,9 @@ async def test_established_chat_ignores_hourly_cap(tmp_path: Path):
     device.after = PhoneScreen(header=PHONE, outgoing=["你好呀"])
     second = await loop.handle_inbound(phone=PHONE, text="再聊一句", display_name="Ann")
     assert first["send"]["status"] == "sent"
-    assert second["send"]["status"] == "sent"
-    assert device.taps == 2
+    assert second["send"]["reason"] == "already_recorded"
+    assert second["send"]["tapped"] is False
+    assert device.taps == 1
 
 
 @pytest.mark.asyncio
