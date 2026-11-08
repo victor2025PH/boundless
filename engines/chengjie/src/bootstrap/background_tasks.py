@@ -1047,6 +1047,27 @@ def ensure_deferred_outbox(assistant):
             except Exception:
                 assistant.logger.debug(
                     "[deferred_outbox] 披露注入异常（原样发送）", exc_info=True)
+            # 真机号码闭环若已登记，关怀和召回走同一个 wa.me 发送口。
+            # 没登记（默认）时返回 None，下面仍走原来的编排器。
+            if str(platform) == "whatsapp":
+                try:
+                    from src.integrations.whatsapp_rpa.phone_loop import (
+                        route_registered_send,
+                    )
+                    routed = await route_registered_send(
+                        str(account_id), str(chat_key), text, source="care",
+                    )
+                except DeferredSenderNotReady:
+                    raise
+                except Exception:
+                    assistant.logger.debug(
+                        "[deferred_outbox] 真机发送口异常 %s", account_id, exc_info=True)
+                    routed = None
+                if routed is not None:
+                    if routed.get("retry"):
+                        raise DeferredSenderNotReady(
+                            str(routed.get("reason") or "phone_loop_cap"))
+                    return bool(routed.get("delivered"))
             # 1) 编排器受管 worker（telegram/whatsapp/line… 任一暴露 send 的）
             try:
                 from src.integrations.account_orchestrator import get_orchestrator

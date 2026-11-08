@@ -31,6 +31,7 @@ from typing import Any, Dict
 from fastapi import Depends, Request
 
 from src.inbox.persona_reply import generate_persona_reply
+from src.inbox.reply_history import load_reply_history
 
 logger = logging.getLogger(__name__)
 
@@ -162,17 +163,23 @@ def register_replybus_routes(app, *, api_auth, config_manager=None) -> None:
         # 形参（供深度人设 store 层解锁关系画像/回指）。留空时两边行为不变，顺手传
         # 入不改变任何既有默认行为，故未在字段映射任务里单列也一并接上。
         session_id = str(message.get("session_id") or "").strip()
+        # 信封里没有历史数组。能在收件箱对上 session_id 时，用已落库的往来
+        # 补历史；对不上或还没有消息时仍是空列表，和旧调用方行为一致。
+        # whatsapp_rpa 这个旧平台名收成 whatsapp，其它平台保持原值。
+        platform_name = "whatsapp" if platform in {"whatsapp", "whatsapp_rpa"} else platform
+        history = load_reply_history(
+            getattr(request.app.state, "inbox_store", None),
+            session_id,
+            last_inbound,
+        )
 
-        # 不传 history：reply_schema.json 定义的信封里没有历史消息列表这个字段
-        # （只有单条入站 text），故按任务要求传空列表，交由 generate_persona_reply
-        # 自身的"无历史"分支处理（该分支只影响 KB/记忆窗口拼装，不影响是否报错）。
         try:
             result = await generate_persona_reply(
                 app=request.app,
-                platform=platform,
+                platform=platform_name,
                 chat_key=external_id,
                 last_inbound=last_inbound,
-                history=[],
+                history=history,
                 persona_id=persona_id,
                 conversation_id=session_id,
             )

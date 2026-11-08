@@ -1,5 +1,11 @@
 """WhatsApp RPA Runner — 读 UI → Skill/AI → 回发。
 
+发送路径只有一条能在同一时刻真发：
+``whatsapp_rpa.phone_loop.enabled`` 为真时，服务循环不会调用本文件的
+``run_once``，旧的 dump 队列、主动续聊、自动通过好友也不会发出。
+新消息请改 ``phone_loop.py`` / ``phone_send.py``，不要在这里再加一个发送口。
+
+
 执行流程（单轮 run_once）：
   1. 确保 WhatsApp 前台
   2. uiautomator dump 聊天列表

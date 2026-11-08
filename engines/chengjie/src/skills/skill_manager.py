@@ -2939,6 +2939,8 @@ class SkillManager(LoggerMixin):
                     peer_name=str((context or {}).get("_peer_display_name") or ""),
                     # B74：生成时 prompt 锁定名（ai_client 写回）同源直传白名单
                     resolved_name=str((context or {}).get("_resolved_persona_name") or ""),
+                    extra_allowed=list((context or {}).get("_guard_self_names") or []),
+                    extra_peers=list((context or {}).get("_guard_peer_names") or []),
                 )
 
             # 5c1b. 出站文本形态守卫（实施74：B118 括号独白 / B121 语种混杂 /
@@ -3172,6 +3174,8 @@ class SkillManager(LoggerMixin):
         agent_instruction: str = "",
         inbound_msg_id: str = "",
         extra_hint: str = "",
+        guard_self_names: Optional[List[str]] = None,
+        guard_peer_names: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """收件箱草稿生成的「统一规则引擎」（单一事实源）。
 
@@ -3270,6 +3274,14 @@ class SkillManager(LoggerMixin):
             user_context["account_id"] = _acct_id
         if persona_id:
             user_context["account_persona_id"] = str(persona_id)
+        if guard_self_names:
+            user_context["_guard_self_names"] = [
+                str(n) for n in guard_self_names if str(n or "").strip()
+            ]
+        if guard_peer_names:
+            user_context["_guard_peer_names"] = [
+                str(n) for n in guard_peer_names if str(n or "").strip()
+            ]
         if platform:
             user_context["platform"] = platform
         # 让 autodraft 路径也带上会话身份：chat_id 供人设解析（cid=— 修复 + 支持 chat 绑定），
@@ -4002,6 +4014,8 @@ class SkillManager(LoggerMixin):
                     # B74：生成时 prompt 锁定名（ai_client 写回 user_context）同源直传
                     resolved_name=str(
                         user_context.get("_resolved_persona_name") or ""),
+                    extra_allowed=list(user_context.get("_guard_self_names") or []),
+                    extra_peers=list(user_context.get("_guard_peer_names") or []),
                 )
             if reply != _before_guard:
                 _metric("persona_guard_intercept")
@@ -5345,6 +5359,8 @@ class SkillManager(LoggerMixin):
     def _enforce_persona_consistency(
         self, reply: str, *, chat_id: str = "", account_persona_id: str = "",
         log_prefix: str = "", peer_name: str = "", resolved_name: str = "",
+        extra_allowed: Optional[List[str]] = None,
+        extra_peers: Optional[List[str]] = None,
     ) -> str:
         """后置人设守卫：剥离回复中漏出的禁用语 / AI 自曝身份（陪聊沉浸感保护）。
 
@@ -5453,8 +5469,14 @@ class SkillManager(LoggerMixin):
                 # 与生成解析分叉时，AI 按身份硬锁自报的名字绝不该被抹。
                 if str(resolved_name or "").strip():
                     _extra.append(str(resolved_name).strip())
+                for _own in (extra_allowed or []):
+                    if str(_own or "").strip():
+                        _extra.append(str(_own).strip())
                 _allowed = build_self_name_allowlist(persona or {}, _extra)
                 _peers = [peer_name] if str(peer_name or "").strip() else []
+                for _peer in (extra_peers or []):
+                    if str(_peer or "").strip() and str(_peer).strip() not in _peers:
+                        _peers.append(str(_peer).strip())
                 cleaned2, _hard, _soft = sanitize_self_name(out, _allowed, _peers)
                 if _hard:
                     if cleaned2.strip() == out.strip():

@@ -71,6 +71,40 @@ def test_decide_valid_reply_maps_to_draft():
     assert kwargs["conversation_id"] == "s_tg_987654321"
 
 
+def test_decide_loads_inbox_history_and_keeps_other_platforms(tmp_path):
+    from src.inbox.models import InboxConversation, InboxMessage
+    from src.inbox.store import InboxStore
+
+    store = InboxStore(tmp_path / "inbox.db")
+    cid = "s_hist"
+    store.upsert_conversation(InboxConversation(
+        conversation_id=cid, platform="telegram", account_id="acct_pool_007",
+        chat_key="tg:987654321",
+    ))
+    store.ingest_message(InboxMessage(
+        conversation_id=cid, direction="in", text="第一句", ts=1, platform_msg_id="a",
+    ))
+    store.ingest_message(InboxMessage(
+        conversation_id=cid, direction="out", text="回第一句", ts=2, platform_msg_id="b",
+    ))
+    store.ingest_message(InboxMessage(
+        conversation_id=cid, direction="in", text="第二句", ts=3, platform_msg_id="c",
+    ))
+    client = _client({"inbox_store": store})
+    msg = dict(_GOOD_MESSAGE, text="第二句", session_id=cid, platform="whatsapp_rpa")
+    fake_result = {"ok": True, "reply": "接着聊", "persona": "amy", "intent": "chat"}
+    with patch(_PATCH_TARGET, new=AsyncMock(return_value=fake_result)) as mocked:
+        response = client.post("/api/replybus/decide", json={"message": msg})
+    assert response.status_code == 200
+    _, kwargs = mocked.call_args
+    assert kwargs["platform"] == "whatsapp"
+    assert kwargs["history"] == [
+        {"role": "user", "content": "第一句"},
+        {"role": "assistant", "content": "回第一句"},
+    ]
+    assert kwargs["last_inbound"] == "第二句"
+
+
 def test_decide_persona_id_from_context_hint():
     client = _client()
     msg = dict(_GOOD_MESSAGE, context_hint={"persona": "domain_beauty"})
