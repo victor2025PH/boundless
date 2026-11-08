@@ -31,6 +31,7 @@ from src.integrations.whatsapp_rpa.phone_send import (
     PhoneDevice,
     PhoneScreen,
     deliver_via_wa_me,
+    texts_close,
 )
 
 logger = logging.getLogger(__name__)
@@ -418,6 +419,7 @@ class WaPhoneLoop:
         display_name: str = "",
         dry_run: Optional[bool] = None,
         stay: bool = False,
+        finish_pending: bool = False,
     ) -> Dict[str, Any]:
         """回复、队列、关怀、首触、唤醒都从这里出去。"""
         e164 = normalize_e164(phone)
@@ -455,10 +457,21 @@ class WaPhoneLoop:
                     **base, "status": "sent", "reason": "duplicate",
                     "delivered": True, "tapped": False, "retry": False,
                 }
+        pending_ok = False
+        if finish_pending:
+            for row in self.ledger.unsent_rows(e164):
+                saved = str(row.get("body") or "")
+                if saved and texts_close(saved, body):
+                    pending_ok = True
+                    break
+                if content_key and str(row.get("content_key") or "") == content_key:
+                    pending_ok = True
+                    break
         if (
             source == "reply"
             and self.ledger.tracks_inbound(e164)
             and not self.ledger.has_unreplied(e164)
+            and not pending_ok
         ):
             return {
                 **base, "status": "skipped", "reason": "no_new_inbound",

@@ -1073,28 +1073,40 @@ class SshAdbPhoneDevice:
         await self._run(["shell", f"input tap {x} {y}; input keyevent 123; {deletes}"])
 
     async def prefill_text(self, text: str) -> None:
-        """在当前聊天页预填，不打开 wa.me。
-
-        纯英文用 ``input text``。汉字用剪贴板再粘贴，因为 ``input text`` 会丢掉非 ASCII。
-        """
-        import base64
-        import shlex
-
-        await self.clear_composer()
+        """当前页只打英文。汉字不走剪贴板，改由 wa.me 预填。"""
         body = str(text or "")
-        if not body:
+        if not body or not body.isascii():
             return
-        if body.isascii():
-            token = body.replace(" ", "%s")
-            await self._run(["shell", "input", "text", token])
+        await self.clear_composer()
+        await self._run(["shell", "input", "text", body.replace(" ", "%s")])
+
+    async def unicode_keyboard_available(self) -> bool:
+        """只有装了 ADBKeyBoard 或 clipper 才允许备用输入。系统剪贴板不算。"""
+        self._unicode_pkg = ""
+        for package in ("com.android.adbkeyboard", "ca.zgrs.clipper"):
+            code, out, _err = await self._run(["shell", "pm", "path", package])
+            text = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out or "")
+            if code == 0 and "package:" in text:
+                self._unicode_pkg = package
+                return True
+        return False
+
+    async def prefill_unicode(self, text: str) -> None:
+        """备用。没探测到键盘或 clipper 时什么都不做。"""
+        package = str(getattr(self, "_unicode_pkg", "") or "")
+        if not package:
+            if not await self.unicode_keyboard_available():
+                return
+            package = str(self._unicode_pkg or "")
+        if package == "ca.zgrs.clipper":
+            await self._run(["shell", "am", "broadcast", "-a", "clipper.set", "-e", "text", text])
+            await self._run(["shell", "input", "keyevent", "279"])
             return
-        encoded = base64.b64encode(body.encode("utf-8")).decode("ascii")
-        script = (
-            f"echo {shlex.quote(encoded)} | base64 -d | "
-            "cmd clipboard set-primary-clip --user 0 --source clipboard; "
-            "input keyevent 279"
-        )
-        await self._run(["shell", script])
+        import base64
+        encoded = base64.b64encode(str(text or "").encode("utf-8")).decode("ascii")
+        await self._run([
+            "shell", "am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg", encoded,
+        ])
 
     async def _device_size(self) -> tuple:
         code, out, _err = await self._run(["shell", "wm", "size"])
@@ -1527,12 +1539,60 @@ async def settle_stale_draft(loop: Any, peer: str) -> Dict[str, Any]:
         sent = await loop.send_prepared(
             phone=phone, text=composer_body(draft) or draft, source="reply",
             client_msg_id=loop.scoped_msg_id("reply", phone, draft, "stale-draft"),
+            finish_pending=True,
         )
         return sent
     clear = getattr(loop.device, "clear_composer", None)
     if clear is not None:
         await clear()
     return {"status": "cleared", "tapped": False, "text": draft}
+
+
+_HISTORY = (
+    ("开场", "你好，早上好，在忙吗"),
+    ("07:07", "早上好呀，不忙，刚起来没多久。你这问候可够早的。"),
+    ("07:08", "早嘛，周日这个点醒的，是自然醒还是被什么事叫起来的呀。"),
+    ("07:28", "早嘛，周日能睡到这会儿才起，挺舒服的吧。"),
+    ("07:35", "对了，还没问你，平时怎么称呼你比较方便呀？"),
+    ("07:54", "早呀，刚醒，还没吃上早饭呢。"),
+)
+
+
+def ledger_history(*ledgers: Any) -> List[Dict[str, Any]]:
+    """按开场和几个时间点列出台账状态。已发出的优先于失败记录。"""
+    from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+    from src.integrations.whatsapp_rpa.phone_send import texts_close
+
+    rows: List[Dict[str, Any]] = []
+    for ledger in ledgers:
+        if hasattr(ledger, "list_sends"):
+            rows.extend(ledger.list_sends())
+    report: List[Dict[str, Any]] = []
+    for label, text in _HISTORY:
+        matches = []
+        for row in rows:
+            body = str(row.get("body") or "")
+            phone = str(row.get("phone") or "")
+            key = str(row.get("content_key") or "")
+            keyed = any(
+                key and key == sent_content_key(source, phone, text)
+                for source in ("reply", "acceptance")
+            )
+            if (body and texts_close(body, text)) or keyed:
+                matches.append(row)
+        status = "absent"
+        phone = ""
+        if any(str(row.get("status") or "") == "sent" for row in matches):
+            status = "sent"
+            phone = next(
+                str(row.get("phone") or "")
+                for row in matches if str(row.get("status") or "") == "sent"
+            )
+        elif matches:
+            status = str(matches[-1].get("status") or "absent")
+            phone = str(matches[-1].get("phone") or "")
+        report.append({"label": label, "text": text, "status": status, "phone": phone})
+    return report
 
 
 async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
@@ -1598,6 +1658,11 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
                         "tapped": bool(settled.get("tapped")),
                         "delivered": True,
                     }
+                else:
+                    results[-1]["draft"] = {
+                        "status": settled.get("status") or "",
+                        "reason": settled.get("reason") or "",
+                    }
                 continue
             break
         baselines[label] = list(baselines.get(label, [])) + [str(heard.get("text") or "")]
@@ -1611,6 +1676,12 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
             "source": heard.get("source"), "status": send.get("status") or item.get("reply"),
             "send": send, "ok": send.get("status") == "sent",
         })
-        evidence.checkpoint({"command": "pair-chat", "ok": False, "turns": results})
+        evidence.checkpoint({
+            "command": "pair-chat", "ok": False, "turns": results,
+            "history": ledger_history(loop_a.ledger, loop_b.ledger),
+        })
     ok = len(results) == int(turns) and all(row.get("status") == "sent" for row in results)
-    return evidence.finish({"command": "pair-chat", "ok": ok, "turns": results})
+    return evidence.finish({
+        "command": "pair-chat", "ok": ok, "turns": results,
+        "history": ledger_history(loop_a.ledger, loop_b.ledger),
+    })

@@ -160,7 +160,8 @@ async def test_multiline_reply_is_sent_as_separate_bubbles(tmp_path: Path):
     loop = _loop(tmp_path, device, reply=reply)
     result = await loop.handle_inbound(phone=PHONE, text="在吗")
     assert device.taps == 3
-    assert device.urls == []
+    assert len(device.urls) == 3
+    assert all("wa.me/" in url and "text=" in url for url in device.urls)
     assert device.sent == [
         "早呀，这个点起得挺早嘛",
         "我在呢，还没吃早饭，先喝口水缓一缓",

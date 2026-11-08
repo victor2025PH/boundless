@@ -339,6 +339,13 @@ class PhoneLedger:
             )
             self._conn.commit()
 
+    def list_sends(self) -> list:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM sends ORDER BY ts ASC",
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def unsent_rows(self, phone: str) -> list:
         with self._lock:
             rows = self._conn.execute(

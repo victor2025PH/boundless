@@ -1075,8 +1075,7 @@ def test_scroll_to_latest_swipes_then_taps_the_down_button():
 
     phone = SshAdbPhoneDevice("hub176", "SERIAL", lambda _png: PhoneScreen(), runner=type_runner)
     asyncio.run(phone.prefill_text("叫我顾嘉就行"))
-    assert any("clipboard" in line for line in typed)
-    assert any("input keyevent 279" in line for line in typed)
+    assert not any("clipboard" in line for line in typed)
     typed.clear()
     asyncio.run(phone.prefill_text("hello"))
     assert any("input text hello" in line for line in typed)
@@ -1126,6 +1125,159 @@ async def test_unstable_frames_stop_after_three_tries():
     assert ready["timings"]["stability_tries"] == 3
     assert ready["timings"]["wait_ms"] < 5000
     assert device.n <= 8
+
+
+@pytest.mark.asyncio
+async def test_placeholder_switches_once_and_does_not_wait_out_the_timeout():
+    from src.integrations.whatsapp_rpa.phone_send import deliver_via_wa_me
+
+    sentence = "早呀，那正好，我这边也还没吃呢，饿着肚子陪你聊会儿。"
+
+    class Stuck:
+        def __init__(self):
+            self.urls = []
+            self.t = 0.0
+            self.open_timeout = 40.0
+            self.taps = 0
+            self.keyboard = False
+
+        def clock(self):
+            return self.t
+
+        async def sleep_fn(self, delay):
+            self.t += delay
+
+        async def open_url(self, url: str) -> None:
+            self.urls.append(url)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return PhoneScreen(header="+639543629194", composer="发消息")
+
+        async def tap_send(self) -> None:
+            self.taps += 1
+
+        async def press_back(self) -> None:
+            return None
+
+        async def unicode_keyboard_available(self) -> bool:
+            return self.keyboard
+
+    device = Stuck()
+    missed = await deliver_via_wa_me(device, "+639543629194", sentence)
+    assert missed.status == "failed"
+    assert missed.reason == "composer_not_ready"
+    assert missed.tapped is False
+    assert device.taps == 0
+    assert len(device.urls) == 1
+    assert "wa.me/" in device.urls[0] and "text=" in device.urls[0]
+    assert device.t < 5
+
+    class Keyboard(Stuck):
+        def __init__(self):
+            super().__init__()
+            self.keyboard = True
+            self.typed = []
+            self.filled = False
+
+        async def prefill_unicode(self, text: str) -> None:
+            self.typed.append(text)
+            self.filled = True
+
+        async def read_screen(self, png):
+            if self.filled and self.taps:
+                return PhoneScreen(
+                    header="+639543629194", composer="发消息", outgoing=[sentence],
+                )
+            if self.filled:
+                return PhoneScreen(header="+639543629194", composer=sentence)
+            return PhoneScreen(header="+639543629194", composer="发消息")
+
+        async def tap_send(self) -> None:
+            self.taps += 1
+
+    typed = Keyboard()
+    sent = await deliver_via_wa_me(typed, "+639543629194", sentence)
+    assert typed.typed == [sentence]
+    assert sent.timings.get("retried") is True
+    assert sent.status == "sent"
+    assert typed.t < 8
+
+
+@pytest.mark.asyncio
+async def test_pending_second_segment_is_sent_without_a_new_inbound(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import ledger_history, settle_stale_draft
+
+    draft = "叫我顾嘉就行，你呢，怎么称呼比较方便？"
+    phone = "+639543629194"
+
+    class Box:
+        def __init__(self):
+            self.taps = 0
+            self.urls = []
+            self.screen = PhoneScreen(header=phone, composer=draft)
+
+        async def open_url(self, url: str) -> None:
+            self.urls.append(url)
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return self.screen
+
+        async def tap_send(self) -> None:
+            self.taps += 1
+            self.screen = PhoneScreen(header=phone, composer="发消息", outgoing=[draft])
+
+        async def press_back(self) -> None:
+            return None
+
+        async def clear_composer(self) -> None:
+            self.screen = PhoneScreen(header=phone, composer="")
+
+    device = Box()
+    ledger = PhoneLedger(tmp_path / "b.db")
+    ledger.note_inbound(phone, "在吗")
+    ledger.mark_replied(phone, "在吗")
+    ledger.reserve(
+        client_msg_id="part-2", phone=phone, account_id="seat-b",
+        source="reply", body=draft, content_key="part-2",
+    )
+    ledger.finish("part-2", "failed", error="composer_not_ready")
+    store = InboxStore(tmp_path / "inbox.db")
+
+    async def decide(**kwargs):
+        return {"ok": True, "reply": "不该再生成"}
+
+    loop = WaPhoneLoop(
+        account_id="seat-b", inbox=store, device=device, decide_fn=decide,
+        cfg={"enabled": True}, ledger=ledger,
+        now_fn=lambda: 1_700_000_000.0, run_id="b",
+    )
+    settled = await settle_stale_draft(loop, phone)
+    assert settled["status"] == "sent"
+    assert device.taps == 1
+    assert device.urls == []
+
+    device.screen = PhoneScreen(header=phone, composer="过时的另一句")
+    device.taps = 0
+    cleared = await settle_stale_draft(loop, phone)
+    assert cleared["status"] == "cleared"
+    assert device.taps == 0
+    assert device.screen.composer == ""
+
+    ledger.reserve(
+        client_msg_id="morning", phone=phone, account_id="seat-b",
+        source="reply", body="早呀，刚醒，还没吃上早饭呢。", content_key="m",
+    )
+    ledger.finish("morning", "sent")
+    labels = {row["label"]: row["status"] for row in ledger_history(ledger)}
+    assert labels["07:54"] == "sent"
+    assert labels["07:28"] == "absent"
+    assert labels["开场"] == "absent"
 
 
 @pytest.mark.asyncio

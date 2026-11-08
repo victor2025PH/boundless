@@ -135,6 +135,15 @@ def composer_body(text: str) -> str:
     return re.sub(r"\s+", "", "".join(parts))
 
 
+def composer_is_placeholder(text: str) -> bool:
+    """输入框还是「发消息」这类占位，正文没写进去。"""
+    if composer_body(text):
+        return False
+    raw = str(text or "")
+    folded = raw.casefold()
+    return any(hint in folded or hint in raw for hint in _COMPOSER_HINTS)
+
+
 def composer_matches(composer: str, expected: str) -> bool:
     """要发的全文必须和输入框里的连续文字逐字一致。
 
@@ -377,6 +386,7 @@ async def wait_for_chat(
     profile_checked = False
     profile_confirmed = False
     stable_tries = 0
+    placeholder_seen = 0
     while True:
         png = await device.screencap()
         screen = await device.read_screen(png)
@@ -407,6 +417,16 @@ async def wait_for_chat(
                 continue
         transient = screen_is_transient(screen)
         header_ok = profile_confirmed or header_matches(screen.header, phone=phone)
+        if not transient and header_ok and expected and composer_is_placeholder(screen.composer):
+            placeholder_seen += 1
+            if placeholder_seen >= 2:
+                return _wait_result(
+                    False, "failed", "composer_not_ready", polls, screen,
+                    profile_confirmed, started, clock, stable_tries,
+                )
+            await sleep(min(step, 0.4))
+            continue
+        placeholder_seen = 0
         if (
             not transient and not header_ok and not profile_checked
             and header_needs_profile(screen.header, phone=phone)
@@ -555,13 +575,32 @@ def _on_chat(screen: "PhoneScreen", phone: str) -> bool:
     return header_matches(screen.header, phone=phone) and not screen_is_transient(screen)
 
 
+def _needs_link(text: str) -> bool:
+    """汉字不在当前页逐字敲。这些手机的剪贴板后台写不进去，回到 wa.me。"""
+    return not str(text or "").isascii()
+
+
+async def _keyboard_ready(device: Any) -> bool:
+    probe = getattr(device, "unicode_keyboard_available", None)
+    if probe is None:
+        return False
+    try:
+        return bool(await probe())
+    except Exception:
+        return False
+
+
 async def _place_text(device: Any, url: str, body: str, phone: str, stay: bool) -> str:
-    """已经在这个聊天页就地预填，不再打开 wa.me。续发必须走这条，避免进联系人选择页。"""
+    """中文用 wa.me 覆盖输入框。先把别的草稿清掉，避免叠进联系人选择页。
+
+    已经是这句就不再打开。英文留在当前页打字。
+    剪贴板和 ADBKeyBoard 只在设备上确实有的时候才作为备用。
+    """
     screen = await _peek(device)
     if _on_chat(screen, phone) and send_confirmed(screen, body):
         return "already"
     on_chat = _on_chat(screen, phone)
-    if stay and not on_chat:
+    if stay and not on_chat and not _needs_link(body):
         back = getattr(device, "press_back", None)
         if back is not None:
             try:
@@ -573,10 +612,15 @@ async def _place_text(device: Any, url: str, body: str, phone: str, stay: bool) 
         if not on_chat:
             return "off_chat"
     current = str(screen.composer or "") if isinstance(screen, PhoneScreen) else ""
-    if composer_matches(current, body) and on_chat:
-        return "held"
-    if composer_matches(current, body) and not stay:
-        return ""
+    if composer_matches(current, body) and (on_chat or not stay):
+        return "held" if on_chat else ""
+    if _needs_link(body):
+        if composer_body(current) and not composer_is_placeholder(current):
+            clear = getattr(device, "clear_composer", None)
+            if clear is not None:
+                await clear()
+        await device.open_url(url)
+        return "wa_me"
     if on_chat or stay:
         if composer_body(current):
             clear = getattr(device, "clear_composer", None)
@@ -590,6 +634,19 @@ async def _place_text(device: Any, url: str, body: str, phone: str, stay: bool) 
             return "need_type"
     await device.open_url(url)
     return ""
+
+
+async def _switch_prefill(device: Any, url: str, body: str, placed: str) -> str:
+    """占位「发消息」还在，就换另一种预填，只试一次。"""
+    if placed == "wa_me":
+        if await _keyboard_ready(device):
+            typer = getattr(device, "prefill_unicode", None)
+            if typer is not None:
+                await typer(body)
+                return "keyboard"
+        return "gave_up"
+    await device.open_url(url)
+    return "wa_me"
 
 
 async def deliver_via_wa_me(
@@ -614,6 +671,7 @@ async def deliver_via_wa_me(
 
     started = time.monotonic()
     placed = await _place_text(device, url, body, phone, stay)
+    retried = False
     if placed == "already":
         return SendOutcome(
             status="sent", reason="already_visible", tapped=False, url="",
@@ -629,12 +687,28 @@ async def deliver_via_wa_me(
     dismiss = getattr(device, "dismiss_keyboard", None)
     if dismiss is not None:
         await dismiss()
-    limit = 8.0 if placed in {"typed", "held"} or stay else None
+    limit = 8.0 if placed in {"typed", "held", "keyboard"} or stay else None
     ready = await wait_for_chat(device, phone, expected=body, timeout=limit)
+    if (
+        not ready.get("ready")
+        and ready.get("reason") == "composer_not_ready"
+        and not retried
+    ):
+        retried = True
+        switched = await _switch_prefill(device, url, body, placed)
+        placed = switched
+        if switched != "gave_up":
+            ready = await wait_for_chat(device, phone, expected=body, timeout=8.0)
     timings = dict(ready.get("timings") or {})
     timings["place"] = placed
+    timings["retried"] = retried
     timings["total_ms"] = int((time.monotonic() - started) * 1000)
-    used_url = "" if placed in {"typed", "held"} else url
+    used_url = "" if placed in {"typed", "held", "keyboard"} else url
+    if placed == "gave_up":
+        return SendOutcome(
+            status="failed", reason="composer_not_ready", tapped=False,
+            url=url, timings=timings,
+        )
     if not ready.get("ready"):
         if placed == "":
             try:
