@@ -518,6 +518,8 @@ async def _dispatch(args, data, evidence, inbox, reader, decide, *, devices=None
             args, inbox, device_b, data / "ledger-b.db", args.b_account,
             bind_persona_decide(decide, b_persona, b_name, a_name), persona_id=b_persona,
         )
+        loop_a.peer_names = [b_name] if b_name else []
+        loop_b.peer_names = [a_name] if a_name else []
         report = await run_pair_chat(
             loop_a, loop_b, args.a_phone, args.b_phone, args.turns, args.seed, evidence,
             max_seconds=_clamp_max_seconds(getattr(args, "max_seconds", 540)),

@@ -2043,6 +2043,151 @@ def test_max_seconds_can_be_set_up_to_1800():
     assert args.max_seconds == 1800
 
 
+def test_b_read6_header_is_the_same_in_chat_decision():
+    """b-read6 的顶栏和发消息必须让 in_chat 成立。空顶栏的界面树不能代替这次截图。"""
+    from src.integrations.whatsapp_rpa.phone_acceptance import _dump_has_chat_header, in_chat
+
+    phone = "+639543629194"
+    screen = lines_to_screen([
+        {"text": "+63 954 362 9..", "box": [198, 86, 435, 122]},
+        {"text": "发消息", "box": [107, 1486, 222, 1529]},
+    ], 1080, 1600)
+    verdict = in_chat(screen, phone)
+    assert verdict["ok"] is True
+    assert verdict["header_matches_peer"] is True
+    assert verdict["boxes"]["header"] == [198, 86, 435, 122]
+    assert verdict["boxes"]["composer"] == [107, 1486, 222, 1529]
+    assert _dump_has_chat_header(PhoneScreen(header="", composer="发消息")) is False
+    assert _dump_has_chat_header(screen) is True
+
+
+def test_keycap_below_1200_is_not_the_composer():
+    screen = lines_to_screen([
+        {"text": "+639543629194", "box": [96, 86, 430, 121]},
+        {"text": "一段无关的长草稿还挂着引用", "box": [40, 860, 560, 920]},
+        {"text": "词", "box": [27, 1314, 88, 1365]},
+    ], 720, 1600)
+    assert "词" not in screen.composer
+    assert "长草稿" in screen.composer
+
+
+def test_no_quote_means_no_close_tap_and_a_menu_is_not_a_quote():
+    from src.integrations.whatsapp_rpa.phone_acceptance import menu_is_open, quote_close_point
+
+    lines = [
+        {"text": "+639543629194", "box": [96, 86, 430, 121]},
+        {"text": "昨天那件事我想了想", "box": [40, 900, 480, 960]},
+        {"text": "发消息", "box": [107, 1486, 222, 1529]},
+    ]
+    assert quote_close_point(lines, 1080, 1600, input_top=1486) is None
+    menu = PhoneScreen(
+        header="+639543629194", composer="发消息",
+        ocr_lines=[{"text": "查看联系人", "box": [40, 200, 280, 260]}],
+    )
+    assert menu_is_open(menu) is True
+
+
+@pytest.mark.asyncio
+async def test_sent_history_does_not_touch_the_phone(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import reconcile_failed_history
+    from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
+
+    sentence = "对了，还没问你，平时怎么称呼你比较方便呀？"
+    ledger = PhoneLedger(tmp_path / "ledger.db")
+    key = sent_content_key("reply", PHONE_B, sentence)
+    ledger.reserve(
+        client_msg_id="old", phone=PHONE_B, account_id="a",
+        source="reply", content_key=key, body=sentence,
+    )
+    ledger.finish("old", "failed", error="bubble_missing")
+    ledger.mark_content_sent(key)
+
+    class Quiet:
+        def __init__(self):
+            self.reads = 0
+
+        async def screencap(self):
+            self.reads += 1
+            return b"png"
+
+        async def read_screen(self, png):
+            self.reads += 1
+            return PhoneScreen()
+
+    device = Quiet()
+    loop = WaPhoneLoop(
+        account_id="a", inbox=InboxStore(tmp_path / "inbox.db"), device=device,
+        decide_fn=None, cfg={"enabled": True}, ledger=ledger, now_fn=lambda: 1.0,
+    )
+    other = WaPhoneLoop(
+        account_id="b", inbox=InboxStore(tmp_path / "inbox.db"), device=Quiet(),
+        decide_fn=None, cfg={"enabled": True},
+        ledger=PhoneLedger(tmp_path / "other.db"), now_fn=lambda: 1.0,
+    )
+    found = await reconcile_failed_history(loop, other, PHONE_A, PHONE_B)
+    assert found == []
+    assert device.reads == 0
+
+
+@pytest.mark.asyncio
+async def test_borrowed_name_draft_is_cleared_not_sent(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import prepare_phone
+
+    phone = "+639543629194"
+
+    class Seat:
+        def __init__(self):
+            self.clears = 0
+            self.taps = 0
+            self.phase = "draft"
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            if self.phase == "draft":
+                return PhoneScreen(
+                    header=phone, composer="叫我顾嘉就行",
+                    ocr_lines=[
+                        {"text": phone, "box": [96, 86, 430, 121]},
+                        {"text": "叫我顾嘉就行", "box": [40, 1400, 360, 1460]},
+                        {"text": "●", "box": [640, 1400, 690, 1460]},
+                    ],
+                    shot_size=[720, 1600],
+                )
+            return PhoneScreen(
+                header=phone, composer="发消息",
+                ocr_lines=[
+                    {"text": phone, "box": [96, 86, 430, 121]},
+                    {"text": "发消息", "box": [107, 1486, 222, 1529]},
+                ],
+                shot_size=[720, 1600],
+            )
+
+        async def clear_composer(self):
+            self.clears += 1
+            self.phase = "clean"
+
+        async def tap_xy(self, x, y):
+            self.taps += 1
+
+        async def press_back(self):
+            raise AssertionError("没有键盘，不应按返回")
+
+    seat = Seat()
+    loop = WaPhoneLoop(
+        account_id="a", inbox=InboxStore(tmp_path / "inbox.db"), device=seat,
+        decide_fn=None, cfg={"enabled": True},
+        ledger=PhoneLedger(tmp_path / "ledger.db"), now_fn=lambda: 1.0,
+    )
+    loop.peer_names = ["顾嘉"]
+    result = await prepare_phone(loop, phone)
+    assert seat.clears == 1
+    assert seat.taps == 0
+    assert result["composer"] == "发消息"
+    assert result["cleared"] is True
+
+
 def test_keycap_w_is_not_the_composer():
     screen = lines_to_screen([
         {"text": "+639543629194", "box": [96, 86, 430, 121]},
@@ -2116,7 +2261,6 @@ async def test_keyboard_is_dismissed_once_before_clear(tmp_path: Path):
 
         async def dismiss_keyboard(self):
             self.escapes += 1
-            self.phase = "draft"
 
         async def clear_composer(self):
             self.clears += 1
@@ -2124,6 +2268,7 @@ async def test_keyboard_is_dismissed_once_before_clear(tmp_path: Path):
 
         async def press_back(self):
             self.backs += 1
+            self.phase = "draft"
 
     seat = Seat()
     loop = WaPhoneLoop(
@@ -2134,8 +2279,8 @@ async def test_keyboard_is_dismissed_once_before_clear(tmp_path: Path):
     result = await prepare_phone(loop, phone)
     assert seat.homes == 0
     assert seat.opens == 0
-    assert seat.escapes == 1
-    assert seat.backs == 0
+    assert seat.escapes == 0
+    assert seat.backs == 1
     assert seat.clears == 1
     assert result["in_chat"]["placeholder"] is True
     assert result["in_chat"]["header_matches_peer"] is True
@@ -2349,7 +2494,7 @@ async def test_normalize_ui_backs_out_of_the_menu_and_confirms_placeholder(tmp_p
     ])
     report = await async_main(args, devices={"a": phone})
     assert phone.homes == 1
-    assert phone.backs == 1
+    assert phone.backs == 2
     assert phone.clears == 1
     assert phone.taps == 0
     assert phone.urls and "wa.me/" in phone.urls[0] and "text=" not in phone.urls[0]
