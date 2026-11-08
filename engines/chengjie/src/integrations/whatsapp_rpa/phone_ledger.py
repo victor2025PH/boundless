@@ -339,6 +339,38 @@ class PhoneLedger:
             )
             self._conn.commit()
 
+    def list_inbound_bodies(self, phone: str) -> list:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT body FROM inbounds WHERE phone=? ORDER BY ts ASC",
+                (phone,),
+            ).fetchall()
+        return [str(row["body"] or "") for row in rows]
+
+    def latest_unreplied_body(self, phone: str) -> str:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT body FROM inbounds WHERE phone=? AND replied=0 ORDER BY ts DESC LIMIT 1",
+                (phone,),
+            ).fetchone()
+        return str(row["body"] or "") if row else ""
+
+    def skip_unsent_like(self, phone: str, text: str) -> None:
+        """这句待发作废，下次按新人设重写，不再原样发出。"""
+        from src.integrations.whatsapp_rpa.phone_send import texts_close
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT client_msg_id, body FROM sends WHERE phone=? AND status NOT IN ('sent', 'dry_run')",
+                (phone,),
+            ).fetchall()
+            for row in rows:
+                if texts_close(str(row["body"] or ""), text):
+                    self._conn.execute(
+                        "UPDATE sends SET status='skipped', error='regenerate' WHERE client_msg_id=?",
+                        (row["client_msg_id"],),
+                    )
+            self._conn.commit()
+
     def list_sends(self) -> list:
         with self._lock:
             rows = self._conn.execute(

@@ -248,13 +248,33 @@ async def build_inprocess_decide(config_path: Path, data_dir: Path, inbox):
         config_manager=manager,
     ))
 
-    async def decide(*, account_id: str, phone: str, last_inbound: str, persona_id: str = ""):
+    async def decide(*, account_id: str, phone: str, last_inbound: str, persona_id: str = "",
+                     agent_instruction: str = ""):
         return await decide_whatsapp(
             app, account_id=account_id, phone=phone,
             last_inbound=last_inbound, persona_id=persona_id,
+            agent_instruction=agent_instruction,
         )
 
     return decide
+
+
+def persona_display_name(manager: Any, persona_id: str) -> str:
+    """从人设配置里取名字。没有名字就用人设 id。"""
+    pid = str(persona_id or "").strip()
+    if manager is None or not pid:
+        return pid
+    try:
+        data = manager.get_personas_config() or {}
+    except Exception:
+        return pid
+    profiles = data.get("profiles") or []
+    if isinstance(profiles, dict):
+        profiles = list(profiles.values())
+    for row in profiles:
+        if isinstance(row, dict) and str(row.get("id") or "") == pid:
+            return str(row.get("name") or pid)
+    return pid
 
 
 def build_device(args, evidence: EvidenceLog, *, serial: str, label: str, reader):
@@ -265,7 +285,7 @@ def build_device(args, evidence: EvidenceLog, *, serial: str, label: str, reader
     return RecordingDevice(inner, evidence, label)
 
 
-def make_loop(args, inbox, device, ledger_path: Path, account: str, decide):
+def make_loop(args, inbox, device, ledger_path: Path, account: str, decide, persona_id: str = ""):
     return WaPhoneLoop(
         account_id=account,
         inbox=inbox,
@@ -278,9 +298,23 @@ def make_loop(args, inbox, device, ledger_path: Path, account: str, decide):
             "reply_mode": "auto",
         },
         ledger_path=ledger_path,
-        persona_id=str(getattr(args, "persona_id", "") or ""),
+        persona_id=str(persona_id or getattr(args, "persona_id", "") or ""),
         run_id=str(getattr(args, "run_id", "") or ""),
     )
+
+
+def bind_persona_decide(decide, self_id: str, self_name: str, peer_name: str):
+    from src.integrations.whatsapp_rpa.phone_loop import persona_separation_note
+
+    note = persona_separation_note(self_name, peer_name)
+
+    async def wrapped(*, account_id: str, phone: str, last_inbound: str, persona_id: str = ""):
+        return await decide(
+            account_id=account_id, phone=phone, last_inbound=last_inbound,
+            persona_id=self_id or persona_id, agent_instruction=note,
+        )
+
+    return wrapped
 
 
 def parser() -> argparse.ArgumentParser:
@@ -306,9 +340,11 @@ def parser() -> argparse.ArgumentParser:
     pair.add_argument("--a-serial", required=True)
     pair.add_argument("--a-phone", required=True)
     pair.add_argument("--a-account", default="seat-a")
+    pair.add_argument("--a-persona", default="")
     pair.add_argument("--b-serial", required=True)
     pair.add_argument("--b-phone", required=True)
     pair.add_argument("--b-account", default="seat-b")
+    pair.add_argument("--b-persona", default="")
     pair.add_argument("--turns", type=int, default=2)
     pair.add_argument("--seed", default="你好，我在做链路验收")
 
@@ -410,8 +446,27 @@ async def _dispatch(args, data, evidence, inbox, reader, decide, *, devices=None
             args, evidence, serial=args.a_serial, label="a", reader=reader)
         device_b = (devices or {}).get("b") or build_device(
             args, evidence, serial=args.b_serial, label="b", reader=reader)
-        loop_a = make_loop(args, inbox, device_a, data / "ledger-a.db", args.a_account, decide)
-        loop_b = make_loop(args, inbox, device_b, data / "ledger-b.db", args.b_account, decide)
+        a_persona = str(getattr(args, "a_persona", "") or "")
+        b_persona = str(getattr(args, "b_persona", "") or "")
+        if not a_persona or not b_persona or a_persona == b_persona:
+            raise SystemExit("pair-chat 需要两个不同的人设：--a-persona 和 --b-persona")
+        a_name = persona_display_name(None, a_persona)
+        b_name = persona_display_name(None, b_persona)
+        if getattr(args, "config", ""):
+            try:
+                named = load_acceptance_config(args.config, data)
+                a_name = persona_display_name(named, a_persona)
+                b_name = persona_display_name(named, b_persona)
+            except Exception:
+                pass
+        loop_a = make_loop(
+            args, inbox, device_a, data / "ledger-a.db", args.a_account,
+            bind_persona_decide(decide, a_persona, a_name, b_name), persona_id=a_persona,
+        )
+        loop_b = make_loop(
+            args, inbox, device_b, data / "ledger-b.db", args.b_account,
+            bind_persona_decide(decide, b_persona, b_name, a_name), persona_id=b_persona,
+        )
         report = await run_pair_chat(
             loop_a, loop_b, args.a_phone, args.b_phone, args.turns, args.seed, evidence,
         )

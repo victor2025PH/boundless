@@ -1470,6 +1470,18 @@ async def run_rate_limit_check(device: Any, evidence: EvidenceLog) -> Dict[str, 
     })
 
 
+def _echoes_peer_intro(ledger: Any, phone: str, draft: str) -> bool:
+    """草稿里的「叫我某」和对方刚说的是同一个名字。这是在复述对方，要重写。"""
+    import re
+    intro = re.compile(r"叫我([\u4e00-\u9fffA-Za-z]{1,8})")
+    bodies = ledger.list_inbound_bodies(phone) if hasattr(ledger, "list_inbound_bodies") else []
+    names = []
+    for body in bodies:
+        names.extend(intro.findall(str(body or "")))
+    draft_text = str(draft or "")
+    return any(name and f"叫我{name}" in draft_text for name in names)
+
+
 def _bubble_matches_unsent(loop: Any, phone: str, text: str) -> bool:
     from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
     from src.integrations.whatsapp_rpa.phone_send import texts_close
@@ -1488,30 +1500,56 @@ def _bubble_matches_unsent(loop: Any, phone: str, text: str) -> bool:
     return False
 
 
-async def reconcile_visible(loop: Any, peer: str) -> None:
-    """屏幕上已经有的己方气泡，把台账里没记成 sent 的改过来，不再补发。"""
+def absorb_visible_texts(ledger: Any, phone: str, texts: Sequence[str]) -> None:
+    """屏幕或对方屏幕上能对上的句子，台账改成 sent，不再发第二次。"""
     from src.integrations.whatsapp_rpa.phone_loop import sent_content_key
     from src.integrations.whatsapp_rpa.phone_send import texts_close
 
+    seen = [str(item or "").strip() for item in texts if str(item or "").strip()]
+    targets = list(seen)
+    for _label, text in _HISTORY:
+        if any(texts_close(item, text) for item in seen):
+            targets.append(text)
+    for text in targets:
+        if len(text) < 2:
+            continue
+        for source in ("reply", "acceptance"):
+            ledger.mark_content_sent(sent_content_key(source, phone, text))
+        for row in ledger.unsent_rows(phone):
+            body = str(row.get("body") or "")
+            key = str(row.get("content_key") or "")
+            if (body and texts_close(body, text)) or (
+                key and key == sent_content_key("reply", phone, text)
+            ):
+                ledger.mark_content_sent(key or sent_content_key("reply", phone, text))
+
+
+async def reconcile_visible(loop: Any, peer: str) -> None:
+    """屏幕上已经有的己方气泡，把台账里没记成 sent 的改过来，不再补发。"""
     try:
         await open_peer_chat(loop.device, peer)
         screen = await loop.device.read_screen(await loop.device.screencap())
     except Exception:
         return
     phone = normalize_e164(peer)
-    for bubble in list(getattr(screen, "outgoing", None) or []):
-        text = str(bubble or "").strip()
-        if len(text) < 2:
+    bubbles = list(getattr(screen, "outgoing", None) or [])
+    bubbles.extend(getattr(screen, "incoming", None) or [])
+    absorb_visible_texts(loop.ledger, phone, bubbles)
+
+
+async def reconcile_pair(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str) -> None:
+    """两端屏幕都看。07:35 在对方气泡里也能把发送方台账改成 sent。"""
+    found: List[str] = []
+    for loop, peer in ((loop_a, phone_b), (loop_b, phone_a)):
+        try:
+            await open_peer_chat(loop.device, peer)
+            screen = await loop.device.read_screen(await loop.device.screencap())
+        except Exception:
             continue
-        for source in ("reply", "acceptance"):
-            loop.ledger.mark_content_sent(sent_content_key(source, phone, text))
-        for row in loop.ledger.unsent_rows(phone):
-            body = str(row.get("body") or "")
-            key = str(row.get("content_key") or "")
-            if body and texts_close(body, text):
-                loop.ledger.mark_content_sent(key or sent_content_key("reply", phone, text))
-            elif key and key == sent_content_key("reply", phone, text):
-                loop.ledger.mark_content_sent(key)
+        found.extend(getattr(screen, "outgoing", None) or [])
+        found.extend(getattr(screen, "incoming", None) or [])
+    absorb_visible_texts(loop_a.ledger, normalize_e164(phone_b), found)
+    absorb_visible_texts(loop_b.ledger, normalize_e164(phone_a), found)
 
 
 async def settle_stale_draft(loop: Any, peer: str) -> Dict[str, Any]:
@@ -1535,6 +1573,19 @@ async def settle_stale_draft(loop: Any, peer: str) -> Dict[str, Any]:
         if clear is not None:
             await clear()
         return {"status": "sent", "reason": "already_visible", "tapped": False, "text": draft}
+    if _echoes_peer_intro(loop.ledger, phone, draft):
+        clear = getattr(loop.device, "clear_composer", None)
+        if clear is not None:
+            await clear()
+        if hasattr(loop.ledger, "skip_unsent_like"):
+            loop.ledger.skip_unsent_like(phone, draft)
+        inbound = ""
+        if hasattr(loop.ledger, "latest_unreplied_body"):
+            inbound = loop.ledger.latest_unreplied_body(phone)
+        return {
+            "status": "cleared", "reason": "regenerate", "tapped": False,
+            "text": draft, "inbound": inbound,
+        }
     if _bubble_matches_unsent(loop, phone, draft):
         sent = await loop.send_prepared(
             phone=phone, text=composer_body(draft) or draft, source="reply",
@@ -1605,8 +1656,7 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
     loops = {"A": loop_a, "B": loop_b}
     results = []
     baselines: Dict[str, List[str]] = {"A": [], "B": []}
-    await reconcile_visible(loop_a, phone_b)
-    await reconcile_visible(loop_b, phone_a)
+    await reconcile_pair(loop_a, loop_b, phone_a, phone_b)
     evidence.checkpoint({"command": "pair-chat", "ok": False, "turns": results})
     for index in range(int(turns)):
         loop, own, peer, label = seats[index % 2]
@@ -1657,6 +1707,19 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
                         "reason": settled.get("reason") or "draft_sent",
                         "tapped": bool(settled.get("tapped")),
                         "delivered": True,
+                    }
+                elif settled.get("reason") == "regenerate" and settled.get("inbound"):
+                    item = await loop.handle_inbound(
+                        phone=peer, text=str(settled.get("inbound") or ""), display_name=peer,
+                    )
+                    send = item.get("send") or {}
+                    results[-1] = {
+                        "turn": index, "seat": label,
+                        "heard": settled.get("inbound") or "",
+                        "status": send.get("status") or item.get("reply"),
+                        "reason": "regenerate",
+                        "send": send, "ok": send.get("status") == "sent",
+                        "tapped": bool(send.get("tapped")),
                     }
                 else:
                     results[-1]["draft"] = {

@@ -156,6 +156,16 @@ def text_is_conversion(text: str, keywords: tuple = _CONVERT_KEYWORDS) -> str:
     return ""
 
 
+def persona_separation_note(self_name: str, peer_name: str) -> str:
+    """两台手机各说各的。对方刚报的名字不能拿来当自己的名字。"""
+    you = str(self_name or "").strip() or "你自己"
+    them = str(peer_name or "").strip() or "另一个人"
+    return (
+        f"你是{you}。对方是{them}，是另一个人。"
+        "不要复述对方的自我介绍，不要把对方刚告诉你的名字当成自己的名字。"
+    )
+
+
 async def decide_whatsapp(
     app: Any,
     *,
@@ -164,6 +174,7 @@ async def decide_whatsapp(
     last_inbound: str,
     persona_id: str = "",
     history_limit: int = 30,
+    agent_instruction: str = "",
 ) -> Dict[str, Any]:
     """给这部手机的回复。平台固定 whatsapp，历史来自收件箱。"""
     from src.inbox.persona_reply import generate_persona_reply
@@ -181,6 +192,7 @@ async def decide_whatsapp(
         persona_id=str(persona_id or ""),
         conversation_id=cid,
         account_id=str(account_id or ""),
+        agent_instruction=str(agent_instruction or ""),
     )
 
 

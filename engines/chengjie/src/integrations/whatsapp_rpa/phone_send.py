@@ -124,6 +124,22 @@ def is_screen_chrome(text: str) -> bool:
     return False
 
 
+_PUNCT_FOLD = str.maketrans({
+    "，": ",", "。": ".", "？": "?", "！": "!",
+    "：": ":", "；": ";",
+    "“": '"', "”": '"', "‘": "'", "’": "'",
+    "（": "(", "）": ")",
+})
+_PUNCT_DROP = re.compile(r"[^\w\u4e00-\u9fff]+", re.UNICODE)
+
+
+def compare_key(text: str) -> str:
+    """NFKC、全半角标点对齐，再去掉标点和空白。问号全角半角不再判成两句。"""
+    import unicodedata
+    folded = unicodedata.normalize("NFKC", composer_body(text)).translate(_PUNCT_FOLD)
+    return _PUNCT_DROP.sub("", folded)
+
+
 def composer_body(text: str) -> str:
     """去掉全部空白、换行和行尾光标。系统提示和加密/时间条不参与比对。"""
     parts = []
@@ -145,14 +161,8 @@ def composer_is_placeholder(text: str) -> bool:
 
 
 def composer_matches(composer: str, expected: str) -> bool:
-    """要发的全文必须和输入框里的连续文字逐字一致。
-
-    换行是折行，行尾「-」是光标。系统提示可以多一行，字不能少、不能改。
-    """
-    want = composer_body(expected)
-    if not want:
-        return False
-    return composer_body(composer) == want
+    """去掉标点和空白后一致，或相似度至少 0.9。全角「？」和半角「?」算同一句。"""
+    return texts_close(composer, expected)
 
 
 def screen_blob(screen: "PhoneScreen") -> str:
@@ -213,11 +223,16 @@ def screen_is_transient(screen: "PhoneScreen") -> bool:
 
 
 def _composer_still_arriving(composer: str, expected: str) -> bool:
-    """空串、单个噪声字、占位提示，或正文还没打全，都继续等。"""
-    text = composer_body(composer)
+    """空串、单个噪声字、占位提示，或正文还没打全，都继续等。
+
+    标点已经对齐之后仍对不上，而且不是对方句子的前缀，就不要再等。
+    """
+    text = compare_key(composer)
     if not text or len(text) <= 1:
         return True
-    want = composer_body(expected)
+    if texts_close(composer, expected):
+        return False
+    want = compare_key(expected)
     return bool(want) and want.startswith(text) and text != want
 
 
@@ -225,22 +240,25 @@ def composer_settled(composer: str, expected: str) -> bool:
     """输入框里已经是要发的那句中文。空串、对不上的单个噪声字、只有占位提示都不算就绪。"""
     if not str(expected or "").strip():
         return True
-    text = composer_body(composer)
+    text = compare_key(composer)
     if not text:
         return False
-    if len(text) <= 1 and text != composer_body(expected):
+    if len(text) <= 1 and not texts_close(composer, expected):
         return False
     return composer_matches(composer, expected)
 
 
 def texts_close(observed: str, expected: str) -> bool:
-    """去空白后一致、互相包含，或相似度至少 0.9。"""
+    """去掉标点和空白后一致、互相包含，或相似度至少 0.9。"""
     from difflib import SequenceMatcher
-    got = composer_body(observed)
-    want = composer_body(expected)
+    got = compare_key(observed)
+    want = compare_key(expected)
     if not got or not want:
         return False
-    if got == want or want in got or got in want:
+    if got == want:
+        return True
+    shorter, longer = (got, want) if len(got) <= len(want) else (want, got)
+    if len(shorter) >= 8 and shorter in longer:
         return True
     return SequenceMatcher(None, got, want).ratio() >= 0.9
 

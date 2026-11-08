@@ -338,7 +338,11 @@ async def test_new_run_retries_untapped_failure_but_blocks_a_sent_line(tmp_path:
     assert blocked["delivered"] is True
     assert again_device.taps == 0
     assert composer_matches("你好呀", "你好呀")
-    assert not composer_matches("你好呀。", "你好呀")
+    assert composer_matches("你好呀。", "你好呀")
+    assert composer_matches(
+        "叫我顾嘉就行，你平时朋友都怎么称呼你呀?",
+        "叫我顾嘉就行，你平时朋友都怎么称呼你呀？",
+    )
 
 
 @pytest.mark.asyncio

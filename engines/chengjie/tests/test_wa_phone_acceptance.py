@@ -421,7 +421,8 @@ def test_prefill_requires_the_chinese_text_not_the_placeholder():
     assert compare_prefill(seed, wrapped)["match"] is True
     mixed = wrapped + "\n04:03 √ 你好呀，这么晚还醒着。04:08 发消息 回"
     assert composer_matches(mixed, seed)
-    assert not composer_matches("你好，我在做聊天链路验收-", "你好，我在做聊天链路验收。")
+    assert composer_matches("你好，我在做聊天链路验收-", "你好，我在做聊天链路验收。")
+    assert not composer_matches("今天天气真好我们去散步", "你好，我在做聊天链路验收。")
 
 
 def test_ppocr_boxes_split_header_composer_and_bubbles():
@@ -1079,6 +1080,68 @@ def test_scroll_to_latest_swipes_then_taps_the_down_button():
     typed.clear()
     asyncio.run(phone.prefill_text("hello"))
     assert any("input text hello" in line for line in typed)
+
+
+@pytest.mark.asyncio
+async def test_halfwidth_question_mark_matches_without_waiting():
+    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
+
+    expected = "叫我顾嘉就行，你平时朋友都怎么称呼你呀？"
+    shown = expected[:-1] + "?"
+
+    class Ready:
+        def __init__(self):
+            self.t = 0.0
+            self.open_timeout = 60.0
+            self.reads = 0
+
+        def clock(self):
+            return self.t
+
+        async def sleep_fn(self, delay):
+            self.t += delay
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            self.reads += 1
+            return PhoneScreen(header="+639543629194", composer=shown)
+
+    device = Ready()
+    ready = await wait_for_chat(device, "+639543629194", expected=expected)
+    assert ready["ready"] is True
+    assert device.t == 0
+    assert device.reads == 1
+
+
+def test_echoed_name_is_cleared_and_seen_text_is_marked_sent(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import (
+        _echoes_peer_intro, absorb_visible_texts, ledger_history,
+    )
+    from src.integrations.whatsapp_rpa.phone_loop import persona_separation_note, sent_content_key
+
+    note = persona_separation_note("阿宁", "顾嘉")
+    assert "你是阿宁" in note
+    assert "对方是顾嘉" in note
+    assert "不要复述对方的自我介绍" in note
+
+    phone = "+639933556049"
+    text = "对了，还没问你，平时怎么称呼你比较方便呀？"
+    ledger = PhoneLedger(tmp_path / "a.db")
+    ledger.reserve(
+        client_msg_id="q", phone=phone, account_id="seat-a",
+        source="reply", body=text, content_key="q",
+    )
+    ledger.finish("q", "failed", error="bubble_missing")
+    absorb_visible_texts(ledger, phone, ["对了，还没问你，平时怎么称呼你比较方便呀?"])
+    labels = {row["label"]: row["status"] for row in ledger_history(ledger)}
+    assert labels["07:35"] == "sent"
+    assert ledger.has_sent_content(sent_content_key("reply", phone, text))
+    ledger.note_inbound(phone, "叫我顾嘉就行，你呢，怎么称呼比较方便？")
+    assert _echoes_peer_intro(
+        ledger, phone, "叫我顾嘉就行，你平时朋友都怎么称呼你呀？",
+    )
 
 
 def test_report_is_written_before_the_run_finishes(tmp_path: Path):
