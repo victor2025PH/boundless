@@ -1115,6 +1115,64 @@ async def test_halfwidth_question_mark_matches_without_waiting():
     assert device.reads == 1
 
 
+@pytest.mark.asyncio
+async def test_deadline_stops_the_wait_and_writes_a_final_shape(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
+
+    class Late:
+        def __init__(self):
+            self.deadline_at = 5.0
+
+        def clock(self):
+            return 5.0
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            return PhoneScreen(header="发送给", composer="发消息")
+
+    ready = await wait_for_chat(Late(), "+639543629194", expected="你好")
+    assert ready["reason"] == "max_seconds"
+    log = EvidenceLog(tmp_path)
+    log.note(turns=[{"turn": 0, "status": "sent"}], history=[{"label": "04开场", "status": "sent"}], timings=[{"wait_ms": 3}])
+    final = log.finish({
+        "command": "pair-chat", "ok": False, "reason": "max_seconds",
+        "turns": log.turns, "history": log.history, "timings": log.timings,
+    })
+    assert final["partial"] is False
+    assert final["reason"] == "max_seconds"
+    assert final["turns"][0]["status"] == "sent"
+    assert final["history"][0]["label"] == "04开场"
+
+
+def test_own_persona_name_stays_and_peer_name_is_stripped():
+    from src.utils.persona_guard import find_wrong_self_name, sanitize_self_name
+
+    hard, _soft = find_wrong_self_name("叫我小界就好", ["小界"], ["顾嘉"])
+    assert hard == []
+    hard, _soft = find_wrong_self_name("叫我顾嘉就行", ["小界"], ["顾嘉"])
+    assert any("顾嘉" in hit for hit in hard)
+    _cleaned, hits, _soft = sanitize_self_name("叫我顾嘉就行，你呢？", ["小界"], ["顾嘉"])
+    assert any("顾嘉" in hit for hit in hits)
+
+
+def test_first_bubble_counts_as_sent_without_green_color():
+    from src.integrations.whatsapp_rpa.phone_acceptance import quote_close_point
+    from src.integrations.whatsapp_rpa.phone_send import send_confirmed
+
+    opener = "早上好呀，今天天气怎么样"
+    screen = PhoneScreen(composer="发消息", incoming=[opener], outgoing=[])
+    assert send_confirmed(screen, opener) is True
+    point = quote_close_point(
+        [{"text": "X", "box": [640, 1480, 670, 1510]}], 720, 1600,
+    )
+    assert point == (655, 1495)
+    assert quote_close_point(
+        [{"text": "X", "box": [20, 40, 40, 60]}], 720, 1600,
+    ) is None
+
+
 def test_echoed_name_is_cleared_and_seen_text_is_marked_sent(tmp_path: Path):
     from src.integrations.whatsapp_rpa.phone_acceptance import (
         _echoes_peer_intro, absorb_visible_texts, ledger_history,
@@ -1150,6 +1208,13 @@ def test_report_is_written_before_the_run_finishes(tmp_path: Path):
     early = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert early["partial"] is True
     assert early["steps"][0]["name"] == "a-read1"
+    assert early["turns"] == [] and early["history"] == [] and early["timings"] == []
+    log.note(turns=[{"turn": 0}], history=[{"label": "04开场"}], timings=[{"wait_ms": 1}])
+    log.save("a-read2", b"png", PhoneScreen(composer="发消息"))
+    kept = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert kept["turns"] == [{"turn": 0}]
+    assert kept["history"][0]["label"] == "04开场"
+    assert kept["timings"][0]["wait_ms"] == 1
     final = log.finish({"command": "pair-chat", "ok": True, "turns": []})
     assert final["partial"] is False
     assert "report.json" in final["report_path"]

@@ -336,8 +336,15 @@ def _is_peer_white(red: int, green: int, blue: int) -> bool:
     return min(red, green, blue) >= 245 and max(red, green, blue) - min(red, green, blue) <= 14
 
 
+def _median_channel(values: Sequence[int]) -> int:
+    ordered = sorted(int(v) for v in values)
+    if not ordered:
+        return 0
+    return ordered[len(ordered) // 2]
+
+
 def _fill_around(png: bytes, box: Sequence[float]) -> str:
-    """看文字框外侧一圈的底色。浅绿是己方，白是对方。看不清就返回空串。"""
+    """看气泡框内部、文字间隙里的底色中位数。浅绿是己方，白是对方。"""
     if not png or not png.startswith(b"\x89PNG\r\n\x1a\n"):
         return ""
     try:
@@ -349,30 +356,31 @@ def _fill_around(png: bytes, box: Sequence[float]) -> str:
     width, height = image.size
     pixels = image.load()
     left, top, right, bottom = (int(float(v)) for v in box[:4])
-    green = 0
-    white = 0
-    for pad in range(3, 12):
-        for x in range(max(0, left - pad), min(width, right + pad)):
-            for y in (top - pad, bottom + pad):
-                if y < 0 or y >= height:
-                    continue
-                red, g, blue = pixels[x, y][:3]
-                if _is_own_green(red, g, blue):
-                    green += 1
-                elif _is_peer_white(red, g, blue):
-                    white += 1
-        for y in range(max(0, top - pad), min(height, bottom + pad)):
-            for x in (left - pad, right + pad):
-                if x < 0 or x >= width:
-                    continue
-                red, g, blue = pixels[x, y][:3]
-                if _is_own_green(red, g, blue):
-                    green += 1
-                elif _is_peer_white(red, g, blue):
-                    white += 1
-    if green >= 12 and green > white:
+    left = max(0, min(width - 1, left))
+    right = max(left + 1, min(width, right))
+    top = max(0, min(height - 1, top))
+    bottom = max(top + 1, min(height, bottom))
+    reds: List[int] = []
+    greens: List[int] = []
+    blues: List[int] = []
+    step_x = max(1, (right - left) // 8)
+    step_y = max(1, (bottom - top) // 6)
+    for y in range(top + 1, bottom, step_y):
+        for x in range(left + 1, right, step_x):
+            red, green, blue = pixels[x, y][:3]
+            if red + green + blue < 280:
+                continue
+            reds.append(red)
+            greens.append(green)
+            blues.append(blue)
+    if len(reds) < 4:
+        return ""
+    red, green, blue = (
+        _median_channel(reds), _median_channel(greens), _median_channel(blues),
+    )
+    if _is_own_green(red, green, blue):
         return "green"
-    if white >= 12 and white > green:
+    if _is_peer_white(red, green, blue):
         return "white"
     return ""
 
@@ -819,6 +827,9 @@ class EvidenceLog:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.secrets = [s for s in (secrets or []) if s]
         self.steps: List[Dict[str, Any]] = []
+        self.turns: List[Dict[str, Any]] = []
+        self.history: List[Dict[str, Any]] = []
+        self.timings: List[Dict[str, Any]] = []
 
     def save(self, name: str, png: bytes, screen: PhoneScreen, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         index = len(self.steps) + 1
@@ -842,12 +853,25 @@ class EvidenceLog:
         ocr_path.write_text(json.dumps(ocr, ensure_ascii=False, indent=2), encoding="utf-8")
         step = {"name": name, "png": str(png_path), "ocr": str(ocr_path), **ocr}
         self.steps.append(step)
-        self._write({"ok": False, "partial": True, "steps": self.steps})
+        self._write(self._body(partial=True))
         logger.info("%s", json.dumps(safe_log_fields(
             {"event": "evidence", "name": name, "header": screen.header, "composer": screen.composer},
             self.secrets,
         ), ensure_ascii=False))
         return step
+
+    def _body(self, *, partial: bool, **extra: Any) -> Dict[str, Any]:
+        body = {
+            "partial": partial,
+            "steps": self.steps,
+            "turns": self.turns,
+            "history": self.history,
+            "timings": self.timings,
+        }
+        body.update(extra)
+        if "ok" not in body:
+            body["ok"] = False
+        return body
 
     def _write(self, report: Dict[str, Any]) -> Dict[str, Any]:
         clean = json.loads(redact_text(json.dumps(report, ensure_ascii=False), self.secrets))
@@ -856,18 +880,41 @@ class EvidenceLog:
         clean["report_path"] = str(path)
         return clean
 
+    def note(self, *, turns: Optional[List[Dict[str, Any]]] = None,
+             history: Optional[List[Dict[str, Any]]] = None,
+             timings: Optional[List[Dict[str, Any]]] = None) -> None:
+        if turns is not None:
+            self.turns = list(turns)
+        if history is not None:
+            self.history = list(history)
+        if timings is not None:
+            self.timings = list(timings)
+
     def checkpoint(self, report: Dict[str, Any]) -> Dict[str, Any]:
-        """每一步都落盘。外层超时或中途崩溃时，报告里至少有已经走完的轮次。"""
-        body = dict(report)
-        body["steps"] = self.steps
-        body["partial"] = body.get("ok") is not True
-        return self._write(body)
+        """每一步都落盘。轮次、历史台账和耗时分段不会被下一次截图冲掉。"""
+        self.note(
+            turns=report.get("turns"),
+            history=report.get("history"),
+            timings=report.get("timings"),
+        )
+        extra = {
+            k: v for k, v in report.items()
+            if k not in {"steps", "turns", "history", "timings", "partial"}
+        }
+        return self._write(self._body(partial=report.get("ok") is not True, **extra))
 
     def finish(self, report: Dict[str, Any]) -> Dict[str, Any]:
-        report = dict(report)
-        report["steps"] = self.steps
-        report["partial"] = False
-        return self._write(report)
+        self.note(
+            turns=report.get("turns"),
+            history=report.get("history"),
+            timings=report.get("timings"),
+        )
+        extra = {
+            k: v for k, v in report.items()
+            if k not in {"steps", "turns", "history", "timings", "partial"}
+        }
+        extra["ok"] = bool(report.get("ok"))
+        return self._write(self._body(partial=False, **extra))
 
 
 class RecordingDevice:
@@ -1138,6 +1185,9 @@ class SshAdbPhoneDevice:
         code, _out, err = await self._run(["shell", "input", "tap", str(x), str(y)])
         if code != 0:
             raise RuntimeError(redact_text(err or "header tap failed", []))
+
+    async def tap_xy(self, x: int, y: int) -> None:
+        await self._run(["shell", "input", "tap", str(int(x)), str(int(y))])
 
     async def press_back(self) -> None:
         await self._run(["shell", "input", "keyevent", "KEYCODE_BACK"])
@@ -1606,6 +1656,7 @@ _HISTORY = (
     ("07:28", "早嘛，周日能睡到这会儿才起，挺舒服的吧。"),
     ("07:35", "对了，还没问你，平时怎么称呼你比较方便呀？"),
     ("07:54", "早呀，刚醒，还没吃上早饭呢。"),
+    ("04开场", "早上好呀，今天天气怎么样"),
 )
 
 
@@ -1646,19 +1697,111 @@ def ledger_history(*ledgers: Any) -> List[Dict[str, Any]]:
     return report
 
 
+def quote_close_point(lines: Sequence[Dict[str, Any]], width: float, height: float):
+    """引用回复横条右上角的 X。点它关掉贴纸，不点正文。"""
+    if width <= 0 or height <= 0:
+        return None
+    for line in lines or []:
+        text = str((line or {}).get("text") or "").strip()
+        box = (line or {}).get("box") or []
+        if text not in {"X", "×", "x", "✕", "✖"} or len(box) < 4:
+            continue
+        cy = (float(box[1]) + float(box[3])) / 2.0
+        cx = (float(box[0]) + float(box[2])) / 2.0
+        if cy < height * 0.72 or cy > height * 0.98:
+            continue
+        if cx < width * 0.55:
+            continue
+        if float(box[2]) - float(box[0]) > width * 0.08:
+            continue
+        return int(cx), int(cy)
+    return None
+
+
+async def clean_composer_on_start(loop: Any, peer: str) -> None:
+    """启动时关掉引用横条。草稿和台账待发不一致就清空。"""
+    try:
+        await open_peer_chat(loop.device, peer)
+        screen = await loop.device.read_screen(await loop.device.screencap())
+    except Exception:
+        return
+    lines = list(getattr(screen, "ocr_lines", None) or [])
+    size = getattr(screen, "shot_size", None) or [0, 0]
+    point = quote_close_point(lines, float(size[0] or 0), float(size[1] or 0))
+    tap = getattr(loop.device, "tap_xy", None)
+    if point and tap is not None:
+        try:
+            await tap(point[0], point[1])
+            screen = await loop.device.read_screen(await loop.device.screencap())
+        except Exception:
+            pass
+    from src.integrations.whatsapp_rpa.phone_send import composer_body
+    draft = str(getattr(screen, "composer", "") or "")
+    if not composer_body(draft):
+        return
+    phone = normalize_e164(peer)
+    if not _bubble_matches_unsent(loop, phone, draft):
+        clear = getattr(loop.device, "clear_composer", None)
+        if clear is not None:
+            try:
+                await clear()
+            except Exception:
+                pass
+
+
 async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
-                        turns: int, seed: str, evidence: EvidenceLog) -> Dict[str, Any]:
+                        turns: int, seed: str, evidence: EvidenceLog,
+                        max_seconds: float = 540) -> Dict[str, Any]:
     """A、B 交替。第 1 句由 A 发给 B，之后每人先收对方的信再回复。
 
-    第一句没发出去就停，不再往下跑。收信只认发送前画面里没有的新左侧气泡。
+    第一句没发出去就停，不再往下跑。到点写出最终报告，不再被外层杀掉。
     """
+    import time
+    deadline = time.monotonic() + float(max_seconds or 0) if max_seconds else None
+    for loop in (loop_a, loop_b):
+        device = getattr(loop, "device", None)
+        if device is not None and deadline:
+            device.deadline_at = deadline
+
+    def expired() -> bool:
+        return bool(deadline) and time.monotonic() >= float(deadline)
+
     seats = ((loop_a, phone_a, phone_b, "A"), (loop_b, phone_b, phone_a, "B"))
     loops = {"A": loop_a, "B": loop_b}
     results = []
     baselines: Dict[str, List[str]] = {"A": [], "B": []}
+    await clean_composer_on_start(loop_a, phone_b)
+    await clean_composer_on_start(loop_b, phone_a)
     await reconcile_pair(loop_a, loop_b, phone_a, phone_b)
-    evidence.checkpoint({"command": "pair-chat", "ok": False, "turns": results})
+    timings: List[Dict[str, Any]] = []
+
+    def publish(partial_ok: bool = False) -> Dict[str, Any]:
+        history = ledger_history(loop_a.ledger, loop_b.ledger)
+        return {
+            "command": "pair-chat", "ok": partial_ok, "turns": results,
+            "history": history, "timings": timings,
+        }
+
+    def flush() -> None:
+        collected = []
+        for row in results:
+            timing = {}
+            send = row.get("send") if isinstance(row.get("send"), dict) else {}
+            if isinstance(send.get("timings"), dict):
+                timing = dict(send["timings"])
+            collected.append({
+                "turn": row.get("turn"), "seat": row.get("seat"),
+                "status": row.get("status"), **timing,
+            })
+        timings[:] = collected
+        evidence.checkpoint(publish())
+
+    flush()
+    stopped = ""
     for index in range(int(turns)):
+        if expired():
+            stopped = "max_seconds"
+            break
         loop, own, peer, label = seats[index % 2]
         other = "B" if label == "A" else "A"
         if index == 0:
@@ -1678,6 +1821,7 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
                     "reason": "already_visible", "delivered": True, "tapped": False,
                     "phone": peer_id,
                 })
+                flush()
                 continue
             item = await loop.send_prepared(
                 phone=peer, text=seed, source="acceptance",
@@ -1687,6 +1831,7 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
             item["turn"] = index
             item["seat"] = label
             results.append(item)
+            flush()
             if item.get("status") != "sent":
                 break
             continue
@@ -1726,7 +1871,9 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
                         "status": settled.get("status") or "",
                         "reason": settled.get("reason") or "",
                     }
+                flush()
                 continue
+            flush()
             break
         baselines[label] = list(baselines.get(label, [])) + [str(heard.get("text") or "")]
         baselines[other] = await snapshot_incoming(loops[other].device, own)
@@ -1739,12 +1886,14 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
             "source": heard.get("source"), "status": send.get("status") or item.get("reply"),
             "send": send, "ok": send.get("status") == "sent",
         })
-        evidence.checkpoint({
-            "command": "pair-chat", "ok": False, "turns": results,
-            "history": ledger_history(loop_a.ledger, loop_b.ledger),
-        })
-    ok = len(results) == int(turns) and all(row.get("status") == "sent" for row in results)
-    return evidence.finish({
-        "command": "pair-chat", "ok": ok, "turns": results,
-        "history": ledger_history(loop_a.ledger, loop_b.ledger),
-    })
+        flush()
+    ok = (
+        not stopped
+        and len(results) == int(turns)
+        and all(row.get("status") == "sent" for row in results)
+    )
+    final = publish()
+    final["ok"] = ok
+    if stopped:
+        final["reason"] = stopped
+    return evidence.finish(final)

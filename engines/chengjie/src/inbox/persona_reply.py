@@ -674,6 +674,8 @@ async def generate_persona_reply(
     gloss_lang: str = "",
     agent_instruction: str = "",
     inbound_msg_id: str = "",
+    guard_self_names: Optional[List[str]] = None,
+    guard_peer_names: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """人设化智能回复入口（实现见 :func:`_generate_persona_reply_impl`，签名逐字相同）。
 
@@ -696,6 +698,7 @@ async def generate_persona_reply(
             peer_audio_emotion=peer_audio_emotion, account_id=account_id,
             gloss_lang=gloss_lang, agent_instruction=agent_instruction,
             inbound_msg_id=inbound_msg_id,
+            guard_self_names=guard_self_names, guard_peer_names=guard_peer_names,
         )
 
 
@@ -719,6 +722,8 @@ async def _generate_persona_reply_impl(
     gloss_lang: str = "",
     agent_instruction: str = "",
     inbound_msg_id: str = "",
+    guard_self_names: Optional[List[str]] = None,
+    guard_peer_names: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """人设化智能回复（单一事实源）。
 
@@ -1185,6 +1190,8 @@ async def _generate_persona_reply_impl(
                     agent_instruction=str(agent_instruction or "").strip()[:400],
                     inbound_msg_id=str(inbound_msg_id or "").strip(),
                     extra_hint=_time_hint,
+                    guard_self_names=guard_self_names,
+                    guard_peer_names=guard_peer_names,
                 )
                 if _res and (_res.get("reply") or "").strip():
                     reply = _res["reply"]

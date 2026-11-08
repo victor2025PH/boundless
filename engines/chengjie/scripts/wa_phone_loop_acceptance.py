@@ -312,6 +312,7 @@ def bind_persona_decide(decide, self_id: str, self_name: str, peer_name: str):
         return await decide(
             account_id=account_id, phone=phone, last_inbound=last_inbound,
             persona_id=self_id or persona_id, agent_instruction=note,
+            self_name=self_name, peer_names=[peer_name] if peer_name else [],
         )
 
     return wrapped
@@ -347,6 +348,7 @@ def parser() -> argparse.ArgumentParser:
     pair.add_argument("--b-persona", default="")
     pair.add_argument("--turns", type=int, default=2)
     pair.add_argument("--seed", default="你好，我在做链路验收")
+    pair.add_argument("--max-seconds", type=float, default=540)
 
     cap = sub.add_parser("first-touch-cap", parents=[common])
     cap.add_argument("--cap", type=int, default=2)
@@ -469,6 +471,7 @@ async def _dispatch(args, data, evidence, inbox, reader, decide, *, devices=None
         )
         report = await run_pair_chat(
             loop_a, loop_b, args.a_phone, args.b_phone, args.turns, args.seed, evidence,
+            max_seconds=float(getattr(args, "max_seconds", 540) or 540),
         )
     else:
         raise SystemExit(f"unknown command {args.command}")

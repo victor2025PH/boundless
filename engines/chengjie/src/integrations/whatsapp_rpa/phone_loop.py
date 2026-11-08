@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -175,6 +176,8 @@ async def decide_whatsapp(
     persona_id: str = "",
     history_limit: int = 30,
     agent_instruction: str = "",
+    self_name: str = "",
+    peer_names: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """给这部手机的回复。平台固定 whatsapp，历史来自收件箱。"""
     from src.inbox.persona_reply import generate_persona_reply
@@ -183,6 +186,10 @@ async def decide_whatsapp(
     cid = conversation_id(account_id, e164)
     store = getattr(getattr(app, "state", None), "inbox_store", None)
     history = load_reply_history(store, cid, last_inbound, limit=history_limit)
+    peers = [str(n) for n in (peer_names or []) if str(n or "").strip()]
+    for claimed in re.findall(r"叫我\s*([\u4e00-\u9fffA-Za-z·]{1,8})", str(last_inbound or "")):
+        if claimed and claimed not in peers and claimed != str(self_name or "").strip():
+            peers.append(claimed)
     return await generate_persona_reply(
         app=app,
         platform="whatsapp",
@@ -193,6 +200,8 @@ async def decide_whatsapp(
         conversation_id=cid,
         account_id=str(account_id or ""),
         agent_instruction=str(agent_instruction or ""),
+        guard_self_names=[str(self_name or "")] if str(self_name or "").strip() else None,
+        guard_peer_names=peers or None,
     )
 
 

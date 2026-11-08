@@ -277,15 +277,22 @@ def is_bubble_boundary(text: str) -> bool:
 
 
 def send_confirmed(screen: "PhoneScreen", expected: str) -> bool:
-    """输入框不再是待发正文，底部己方气泡和待发对得上，才算已经发出。
+    """输入框已经空出来，并且屏幕上的文字和待发对得上。
 
-    占位「发消息」表示输入框已经空出来。底部气泡去空白后包含待发，
-    或相似度至少 0.9，都算这一句已经在屏幕上。
+    初次会话往往只有一条气泡，左缘又靠左，颜色判不准。
+    这时只要输入框是占位「发消息」，任一气泡的规范化文本对上就算发出。
     """
-    if composer_matches(getattr(screen, "composer", ""), expected):
+    composer = str(getattr(screen, "composer", "") or "")
+    outgoing = [str(item or "") for item in (getattr(screen, "outgoing", None) or [])]
+    incoming = [str(item or "") for item in (getattr(screen, "incoming", None) or [])]
+    bubbles = [item for item in outgoing + incoming if compare_key(item)]
+    placeholder = composer_is_placeholder(composer) or not compare_key(composer)
+    if placeholder and any(texts_close(item, expected) for item in bubbles):
+        return True
+    if len(bubbles) <= 1 and placeholder and bubbles and texts_close(bubbles[0], expected):
+        return True
+    if not placeholder and composer_matches(composer, expected):
         return False
-    outgoing = list(getattr(screen, "outgoing", []) or [])
-    incoming = list(getattr(screen, "incoming", []) or [])
     bottom = outgoing[-1] if outgoing else (incoming[-1] if incoming else "")
     return texts_close(bottom, expected)
 
@@ -406,6 +413,13 @@ async def wait_for_chat(
     stable_tries = 0
     placeholder_seen = 0
     while True:
+        deadline = getattr(device, "deadline_at", None)
+        if deadline and float(clock()) >= float(deadline):
+            screen = last or PhoneScreen()
+            return _wait_result(
+                False, "failed", "max_seconds", polls, screen,
+                profile_confirmed, started, clock, stable_tries,
+            )
         png = await device.screencap()
         screen = await device.read_screen(png)
         if not isinstance(screen, PhoneScreen):
