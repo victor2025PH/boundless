@@ -1,0 +1,121 @@
+{
+  "schema_version": "wa-reply-language/1",
+  "strategies": [
+    "fixed",
+    "account_default",
+    "follow_peer"
+  ],
+  "languages": [
+    "hi",
+    "ar",
+    "zh",
+    "zh-Hant",
+    "en"
+  ],
+  "flags": {
+    "language": "--reply-language",
+    "strategy": "--reply-language-strategy",
+    "fallback": "--reply-language-fallback",
+    "account_a": "--a-reply-language",
+    "account_b": "--b-reply-language"
+  },
+  "language_details": [
+    {
+      "tag": "hi",
+      "display_name": "हिन्दी",
+      "direction": "ltr",
+      "aliases": [
+        "印地语",
+        "印地語",
+        "hindi",
+        "हिन्दी",
+        "हिंदी"
+      ],
+      "offline_acceptance": true,
+      "capabilities": {
+        "model_generation": "unverified",
+        "phone_screen_read": "unverified",
+        "unicode_input": "unverified"
+      }
+    },
+    {
+      "tag": "ar",
+      "display_name": "العربية",
+      "direction": "rtl",
+      "aliases": [
+        "阿拉伯语",
+        "阿拉伯語",
+        "arabic"
+      ],
+      "offline_acceptance": false,
+      "capabilities": {
+        "model_generation": "unverified",
+        "phone_screen_read": "unverified",
+        "unicode_input": "unverified"
+      }
+    },
+    {
+      "tag": "zh",
+      "display_name": "中文",
+      "direction": "ltr",
+      "aliases": [
+        "中文",
+        "汉语",
+        "漢語",
+        "chinese"
+      ],
+      "offline_acceptance": false,
+      "capabilities": {
+        "model_generation": "unverified",
+        "phone_screen_read": "unverified",
+        "unicode_input": "unverified"
+      }
+    },
+    {
+      "tag": "zh-Hant",
+      "display_name": "繁體中文",
+      "direction": "ltr",
+      "aliases": [
+        "繁体中文",
+        "繁體中文",
+        "traditional chinese"
+      ],
+      "offline_acceptance": false,
+      "capabilities": {
+        "model_generation": "unverified",
+        "phone_screen_read": "unverified",
+        "unicode_input": "unverified"
+      }
+    },
+    {
+      "tag": "en",
+      "display_name": "English",
+      "direction": "ltr",
+      "aliases": [
+        "英语",
+        "英語",
+        "english"
+      ],
+      "offline_acceptance": false,
+      "capabilities": {
+        "model_generation": "unverified",
+        "phone_screen_read": "unverified",
+        "unicode_input": "unverified"
+      }
+    }
+  ],
+  "offline_acceptance": [
+    "hi"
+  ],
+  "device_verified": [],
+  "country_does_not_select_language": true,
+  "legacy_when_unconfigured": true,
+  "compatibility": {
+    "reply_language_without_strategy": "fixed"
+  },
+  "http_decide_language_policy": false,
+  "send": false,
+  "command": "capabilities",
+  "base_commit": "cbb9e8534da3089292c98c0d799136469546b6b5",
+  "note": "languages 来自引擎注册表，不按国家码生成。offline_acceptance 只含离线参数测试通过的标签。model_generation、phone_screen_read、unicode_input 为 unverified 时不表示真机可用。本 manifest 未与智拓联合运行验证。"
+}

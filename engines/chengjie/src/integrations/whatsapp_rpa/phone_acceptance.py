@@ -839,8 +839,13 @@ def make_http_decide(url: str, token: str = "",
 
     async def decide(*, account_id: str, phone: str, last_inbound: str, persona_id: str = "",
                      agent_instruction: str = "", self_name: str = "",
-                     peer_names: Optional[list] = None):
+                     peer_names: Optional[list] = None, reply_lang: str = ""):
         del agent_instruction, self_name, peer_names
+        if str(reply_lang or "").strip():
+            return {
+                "ok": False, "reply": "", "action": "",
+                "reason": "http_reply_language_unsupported",
+            }
         body = decide_request_body(
             account_id=account_id, phone=phone, last_inbound=last_inbound,
             persona_id=persona_id,

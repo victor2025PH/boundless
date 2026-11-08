@@ -128,6 +128,13 @@ def sent_content_key(source: str, phone: str, text: str) -> str:
     return client_msg_id("sent", phone, text, source)
 
 
+def canonical_reply_language(raw: str) -> str:
+    """注册表里的标准标签。空串表示没写。未知标签返回空串，不折成 zh。"""
+    from src.integrations.whatsapp_rpa.reply_language import canonical_tag
+
+    return canonical_tag(raw)
+
+
 def text_is_stop(text: str, keywords: tuple = _STOP_KEYWORDS) -> bool:
     """明确拒收才停。弱抱怨（「有点烦」）不停，避免误伤正常聊天。"""
     body = str(text or "").strip()
@@ -218,10 +225,19 @@ async def decide_whatsapp(
     agent_instruction: str = "",
     self_name: str = "",
     peer_names: Optional[List[str]] = None,
+    reply_lang: str = "",
 ) -> Dict[str, Any]:
-    """给这部手机的回复。平台固定 whatsapp，历史来自收件箱。"""
+    """给这部手机的回复。平台固定 whatsapp，历史来自收件箱。
+
+    ``reply_lang`` 非空时原样传给 ``generate_persona_reply`` 的显式参数，
+    对方正文、空文本和号码国码都不能改写它。认不出的码直接不生成。
+    """
     from src.inbox.persona_reply import generate_persona_reply
 
+    raw_lang = str(reply_lang or "").strip()
+    forced = canonical_reply_language(raw_lang) if raw_lang else ""
+    if raw_lang and not forced:
+        return {"ok": False, "reply": "", "reason": "bad_reply_language", "reply_lang": ""}
     e164 = normalize_e164(phone)
     cid = conversation_id(account_id, e164)
     store = getattr(getattr(app, "state", None), "inbox_store", None)
@@ -242,6 +258,7 @@ async def decide_whatsapp(
         agent_instruction=str(agent_instruction or ""),
         guard_self_names=[str(self_name or "")] if str(self_name or "").strip() else None,
         guard_peer_names=peers or None,
+        reply_lang=forced,
     )
 
 
@@ -428,12 +445,47 @@ class WaPhoneLoop:
                 "tapped": False, "delivered": False,
             }
             return result
-        draft = await self.decide_fn(
-            account_id=self.account_id,
-            phone=e164,
-            last_inbound=body,
-            persona_id=self.persona_id,
-        )
+        decide_kwargs = {
+            "account_id": self.account_id,
+            "phone": e164,
+            "last_inbound": body,
+            "persona_id": self.persona_id,
+        }
+        policy = dict(self.cfg.get("reply_language_policy") or {})
+        strategy = str(policy.get("strategy") or "").strip()
+        if strategy:
+            from src.integrations.whatsapp_rpa.reply_language import resolve_reply_policy
+
+            decision = resolve_reply_policy(
+                strategy,
+                requested=str(policy.get("requested") or ""),
+                peer_text=body,
+                registry=policy.get("registry"),
+            )
+            result["reply_language"] = decision
+            if not decision.get("apply"):
+                result["reply"] = "silent"
+                result["reason"] = str(decision.get("reason") or "reply_language_blocked")
+                result["send"] = {
+                    "status": "skipped",
+                    "reason": result["reason"],
+                    "tapped": False,
+                    "delivered": False,
+                    "retry": False,
+                    "reply_language": decision,
+                }
+                return result
+            decide_kwargs["reply_lang"] = str(decision.get("resolved") or "")
+        try:
+            draft = await self.decide_fn(**decide_kwargs)
+        except Exception:
+            result["reply"] = "silent"
+            result["reason"] = "decide_failed"
+            result["send"] = {
+                "status": "skipped", "reason": "decide_failed",
+                "tapped": False, "delivered": False, "retry": False,
+            }
+            return result
         reply = str((draft or {}).get("reply") or "").strip()
         if not (draft or {}).get("ok") or not reply:
             result["reply"] = "silent"

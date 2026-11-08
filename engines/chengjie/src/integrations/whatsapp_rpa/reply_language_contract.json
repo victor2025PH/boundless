@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wa-reply-language/1",
+  "title": "Engine reply-language capability manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "strategies",
+    "languages",
+    "flags",
+    "language_details",
+    "offline_acceptance",
+    "device_verified",
+    "country_does_not_select_language",
+    "legacy_when_unconfigured",
+    "compatibility",
+    "http_decide_language_policy",
+    "send",
+    "command",
+    "base_commit",
+    "note"
+  ],
+  "properties": {
+    "schema_version": {"const": "wa-reply-language/1"},
+    "strategies": {
+      "type": "array",
+      "items": {"enum": ["fixed", "account_default", "follow_peer"]}
+    },
+    "languages": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 2}
+    },
+    "flags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "strategy", "fallback", "account_a", "account_b"],
+      "properties": {
+        "language": {"const": "--reply-language"},
+        "strategy": {"const": "--reply-language-strategy"},
+        "fallback": {"const": "--reply-language-fallback"},
+        "account_a": {"const": "--a-reply-language"},
+        "account_b": {"const": "--b-reply-language"}
+      }
+    },
+    "language_details": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tag", "display_name", "direction", "aliases", "offline_acceptance", "capabilities"],
+        "properties": {
+          "tag": {"type": "string"},
+          "display_name": {"type": "string"},
+          "direction": {"enum": ["ltr", "rtl"]},
+          "aliases": {"type": "array", "items": {"type": "string"}},
+          "offline_acceptance": {"type": "boolean"},
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["model_generation", "phone_screen_read", "unicode_input"],
+            "properties": {
+              "model_generation": {"enum": ["supported", "unsupported", "unverified"]},
+              "phone_screen_read": {"enum": ["supported", "unsupported", "unverified"]},
+              "unicode_input": {"enum": ["supported", "unsupported", "unverified"]}
+            }
+          }
+        }
+      }
+    },
+    "offline_acceptance": {"type": "array", "items": {"type": "string"}},
+    "device_verified": {"type": "array", "items": {"type": "string"}},
+    "country_does_not_select_language": {"const": true},
+    "legacy_when_unconfigured": {"const": true},
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reply_language_without_strategy"],
+      "properties": {
+        "reply_language_without_strategy": {"const": "fixed"}
+      }
+    },
+    "http_decide_language_policy": {"const": false},
+    "send": {"const": false},
+    "command": {"const": "capabilities"},
+    "base_commit": {"type": "string", "minLength": 7},
+    "note": {"type": "string"}
+  }
+}
