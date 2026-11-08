@@ -475,7 +475,10 @@ async def wait_for_chat(
                 keyboard_dismissed = True
                 await dismiss()
                 continue
-        header_ok = profile_confirmed or header_matches(screen.header, phone=phone)
+        from src.integrations.whatsapp_rpa.phone_acceptance import in_chat
+        header_ok = profile_confirmed or bool(
+            in_chat(screen, phone).get("header_matches_peer")
+        )
         if not transient and header_ok and expected and composer_is_placeholder(screen.composer):
             placeholder_seen += 1
             if placeholder_seen >= 2:
@@ -608,10 +611,10 @@ async def confirm_phone_on_profile(device: Any, phone: str) -> bool:
 
 
 def _wait_timeout_reason(screen: PhoneScreen, phone: str, expected: str) -> str:
-    from src.integrations.whatsapp_rpa.phone_identity import header_matches
+    from src.integrations.whatsapp_rpa.phone_acceptance import in_chat
     if screen_is_transient(screen):
         return "contact_picker"
-    if not header_matches(screen.header, phone=phone):
+    if not in_chat(screen, phone).get("header_matches_peer"):
         return "header_timeout"
     text = str(screen.composer or "").strip()
     if expected and (not text or len(text) <= 1):
@@ -630,8 +633,8 @@ async def _peek(device: Any) -> "PhoneScreen":
 
 
 def _on_chat(screen: "PhoneScreen", phone: str) -> bool:
-    from src.integrations.whatsapp_rpa.phone_identity import header_matches
-    return header_matches(screen.header, phone=phone) and not screen_is_transient(screen)
+    from src.integrations.whatsapp_rpa.phone_acceptance import in_chat
+    return bool(in_chat(screen, phone).get("ok")) and not screen_is_transient(screen)
 
 
 def _needs_link(text: str) -> bool:

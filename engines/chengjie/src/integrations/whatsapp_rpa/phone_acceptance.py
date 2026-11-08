@@ -512,6 +512,14 @@ def _bubble_side(box: Sequence[float], width: float, png: bytes) -> str:
 _MENU_LABELS = frozenset({"编辑", "转发", "删除", "收藏", "贴纸", "查看贴纸", "添加到收藏"})
 
 
+def _key_sized(text: str, box: Sequence[float], width: float) -> bool:
+    """一个键帽大小的英文字母。它不是输入框里的草稿。"""
+    raw = str(text or "")
+    if len(raw) != 1 or not raw.isascii():
+        return False
+    return _box_width(box) <= max(80.0, float(width) * 0.16)
+
+
 def _keyboard_zone_top(items: Sequence[tuple], width: float, height: float):
     """下半屏挤满单字符框，或出现 ?123 这类键帽，就是键盘。返回键盘顶边。"""
     from src.integrations.whatsapp_rpa.phone_send import is_keycap
@@ -528,9 +536,18 @@ def _keyboard_zone_top(items: Sequence[tuple], width: float, height: float):
             singles.append(box)
     if caps:
         return min(float(box[1]) for box in caps)
-    if len(singles) < 4:
-        return None
-    return min(float(box[1]) for box in singles)
+    singles.sort(key=_box_cy)
+    top = None
+    for index, box in enumerate(singles):
+        cy = _box_cy(box)
+        row = [box]
+        for other in singles[index + 1:]:
+            if abs(_box_cy(other) - cy) <= 36:
+                row.append(other)
+        if len(row) >= 2:
+            row_top = min(float(item[1]) for item in row)
+            top = row_top if top is None else min(top, row_top)
+    return top
 
 
 def _send_button_present(lines: Sequence[Dict[str, Any]], width: float, height: float) -> bool:
@@ -602,9 +619,14 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
         if not text or len(box) < 4:
             continue
         cy = (float(box[1]) + float(box[3])) / 2.0
-        if cy < height * 0.05:
+        # 只丢掉贴着最顶的时钟和电量。y≈86–121 的 + 号是会话顶栏，不能按 5% 屏高切掉。
+        from src.integrations.whatsapp_rpa.phone_identity import header_number_candidates
+        status_cut = min(64.0, float(height) * 0.03)
+        if cy < status_cut and not header_number_candidates(text):
             continue
-        if cy < height * 0.16:
+        if cy < height * 0.18 or (
+            header_number_candidates(text) and cy < height * 0.25
+        ):
             if _header_noise(text) or is_screen_chrome(text):
                 notes.append(text)
                 continue
@@ -625,7 +647,7 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
     if zone is not None:
         kept_items: List[tuple] = []
         for text, box in composer_items:
-            if _box_cy(box) >= float(zone) - 2:
+            if _box_cy(box) >= float(zone) - 2 or _key_sized(text, box, float(width)):
                 notes.append(text)
                 continue
             kept_items.append((text, box))
@@ -1830,37 +1852,106 @@ def _screen_lines(screen: Any) -> List[str]:
     ]
 
 
-def has_input_bar(screen: Any) -> bool:
-    """占位「发消息」，或这一行右侧有发送/麦克风圆钮。桌面文字不算输入栏。"""
+def _line_box(line: Dict[str, Any]):
+    box = (line or {}).get("box") or []
+    if len(box) < 4:
+        return None
+    return [int(float(value)) for value in box[:4]]
+
+
+def in_chat(screen: Any, phone: str = "") -> Dict[str, Any]:
+    """normalize-ui 和 pair-chat 共用。占位「发消息」就是输入栏。
+
+    顶栏 + 号直接在 OCR 框里找，不依赖已经被状态栏过滤掉的 header 字符串。
+    """
+    from src.integrations.whatsapp_rpa.phone_identity import header_matches, header_number_candidates
     from src.integrations.whatsapp_rpa.phone_send import composer_body, composer_is_placeholder
 
+    header_box = None
+    composer_box = None
+    header_plus = False
+    header_matches_peer = False
+    sources = []
+    header = str(getattr(screen, "header", "") or "").strip()
+    if header:
+        sources.append((header, None))
+    for line in getattr(screen, "ocr_lines", None) or []:
+        text = str((line or {}).get("text") or "").strip()
+        box = _line_box(line)
+        if text:
+            sources.append((text, box))
+    for text, box in sources:
+        if not header_number_candidates(text):
+            continue
+        header_plus = True
+        matched = header_matches(text, phone=phone)
+        if matched:
+            header_matches_peer = True
+        if box is not None and (header_box is None or matched):
+            header_box = box
+            if matched:
+                break
+    if not header_matches_peer and header_matches(header, phone=phone):
+        header_matches_peer = True
+        header_plus = header_plus or bool(header_number_candidates(header))
     composer = str(getattr(screen, "composer", "") or "")
-    texts = _screen_lines(screen)
-    if composer_is_placeholder(composer) or any(
-        "发消息" in text or "type a message" in text.casefold() for text in texts
-    ):
-        return True
+    placeholder = composer_is_placeholder(composer) or any(
+        "发消息" in text or "type a message" in text.casefold()
+        for text, _box in sources
+    )
+    for text, box in sources:
+        if box is None:
+            continue
+        if "发消息" in text or (composer and text == composer.split("\n")[0]):
+            composer_box = box
+            if "发消息" in text:
+                break
     size = getattr(screen, "shot_size", None) or [0, 0]
     width = float(size[0] or 0)
     height = float(size[1] or 0)
     lines = list(getattr(screen, "ocr_lines", None) or [])
-    if width > 0 and _send_button_present(lines, width, height or 1):
-        return True
-    if not lines and (composer_is_placeholder(composer) or composer_body(composer) or composer == ""):
-        return True
-    return False
+    send_button = bool(width) and _send_button_present(lines, width, height or 1)
+    input_bar = bool(placeholder or send_button)
+    if not lines and (placeholder or composer_body(composer) or composer == ""):
+        input_bar = True
+    menu = any(text in _MENU_LABELS for text, _box in sources)
+    ok = bool(header_matches_peer and input_bar and not menu)
+    return {
+        "ok": ok,
+        "header_plus": header_plus,
+        "header_matches_peer": header_matches_peer,
+        "input_bar": input_bar,
+        "placeholder": bool(placeholder),
+        "send_button": send_button,
+        "menu": menu,
+        "boxes": {"header": header_box, "composer": composer_box},
+    }
+
+
+def has_input_bar(screen: Any) -> bool:
+    """占位「发消息」本身就是输入栏。"""
+    return bool(in_chat(screen, "").get("input_bar"))
 
 
 def chat_page_ready(screen: Any, phone: str = "") -> bool:
-    """顶栏的 + 号必须对上对方号码，同时要有输入栏。菜单、设置和桌面都不是。"""
-    from src.integrations.whatsapp_rpa.phone_identity import header_matches
+    """和 normalize-ui、pair-chat 用的是同一个 in_chat。"""
+    return bool(in_chat(screen, phone).get("ok"))
 
-    header = str(getattr(screen, "header", "") or "")
-    if not header_matches(header, phone=phone):
+
+def _keyboard_open(screen: Any) -> bool:
+    """下半屏有一排键帽。清理前先收起键盘，再重新截屏。"""
+    items = []
+    for line in getattr(screen, "ocr_lines", None) or []:
+        text = str((line or {}).get("text") or "").strip()
+        box = (line or {}).get("box") or []
+        if text and len(box) >= 4:
+            items.append((text, box))
+    size = getattr(screen, "shot_size", None) or [0, 0]
+    width = float(size[0] or 0)
+    height = float(size[1] or 0)
+    if width <= 0 or height <= 0 or not items:
         return False
-    if any(text in _MENU_LABELS for text in _screen_lines(screen)):
-        return False
-    return has_input_bar(screen)
+    return _keyboard_zone_top(items, width, height) is not None
 
 
 def recognized_popup(screen: Any) -> bool:
@@ -2009,8 +2100,9 @@ async def enter_chat(device: Any, phone: str) -> Dict[str, Any]:
         except Exception:
             return {"ok": False, "screen": screen, "reason": "not_in_chat"}
         screen = await _read(device)
-        if chat_page_ready(screen, phone):
-            return {"ok": True, "screen": screen, "reason": ""}
+        verdict = in_chat(screen, phone)
+        if verdict.get("ok"):
+            return {"ok": True, "screen": screen, "reason": "", "in_chat": verdict}
         if not used_back and recognized_popup(screen):
             used_back = True
             back = getattr(device, "press_back", None)
@@ -2020,9 +2112,13 @@ async def enter_chat(device: Any, phone: str) -> Dict[str, Any]:
                 except Exception:
                     pass
                 screen = await _read(device)
-                if chat_page_ready(screen, phone):
-                    return {"ok": True, "screen": screen, "reason": ""}
-    return {"ok": False, "screen": screen, "reason": "not_in_chat"}
+                verdict = in_chat(screen, phone)
+                if verdict.get("ok"):
+                    return {"ok": True, "screen": screen, "reason": "", "in_chat": verdict}
+    return {
+        "ok": False, "screen": screen, "reason": "not_in_chat",
+        "in_chat": in_chat(screen, phone),
+    }
 
 
 async def scan_history_pages(device: Any, targets: Sequence[str], *, limit: int = 3) -> List[str]:
@@ -2057,18 +2153,31 @@ async def prepare_phone(loop: Any, peer: str, timer: Optional[StepTimer] = None)
     phone = normalize_e164(peer)
     opened = await enter_chat(loop.device, phone)
     screen = opened.get("screen") or PhoneScreen()
+    verdict = opened.get("in_chat") or in_chat(screen, phone)
     if timer is not None:
         timer.mark("open_chat")
     if not opened.get("ok"):
         return {
             "cleared": False, "chat": False, "composer": str(getattr(screen, "composer", "") or ""),
-            "reason": "not_in_chat", "quote_closed": False,
+            "reason": "not_in_chat", "quote_closed": False, "in_chat": verdict,
         }
-    if not chat_page_ready(screen, phone):
-        return {
-            "cleared": False, "chat": False, "composer": str(getattr(screen, "composer", "") or ""),
-            "reason": "not_in_chat", "quote_closed": False,
-        }
+    if _keyboard_open(screen):
+        dismiss = getattr(loop.device, "dismiss_keyboard", None)
+        if dismiss is not None:
+            try:
+                await dismiss()
+                screen = await loop.device.read_screen(await loop.device.screencap())
+                verdict = in_chat(screen, phone)
+            except Exception:
+                pass
+        if timer is not None:
+            timer.mark("dismiss_keyboard")
+        if not verdict.get("ok"):
+            return {
+                "cleared": False, "chat": False,
+                "composer": str(getattr(screen, "composer", "") or ""),
+                "reason": "not_in_chat", "quote_closed": False, "in_chat": verdict,
+            }
     lines = list(getattr(screen, "ocr_lines", None) or [])
     size = getattr(screen, "shot_size", None) or [0, 0]
     width = float(size[0] or 0)
@@ -2087,6 +2196,7 @@ async def prepare_phone(loop: Any, peer: str, timer: Optional[StepTimer] = None)
                 "cleared": False, "chat": False,
                 "composer": str(getattr(screen, "composer", "") or ""),
                 "reason": "not_in_chat", "quote_closed": False,
+                "in_chat": in_chat(screen, phone),
             }
         lines = list(getattr(screen, "ocr_lines", None) or [])
         size = getattr(screen, "shot_size", None) or [width, height]
@@ -2116,6 +2226,7 @@ async def prepare_phone(loop: Any, peer: str, timer: Optional[StepTimer] = None)
     return {
         "cleared": cleared, "chat": chat, "composer": composer,
         "reason": reason, "quote_closed": quote_closed,
+        "in_chat": in_chat(screen, phone),
     }
 
 
@@ -2167,6 +2278,7 @@ async def run_normalize_ui(loop: Any, phone: str, evidence: EvidenceLog) -> Dict
     chat = bool(prepared.get("chat")) and chat_page_ready(screen, normalize_e164(phone))
     cleared = bool(prepared.get("cleared")) and chat
     reason = str(prepared.get("reason") or "")
+    verdict = prepared.get("in_chat") or in_chat(screen, normalize_e164(phone))
     if not chat:
         reason = "not_in_chat"
     return evidence.finish({
@@ -2174,6 +2286,7 @@ async def run_normalize_ui(loop: Any, phone: str, evidence: EvidenceLog) -> Dict
         "ok": cleared,
         "cleared": cleared,
         "chat": chat,
+        "in_chat": verdict,
         "reason": reason,
         "header": str(getattr(screen, "header", "") or ""),
         "composer": composer,

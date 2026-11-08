@@ -1899,6 +1899,142 @@ def test_keyboard_keys_stay_out_of_the_composer():
     assert "?123" not in "".join(screen.outgoing)
 
 
+def test_real_norm_ocr_counts_as_chat_and_keeps_the_header():
+    """6e3f_norm：顶栏在 y≈86–121，发消息在屏幕中下部。高屏也不能把顶栏当状态栏丢掉。"""
+    from src.integrations.whatsapp_rpa.phone_acceptance import in_chat
+
+    phone = "+639543629194"
+    seats = {
+        "02": [107, 1423, 222, 1471],
+        "03": [106, 1487, 220, 1527],
+        "04": [106, 1421, 223, 1472],
+    }
+    for height in (1600, 2400):
+        for seat, box in seats.items():
+            screen = lines_to_screen([
+                {"text": phone, "box": [96, 86, 430, 121]},
+                {"text": "发消息", "box": box},
+            ], 1080, height)
+            verdict = in_chat(screen, phone)
+            assert verdict["ok"] is True, (seat, height, verdict, screen.header)
+            assert verdict["header_plus"] is True
+            assert verdict["header_matches_peer"] is True
+            assert verdict["input_bar"] is True
+            assert verdict["placeholder"] is True
+            assert verdict["boxes"]["header"] == [96, 86, 430, 121]
+            assert verdict["boxes"]["composer"] == box
+            assert phone in screen.header
+    stripped = PhoneScreen(
+        header="",
+        composer="发消息",
+        ocr_lines=[
+            {"text": phone, "box": [96, 86, 430, 121]},
+            {"text": "发消息", "box": [107, 1423, 222, 1471]},
+        ],
+        shot_size=[1080, 2400],
+    )
+    assert in_chat(stripped, phone)["ok"] is True
+
+
+def test_keycap_w_is_not_the_composer():
+    screen = lines_to_screen([
+        {"text": "+639543629194", "box": [96, 86, 430, 121]},
+        {"text": "一段无关的长草稿", "box": [40, 860, 520, 930]},
+        {"text": "W", "box": [86, 1119, 139, 1161]},
+        {"text": "E", "box": [150, 1119, 200, 1161]},
+        {"text": "R", "box": [214, 1119, 264, 1161]},
+    ], 720, 1600)
+    assert "W" not in screen.composer
+    assert "长草稿" in screen.composer
+
+
+@pytest.mark.asyncio
+async def test_keyboard_is_dismissed_once_before_clear(tmp_path: Path):
+    from src.integrations.whatsapp_rpa.phone_acceptance import prepare_phone
+
+    phone = "+639543629194"
+    chat = PhoneScreen(
+        header=phone, composer="发消息",
+        ocr_lines=[
+            {"text": phone, "box": [96, 86, 430, 121]},
+            {"text": "发消息", "box": [107, 1423, 222, 1471]},
+        ],
+        shot_size=[1080, 2400],
+    )
+    dirty = PhoneScreen(
+        header=phone, composer="一段无关的长草稿",
+        ocr_lines=[
+            {"text": phone, "box": [96, 86, 430, 121]},
+            {"text": "一段无关的长草稿", "box": [40, 860, 520, 930]},
+            {"text": "●", "box": [640, 860, 690, 920]},
+            {"text": "W", "box": [86, 1119, 139, 1161]},
+            {"text": "E", "box": [150, 1119, 200, 1161]},
+        ],
+        shot_size=[720, 1600],
+    )
+
+    class Seat:
+        def __init__(self):
+            self.phase = "keys"
+            self.homes = 0
+            self.opens = 0
+            self.escapes = 0
+            self.clears = 0
+            self.backs = 0
+
+        async def press_home(self):
+            self.homes += 1
+
+        async def open_url(self, url):
+            self.opens += 1
+            assert "text=" not in url
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            if self.phase == "keys":
+                return dirty
+            if self.phase == "draft":
+                return PhoneScreen(
+                    header=phone, composer="一段无关的长草稿",
+                    ocr_lines=[
+                        {"text": phone, "box": [96, 86, 430, 121]},
+                        {"text": "一段无关的长草稿", "box": [40, 1400, 520, 1460]},
+                        {"text": "●", "box": [640, 1400, 690, 1460]},
+                    ],
+                    shot_size=[720, 1600],
+                )
+            return chat
+
+        async def dismiss_keyboard(self):
+            self.escapes += 1
+            self.phase = "draft"
+
+        async def clear_composer(self):
+            self.clears += 1
+            self.phase = "clean"
+
+        async def press_back(self):
+            self.backs += 1
+
+    seat = Seat()
+    loop = WaPhoneLoop(
+        account_id="seat", inbox=InboxStore(tmp_path / "inbox.db"), device=seat,
+        decide_fn=None, cfg={"enabled": True},
+        ledger=PhoneLedger(tmp_path / "ledger.db"), now_fn=lambda: 1.0,
+    )
+    result = await prepare_phone(loop, phone)
+    assert seat.homes == 1
+    assert seat.opens == 1
+    assert seat.escapes == 1
+    assert seat.backs == 0
+    assert seat.clears == 1
+    assert result["in_chat"]["placeholder"] is True
+    assert result["in_chat"]["header_matches_peer"] is True
+    assert result["in_chat"]["boxes"]["composer"] == [107, 1423, 222, 1471]
+
+
 def test_raised_keyboard_keeps_the_real_composer_and_drops_keycaps():
     """键盘弹起后输入栏在 y≈930，「C」在 y≈1340，不能当成草稿。"""
     from src.integrations.whatsapp_rpa.phone_acceptance import chat_page_ready, quote_close_point
