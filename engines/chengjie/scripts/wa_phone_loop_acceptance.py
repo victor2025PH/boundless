@@ -60,6 +60,12 @@ adb 只通过 ssh 在远端执行，禁止 kill-server、start-server、connect�
       --ocr-url http://192.168.0.176:8766 ^
       --account seat-a --phone +639000000001 --text 我下单了
 
+界面树探针（只 dump，不点屏幕）::
+
+    python scripts\\wa_phone_loop_acceptance.py ui-probe ^
+      --data-dir D:\\wa-accept\\data --evidence-dir D:\\wa-accept\\probe ^
+      --adb-ssh-host hub176 --serial SERIAL_A
+
 频繁提示检查（只截图，不发送）::
 
     python scripts\\wa_phone_loop_acceptance.py rate-limit-check ^
@@ -98,6 +104,7 @@ from src.integrations.whatsapp_rpa.phone_acceptance import (
     run_first_touch_cap,
     run_normalize_ui,
     run_pair_chat,
+    run_ui_probe,
     run_rate_limit_check,
     run_stop_test,
 )
@@ -383,6 +390,7 @@ def parser() -> argparse.ArgumentParser:
     pair.add_argument("--max-seconds", type=float, default=540)
 
     sub.add_parser("normalize-ui", parents=[common])
+    sub.add_parser("ui-probe", parents=[common])
 
     cap = sub.add_parser("first-touch-cap", parents=[common])
     cap.add_argument("--cap", type=int, default=2)
@@ -481,6 +489,11 @@ async def _dispatch(args, data, evidence, inbox, reader, decide, *, devices=None
         device = (devices or {}).get("a") or build_device(args, evidence, serial=args.serial, label="a", reader=reader)
         loop = make_loop(args, inbox, device, data / "ledger.db", args.account, decide or _unused_decide)
         report = await run_normalize_ui(loop, args.phone, evidence)
+    elif args.command == "ui-probe":
+        if not getattr(args, "serial", ""):
+            raise SystemExit("ui-probe 需要 --serial")
+        device = (devices or {}).get("a") or build_device(args, evidence, serial=args.serial, label="a", reader=reader)
+        report = await run_ui_probe(device, evidence)
     elif args.command == "pair-chat":
         if decide is None:
             decide = await build_decide(args, inbox)

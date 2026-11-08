@@ -649,27 +649,33 @@ def lines_to_screen(lines: Sequence[Dict[str, Any]], width: int, height: int,
         composer_items.append((text, box))
     from src.integrations.whatsapp_rpa.phone_send import composer_is_placeholder as _placeholder
     keyboard_floor = 1200.0 if float(height) <= 1800 else float(height) * 0.72
-    kept_items = []
-    for text, box in composer_items:
-        # 键盘弹出后，贴着左缘、y 超过大约 1200 的短词是键帽。长句和「发消息」留下。
-        if (
-            not _placeholder(text)
-            and float(box[1]) >= keyboard_floor
-            and float(box[0]) < 80
-            and _box_width(box) < 120
-        ):
-            notes.append(text)
-            continue
-        kept_items.append((text, box))
-    composer_items = kept_items
     zone = _keyboard_zone_top(composer_items, float(width), float(height))
+    if zone is None:
+        kept_items = []
+        for text, box in composer_items:
+            # 还没认出整块键盘时，只丢掉贴着左缘的短键帽。长句和「发消息」留下。
+            if (
+                not _placeholder(text)
+                and float(box[1]) >= keyboard_floor
+                and float(box[0]) < 80
+                and _box_width(box) < 120
+            ):
+                notes.append(text)
+                continue
+            kept_items.append((text, box))
+        composer_items = kept_items
     if zone is not None:
         above: List[tuple] = []
         for text, box in composer_items:
-            if _placeholder(text) or float(box[1]) < float(zone) - 2:
+            if _placeholder(text):
                 above.append((text, box))
                 continue
-            if is_keycap(text) or _key_sized(text, box, float(width)):
+            top = float(box[1])
+            bottom = float(box[3])
+            # 键帽、候选条都在键盘里。键盘弹出后这块区域的字一律不算输入框，也不算气泡。
+            if top >= float(zone) - 2 or (
+                len(text) <= 4 and bottom >= float(zone) - 120
+            ):
                 notes.append(text)
                 continue
             above.append((text, box))
@@ -987,6 +993,7 @@ class EvidenceLog:
             "incoming": list(getattr(screen, "incoming", []) or []),
             "source": str(getattr(screen, "source", "") or ""),
             "ui_dump": str(getattr(screen, "ui_dump", "") or ""),
+            "ui_dump_error": dict(getattr(screen, "ui_dump_error", None) or {}),
             "ocr_lines": list(getattr(screen, "ocr_lines", []) or []),
         }
         if extra:
@@ -1178,6 +1185,7 @@ def screen_from_ui_xml(raw: bytes) -> Optional[PhoneScreen]:
     height = 0
     titles: List[str] = []
     entry: Optional[str] = None
+    entry_box: List[int] = []
     entry_bottom = -1
     bubbles: List[tuple] = []
     for node in root.iter():
@@ -1193,6 +1201,8 @@ def screen_from_ui_xml(raw: bytes) -> Optional[PhoneScreen]:
             if entry is None or bottom >= entry_bottom:
                 entry = text
                 entry_bottom = bottom
+                if bounds:
+                    entry_box = [int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3])]
             continue
         shown = text.strip() or str(node.get("content-desc") or "").strip()
         if _is_title(rid) and shown:
@@ -1238,6 +1248,7 @@ def screen_from_ui_xml(raw: bytes) -> Optional[PhoneScreen]:
         last_incoming=incoming[-1] if incoming else "",
         bubbles=transcript,
         source="uiautomator",
+        entry_box=entry_box,
         shot_size=[int(width), int(height or 0)],
     )
 
@@ -1256,6 +1267,9 @@ class SshAdbPhoneDevice:
         self.read_screen_fn = read_screen_fn
         self.runner = runner or subprocess_runner
         self.ui_dump_status = ""
+        self.ui_dump_error: Dict[str, Any] = {}
+        self.ui_dump_attempts: List[Dict[str, Any]] = []
+        self.dump_pause = 0.5
         self.last_tap: Dict[str, Any] = {}
         self._last_screen: Optional[PhoneScreen] = None
 
@@ -1287,7 +1301,7 @@ class SshAdbPhoneDevice:
         await self._run(["shell", "input", "keyevent", "111"])
 
     async def clear_composer(self) -> None:
-        """全选后删除。不长按，也不按返回。长按气泡会打开「发送给」。"""
+        """点中 entry 后全选删除。不长按，也不按返回。长按气泡会打开「发送给」。"""
         from src.integrations.whatsapp_rpa.phone_send import forward_page
         looked = None
         try:
@@ -1296,6 +1310,15 @@ class SshAdbPhoneDevice:
             looked = None
         if looked is not None and forward_page(looked):
             await self.press_back()
+            return
+        box = list(getattr(looked, "entry_box", None) or [])
+        if len(box) >= 4:
+            await self.tap_xy(
+                int((int(box[0]) + int(box[2])) / 2),
+                int((int(box[1]) + int(box[3])) / 2),
+            )
+            await self._run(["shell", "input", "keycombination", "113", "29"])
+            await self._run(["shell", "input", "keyevent", "67"])
             return
         point = select_all_point(getattr(looked, "ocr_lines", None) or []) if looked is not None else None
         if point is not None:
@@ -1395,34 +1418,104 @@ class SshAdbPhoneDevice:
         text = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out)
         return parse_wa_notifications(text)
 
-    async def dump_ui_xml(self) -> bytes:
-        """这批手机 dump 会被杀掉。失败只记一次，之后直接走 OCR。"""
-        if self.ui_dump_status and self.ui_dump_status != "ok":
-            return b""
-        await self._run(["shell", "rm", "-f", _UI_XML_PATH])
-        code, out, err = await self._run(
-            ["shell", "uiautomator", "dump", _UI_XML_PATH],
+    def _dump_attempt(self, adb_args: Sequence[str], code: int, out: Any, err: Any) -> Dict[str, Any]:
+        stdout = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out or "")
+        stderr = err if isinstance(err, str) else (
+            err.decode("utf-8", "replace") if isinstance(err, (bytes, bytearray)) else str(err or "")
         )
-        blob = out if isinstance(out, (bytes, bytearray)) else str(out or "").encode("utf-8")
-        err_text = err if isinstance(err, str) else ""
-        text = blob.decode("utf-8", "replace") + err_text
-        if code == 137 or "Killed" in text:
-            self.ui_dump_status = "killed"
-            return b""
+        shown = stdout if "<hierarchy" not in stdout and len(stdout) <= 240 else stdout[:240]
+        attempt = {
+            "code": int(code),
+            "argv": [str(part) for part in self._argv(adb_args)],
+            "stdout": shown,
+            "stderr": stderr[:500],
+        }
+        self.ui_dump_attempts.append(attempt)
+        self.ui_dump_error = attempt
+        return attempt
+
+    def _dump_failure(self, code: int, out: Any, err: Any) -> str:
+        stdout = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out or "")
+        stderr = err if isinstance(err, str) else (
+            err.decode("utf-8", "replace") if isinstance(err, (bytes, bytearray)) else str(err or "")
+        )
+        blob = stdout + "\n" + stderr
+        if code == 137 or "Killed" in blob:
+            return "killed"
+        if "could not get idle state" in blob.casefold() or "idle state" in blob.casefold():
+            return "idle"
         if code != 0:
-            self.ui_dump_status = f"exit:{code}"
-            return b""
-        code, out, err = await self._run(["shell", "cat", _UI_XML_PATH])
-        if code != 0 or not out:
-            self.ui_dump_status = "empty"
-            return b""
+            return f"exit:{code}"
+        return ""
+
+    async def dump_ui_xml(self) -> bytes:
+        """先写文件再 exec-out cat。不行就 dump 到 /dev/tty。失败再试 2 次，间隔 0.5 秒。"""
+        import asyncio
+        self.ui_dump_attempts = []
+        pause = float(getattr(self, "dump_pause", 0.5) or 0)
+        last_status = "exit:1"
+        for round_index in range(3):
+            xml, status = await self._dump_via_file()
+            if xml and not status:
+                self.ui_dump_status = "ok"
+                self.ui_dump_error = {}
+                return xml
+            if status and status != "no-entry":
+                last_status = status
+            tty_xml, tty_status = await self._dump_via_tty()
+            if tty_xml and not tty_status:
+                self.ui_dump_status = "ok"
+                self.ui_dump_error = {}
+                return tty_xml
+            if tty_status and tty_status != "no-entry":
+                last_status = tty_status
+            saved = tty_xml or xml
+            if saved and (status == "no-entry" or tty_status == "no-entry"):
+                self.ui_dump_status = "no-entry"
+                return saved
+            if round_index < 2 and pause:
+                await asyncio.sleep(pause)
+        self.ui_dump_status = last_status
+        return b""
+
+    async def _dump_via_file(self) -> tuple:
+        await self._run(["shell", "rm", "-f", _UI_XML_PATH])
+        args = ["shell", "uiautomator", "dump", _UI_XML_PATH]
+        code, out, err = await self._run(args)
+        self._dump_attempt(args, code, out, err)
+        status = self._dump_failure(code, out, err)
+        if status:
+            return b"", status
+        cat_args = ["exec-out", "cat", _UI_XML_PATH]
+        code, out, err = await self._run(cat_args)
+        self._dump_attempt(cat_args, code, out, err)
+        status = self._dump_failure(code, out, err)
+        if status or not out:
+            return b"", status or "empty"
         if isinstance(out, str):
             out = out.encode("utf-8")
-        if screen_from_ui_xml(out) is None:
-            self.ui_dump_status = "no-entry"
-            return b""
-        self.ui_dump_status = "ok"
-        return bytes(out)
+        payload = bytes(out)
+        if b"<" not in payload:
+            return b"", "empty"
+        if screen_from_ui_xml(payload) is None:
+            return payload, "no-entry"
+        return payload, ""
+
+    async def _dump_via_tty(self) -> tuple:
+        args = ["exec-out", "uiautomator", "dump", "/dev/tty"]
+        code, out, err = await self._run(args)
+        self._dump_attempt(args, code, out, err)
+        status = self._dump_failure(code, out, err)
+        if status:
+            return b"", status
+        if isinstance(out, str):
+            out = out.encode("utf-8")
+        payload = _xml_payload(bytes(out or b""))
+        if not payload:
+            return b"", "empty"
+        if screen_from_ui_xml(payload) is None:
+            return payload, "no-entry"
+        return payload, ""
 
     async def scroll_to_latest(self) -> None:
         """先上滑到最新消息，再点右下角的「↓」。读屏前调用，避免停在旧记录。"""
@@ -1442,6 +1535,7 @@ class SshAdbPhoneDevice:
         parsed = screen_from_ui_xml(await self.dump_ui_xml())
         if parsed is not None and _tree_text_usable(parsed):
             parsed.ui_dump = self.ui_dump_status
+            parsed.ui_dump_error = {}
             shot_w, shot_h = png_size(png)
             if shot_w and shot_h:
                 parsed.shot_size = [int(shot_w), int(shot_h)]
@@ -1460,6 +1554,7 @@ class SshAdbPhoneDevice:
         from src.integrations.whatsapp_rpa.devanagari_ocr import supplement_screen
         screen = supplement_screen(screen, png)
         screen.ui_dump = self.ui_dump_status
+        screen.ui_dump_error = dict(self.ui_dump_error or {})
         self._last_screen = screen
         return screen
 
@@ -2481,6 +2576,114 @@ async def reconcile_failed_history(loop_a: Any, loop_b: Any, phone_a: str, phone
     return found
 
 
+def _device_dump_report(device: Any) -> Dict[str, Any]:
+    """把这次 dump 的退出码、整条命令和 stderr 放进报告。stdout 为空也要留下。"""
+    error = dict(getattr(device, "ui_dump_error", None) or {})
+    return {
+        "status": str(getattr(device, "ui_dump_status", "") or ""),
+        "error": error,
+        "attempts": list(getattr(device, "ui_dump_attempts", None) or []),
+    }
+
+
+def summarize_ui_xml(raw: bytes) -> Dict[str, Any]:
+    """只数节点，不点击。解析失败时节点数为 0，并带上错误。"""
+    import xml.etree.ElementTree as ET
+    payload = _xml_payload(raw or b"")
+    if not payload:
+        return {"nodes": 0, "message_text": 0, "parse_error": "empty"}
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        return {"nodes": 0, "message_text": 0, "parse_error": str(exc)}
+    nodes = list(root.iter())
+    messages = 0
+    for node in nodes:
+        if "message_text" in str(node.get("resource-id") or "").lower():
+            messages += 1
+    return {"nodes": len(nodes), "message_text": messages, "parse_error": ""}
+
+
+def last_speaker_label(screen_a: Any, screen_b: Any, ledger_a: Any, ledger_b: Any) -> str:
+    """最后一条是谁发的。屏幕上最下面的气泡优先，对不上再看台账里最晚的 sent。"""
+    def side_of(screen: Any) -> str:
+        rows = [
+            row for row in (getattr(screen, "bubbles", None) or [])
+            if str((row or {}).get("side") or "") in {"in", "out"}
+            and str((row or {}).get("text") or "").strip()
+        ]
+        if rows:
+            last = max(rows, key=lambda row: float((row or {}).get("bottom") or 0))
+            return str(last.get("side") or "")
+        outgoing = [item for item in (getattr(screen, "outgoing", None) or []) if str(item or "").strip()]
+        incoming = [item for item in (getattr(screen, "incoming", None) or []) if str(item or "").strip()]
+        if outgoing and not incoming:
+            return "out"
+        if incoming and not outgoing:
+            return "in"
+        return ""
+
+    votes: List[str] = []
+    a_side = side_of(screen_a)
+    b_side = side_of(screen_b)
+    if a_side == "out":
+        votes.append("A")
+    elif a_side == "in":
+        votes.append("B")
+    if b_side == "out":
+        votes.append("B")
+    elif b_side == "in":
+        votes.append("A")
+    if votes and all(item == votes[0] for item in votes):
+        return votes[0]
+
+    def latest(ledger: Any, label: str):
+        best = None
+        for row in ledger.list_sends() if ledger is not None else []:
+            if str((row or {}).get("status") or "") != "sent":
+                continue
+            ts = float((row or {}).get("ts") or 0)
+            if best is None or ts >= best[0]:
+                best = (ts, label)
+        return best
+
+    left = latest(ledger_a, "A")
+    right = latest(ledger_b, "B")
+    if left and right:
+        return left[1] if left[0] >= right[0] else right[1]
+    if left or right:
+        return (left or right)[1]
+    return votes[0] if votes else ""
+
+
+async def run_ui_probe(device: Any, evidence: EvidenceLog) -> Dict[str, Any]:
+    """只 dump 界面树。不打开会话，不点屏幕。"""
+    raw = b""
+    try:
+        raw = await device.dump_ui_xml()
+    except Exception as exc:
+        return evidence.finish({
+            "command": "ui-probe", "ok": False, "nodes": 0, "message_text": 0,
+            "error": {"stderr": str(exc), "code": -1, "argv": []},
+            "ui_dump": _device_dump_report(device),
+        })
+    if not isinstance(raw, (bytes, bytearray)):
+        raw = str(raw or "").encode("utf-8")
+    summary = summarize_ui_xml(bytes(raw))
+    report = _device_dump_report(device)
+    return evidence.finish({
+        "command": "ui-probe",
+        "ok": summary["nodes"] > 0 and not summary.get("parse_error"),
+        "nodes": summary["nodes"],
+        "message_text": summary["message_text"],
+        "parse_error": summary.get("parse_error") or "",
+        "error": report.get("error") or {},
+        "ui_dump": report,
+        "turns": [],
+        "history": [],
+    })
+
+
 async def run_normalize_ui(loop: Any, phone: str, evidence: EvidenceLog) -> Dict[str, Any]:
     """只回到聊天页、清掉无关草稿、截图。不生成回复，也不点发送。"""
     timer = StepTimer()
@@ -2514,6 +2717,7 @@ async def run_normalize_ui(loop: Any, phone: str, evidence: EvidenceLog) -> Dict
         "timings": timer.rows,
         "turns": [],
         "history": ledger_history(loop.ledger),
+        "ui_dump": _device_dump_report(loop.device),
     })
 
 
@@ -2538,6 +2742,7 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
     loops = {"A": loop_a, "B": loop_b}
     results = []
     baselines: Dict[str, List[str]] = {"A": [], "B": []}
+    reply_phase = 0
     startup = StepTimer()
     await prepare_phone(loop_a, phone_b, startup)
     await prepare_phone(loop_b, phone_a, startup)
@@ -2550,6 +2755,10 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
         return {
             "command": "pair-chat", "ok": partial_ok, "turns": results,
             "history": history, "timings": timings,
+            "ui_dump": {
+                "A": _device_dump_report(loop_a.device),
+                "B": _device_dump_report(loop_b.device),
+            },
         }
 
     def flush() -> None:
@@ -2572,7 +2781,7 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
         if expired():
             stopped = "max_seconds"
             break
-        loop, own, peer, label = seats[index % 2]
+        loop, own, peer, label = seats[(index + (reply_phase if index else 0)) % 2]
         other = "B" if label == "A" else "A"
         if index == 0:
             baselines[other] = await snapshot_incoming(loops[other].device, own)
@@ -2597,11 +2806,18 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
                     status = "sent"
                 elif own_bubbles:
                     reason = "own_bubbles_present"
+                other_screen = await _read(loops[other].device)
+                speaker = last_speaker_label(
+                    opener_screen, other_screen, loop_a.ledger, loop_b.ledger,
+                )
+                reply_phase = 1 if speaker == "B" else 0
                 results.append({
                     "turn": index, "seat": label, "status": status,
                     "reason": reason,
                     "delivered": seed_on_screen, "tapped": False,
                     "phone": peer_id,
+                    "last_speaker": speaker,
+                    "next_seat": "A" if speaker == "B" else "B",
                 })
                 flush()
                 continue

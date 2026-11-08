@@ -451,6 +451,8 @@ class PhoneScreen:
     composer_left: float = 0.0
     source: str = ""
     ui_dump: str = ""
+    ui_dump_error: Dict[str, Any] = field(default_factory=dict)
+    entry_box: List[int] = field(default_factory=list)
     shot_size: List[int] = field(default_factory=list)
     ocr_size: List[int] = field(default_factory=list)
 

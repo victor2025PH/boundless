@@ -330,7 +330,8 @@ async def test_device_prefers_ui_dump_and_saves_ocr_boxes_on_fallback(tmp_path: 
     assert screen.source == "uiautomator"
     assert ocr_calls["n"] == 0
     assert any("shell uiautomator dump /sdcard/wa_ui.xml" in call for call in calls)
-    assert any("shell cat /sdcard/wa_ui.xml" in call for call in calls)
+    assert any("exec-out cat /sdcard/wa_ui.xml" in call for call in calls)
+    assert not any("uiautomator dump /dev/tty" in call for call in calls)
     assert screen_from_ui_xml(xml).composer == screen.composer
 
     def fail_dump(argv):
@@ -349,6 +350,7 @@ async def test_device_prefers_ui_dump_and_saves_ocr_boxes_on_fallback(tmp_path: 
         return parsed
 
     fallback = SshAdbPhoneDevice("hub176", "SERIAL_A", ocr_with_boxes, runner=fail_dump)
+    fallback.dump_pause = 0
     wrapped = RecordingDevice(fallback, EvidenceLog(tmp_path / "ocr"), "a")
     saved = await wrapped.read_screen(png)
     assert saved.source == "ocr"
@@ -390,17 +392,176 @@ async def test_killed_ui_dump_is_tried_once_then_ocr(tmp_path: Path):
         return screen
 
     device = SshAdbPhoneDevice("hub176", "SERIAL_A", ocr, runner=runner)
+    device.dump_pause = 0
     first = await device.read_screen(png)
     second = await device.read_screen(png)
     assert first.composer == "你好，早上好，在忙吗"
     assert second.composer == first.composer
     assert first.ui_dump == "killed"
-    assert sum(1 for call in calls if "uiautomator" in call) == 1
+    assert first.ui_dump_error["code"] == 137
+    assert first.ui_dump_error["stderr"] == "Killed"
+    assert any("uiautomator" in part for part in first.ui_dump_error["argv"])
+    assert any("exec-out uiautomator dump /dev/tty" in call for call in calls)
+    assert sum(1 for call in calls if "uiautomator dump /dev/tty" in call) == 6
     await device.tap_send()
     key_at = max(i for i, call in enumerate(calls) if "keyevent" in call and "111" in call)
     size_at = min(i for i, call in enumerate(calls) if i > key_at and "wm" in call and "size" in call)
     tap_at = min(i for i, call in enumerate(calls) if i > size_at and "input" in call and "tap" in call)
     assert key_at < size_at < tap_at
+
+
+@pytest.mark.asyncio
+async def test_idle_dump_retries_twice_then_uses_the_file(tmp_path: Path):
+    xml = _pair_chat_ui_xml().encode("utf-8")
+    file_dumps = {"n": 0}
+
+    def runner(argv):
+        remote = argv[-1]
+        if "uiautomator" in remote and "/sdcard/" in remote:
+            file_dumps["n"] += 1
+            if file_dumps["n"] < 3:
+                return 1, b"", "ERROR: could not get idle state"
+            return 0, b"dumped\n", ""
+        if "exec-out" in remote and "cat" in remote:
+            return 0, xml, ""
+        if "/dev/tty" in remote:
+            return 1, b"", "could not get idle state"
+        return 0, b"", ""
+
+    device = SshAdbPhoneDevice("hub176", "SERIAL_A", lambda _image: PhoneScreen(), runner=runner)
+    device.dump_pause = 0
+    raw = await device.dump_ui_xml()
+    assert b"message_text" in raw
+    assert device.ui_dump_status == "ok"
+    assert file_dumps["n"] == 3
+    assert device.ui_dump_attempts[0]["code"] == 1
+    assert device.ui_dump_attempts[0]["stderr"]
+    assert device.ui_dump_attempts[0]["argv"]
+
+
+def test_keyboard_region_is_not_the_composer():
+    screen = lines_to_screen([
+        {"text": "+14155552671", "box": [80, 80, 400, 130]},
+        {"text": "你", "box": [52, 339, 87, 372]},
+        {"text": "这段长草稿还挂在输入框里没有发出去", "box": [111, 475, 640, 560]},
+        {"text": "读度毒", "box": [80, 1280, 280, 1340]},
+        {"text": "?123", "box": [18, 1421, 95, 1461]},
+    ], 720, 1600)
+    assert "长草稿" in screen.composer
+    assert "读度毒" not in screen.composer
+    assert "?123" not in screen.composer
+    assert "读度毒" not in screen.outgoing
+    assert "读度毒" not in screen.incoming
+
+
+def test_last_speaker_comes_from_the_lower_bubble_then_the_ledger():
+    from src.integrations.whatsapp_rpa.phone_acceptance import last_speaker_label
+
+    a_screen = PhoneScreen(bubbles=[
+        {"side": "out", "text": "开场", "top": 700, "bottom": 760},
+        {"side": "in", "text": "我刚说完", "top": 1100, "bottom": 1180},
+    ])
+    b_screen = PhoneScreen(bubbles=[
+        {"side": "in", "text": "开场", "top": 700, "bottom": 760},
+        {"side": "out", "text": "我刚说完", "top": 1100, "bottom": 1180},
+    ])
+    assert last_speaker_label(a_screen, b_screen, None, None) == "B"
+    empty = PhoneScreen()
+    ledger_a = PhoneLedger.__new__(PhoneLedger)
+    ledger_b = PhoneLedger.__new__(PhoneLedger)
+    ledger_a.list_sends = lambda: [{"status": "sent", "ts": 10, "body": "甲"}]
+    ledger_b.list_sends = lambda: [{"status": "sent", "ts": 20, "body": "乙"}]
+    assert last_speaker_label(empty, empty, ledger_a, ledger_b) == "B"
+
+
+@pytest.mark.asyncio
+async def test_resume_answers_from_the_side_that_did_not_speak_last(tmp_path: Path):
+    heard = "我刚说完这句"
+
+    def shown(header, own, own_bottom, peer, peer_bottom):
+        return PhoneScreen(
+            header=header, composer="发消息",
+            outgoing=[own], incoming=[peer],
+            bubbles=[
+                {"side": "out", "text": own, "top": own_bottom - 40, "bottom": own_bottom},
+                {"side": "in", "text": peer, "top": peer_bottom - 40, "bottom": peer_bottom},
+            ],
+            ocr_lines=[
+                {"text": header, "box": [80, 80, 460, 130]},
+                {"text": "发消息", "box": [40, 1500, 200, 1560]},
+            ],
+            shot_size=[720, 1600],
+        )
+
+    device_a = LinkPhone("a", PHONE_A, {})
+    device_b = LinkPhone("b", PHONE_B, {})
+    device_a.screen = shown(PHONE_B, "早就发过的一句", 800, heard, 1200)
+    device_b.screen = shown(PHONE_A, heard, 1200, "早就发过的一句", 800)
+    store = InboxStore(tmp_path / "inbox.db")
+
+    async def decide(*, account_id, phone, last_inbound, persona_id=""):
+        return {"ok": True, "reply": "那我接着说"}
+
+    def make(name, account, device):
+        return WaPhoneLoop(
+            account_id=account, inbox=store, device=device, decide_fn=decide,
+            cfg={"enabled": True, "hourly_cap": 20, "daily_cap": 80},
+            ledger=PhoneLedger(tmp_path / f"{name}.db"),
+            now_fn=lambda: 1_700_000_000.0,
+        )
+
+    report = await run_pair_chat(
+        make("a", "seat-a", device_a), make("b", "seat-b", device_b),
+        PHONE_A, PHONE_B, 2, "这句开场还没发过", EvidenceLog(tmp_path / "resume"),
+    )
+    assert report["turns"][0]["reason"] == "own_bubbles_present"
+    assert report["turns"][0]["last_speaker"] == "B"
+    assert report["turns"][0]["next_seat"] == "A"
+    assert report["turns"][0]["tapped"] is False
+    assert report["turns"][1]["seat"] == "A"
+    assert report["turns"][1]["heard"] == heard
+    assert device_a.taps == 1
+    assert device_b.taps == 0
+
+
+@pytest.mark.asyncio
+async def test_ui_probe_counts_nodes_and_does_not_tap(tmp_path: Path):
+    from scripts.wa_phone_loop_acceptance import async_main, parser
+
+    xml = _hindi_chat_ui_xml().encode("utf-8")
+
+    class Probe:
+        def __init__(self):
+            self.taps = 0
+            self.urls = []
+
+        async def dump_ui_xml(self):
+            self.ui_dump_status = "ok"
+            self.ui_dump_error = {}
+            self.ui_dump_attempts = []
+            return xml
+
+        async def tap_send(self):
+            self.taps += 1
+
+        async def open_url(self, url):
+            self.urls.append(url)
+
+    phone = Probe()
+    args = parser().parse_args([
+        "ui-probe",
+        "--data-dir", str(tmp_path / "data"),
+        "--evidence-dir", str(tmp_path / "evidence"),
+        "--adb-ssh-host", "hub176",
+        "--serial", "SERIAL_A",
+    ])
+    report = await async_main(args, devices={"a": phone})
+    assert report["command"] == "ui-probe"
+    assert report["ok"] is True
+    assert report["nodes"] > 0
+    assert report["message_text"] == 2
+    assert phone.taps == 0
+    assert phone.urls == []
 
 
 def test_ocr_box_is_scaled_into_device_pixels_before_tap():
@@ -2846,6 +3007,7 @@ async def test_clear_composer_long_presses_then_selects_all():
         lambda image: PhoneScreen(ocr_lines=[{"text": "全选", "box": [100, 1400, 180, 1450]}]),
         runner=runner,
     )
+    device.dump_pause = 0
     await device.clear_composer()
     joined = "\n".join(calls)
     assert "800" not in joined
@@ -2874,10 +3036,36 @@ async def test_clear_composer_backs_out_of_forward_page_without_tapping():
         ),
         runner=runner,
     )
+    device.dump_pause = 0
     await device.clear_composer()
     joined = "\n".join(calls)
     assert "KEYCODE_BACK" in joined
     assert "input tap" not in joined
+    assert "800" not in joined
+
+
+@pytest.mark.asyncio
+async def test_clear_composer_taps_the_entry_node_then_selects_all():
+    calls = []
+
+    def runner(argv):
+        remote = argv[-1]
+        calls.append(remote)
+        if "screencap" in remote:
+            return 0, _png(8, 8), ""
+        return 0, b"", ""
+
+    device = SshAdbPhoneDevice(
+        "hub176", "SERIAL_A",
+        lambda image: PhoneScreen(entry_box=[140, 2100, 900, 2280], composer="一段长草稿"),
+        runner=runner,
+    )
+    device.dump_pause = 0
+    await device.clear_composer()
+    joined = "\n".join(calls)
+    assert "input tap 520 2190" in joined
+    assert "keycombination 113 29" in joined
+    assert "keyevent 67" in joined
     assert "800" not in joined
 
 
