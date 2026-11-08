@@ -1065,6 +1065,68 @@ def test_scroll_to_latest_swipes_then_taps_the_down_button():
     assert "input swipe" in blob
     assert "input tap" in blob
 
+    typed = []
+
+    def type_runner(argv):
+        typed.append(argv[-1])
+        if "wm size" in argv[-1]:
+            return 0, b"Physical size: 1080x2400\n", ""
+        return 0, b"", ""
+
+    phone = SshAdbPhoneDevice("hub176", "SERIAL", lambda _png: PhoneScreen(), runner=type_runner)
+    asyncio.run(phone.prefill_text("叫我顾嘉就行"))
+    assert any("clipboard" in line for line in typed)
+    assert any("input keyevent 279" in line for line in typed)
+    typed.clear()
+    asyncio.run(phone.prefill_text("hello"))
+    assert any("input text hello" in line for line in typed)
+
+
+def test_report_is_written_before_the_run_finishes(tmp_path: Path):
+    log = EvidenceLog(tmp_path)
+    log.save("a-read1", b"png", PhoneScreen(header="+639543629194", composer="发消息"))
+    early = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert early["partial"] is True
+    assert early["steps"][0]["name"] == "a-read1"
+    final = log.finish({"command": "pair-chat", "ok": True, "turns": []})
+    assert final["partial"] is False
+    assert "report.json" in final["report_path"]
+
+
+@pytest.mark.asyncio
+async def test_unstable_frames_stop_after_three_tries():
+    from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
+
+    class Jitter:
+        def __init__(self):
+            self.n = 0
+            self.t = 0.0
+            self.open_timeout = 30.0
+
+        def clock(self):
+            return self.t
+
+        async def sleep_fn(self, delay):
+            self.t += delay
+
+        async def screencap(self):
+            return b"png"
+
+        async def read_screen(self, png):
+            self.n += 1
+            return PhoneScreen(
+                header="+639543629194", composer="早呀，刚醒，还没吃上早饭呢。",
+                ocr_lines=[{"text": f"box-{self.n}", "box": [1, 1, 20, 20]}],
+                shot_size=[720, 1600], composer_left=40,
+            )
+
+    device = Jitter()
+    ready = await wait_for_chat(device, "+639543629194", expected="早呀，刚醒，还没吃上早饭呢。")
+    assert ready["ready"] is True
+    assert ready["timings"]["stability_tries"] == 3
+    assert ready["timings"]["wait_ms"] < 5000
+    assert device.n <= 8
+
 
 @pytest.mark.asyncio
 async def test_sliding_frame_waits_until_the_boxes_stay_still():

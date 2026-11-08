@@ -842,20 +842,32 @@ class EvidenceLog:
         ocr_path.write_text(json.dumps(ocr, ensure_ascii=False, indent=2), encoding="utf-8")
         step = {"name": name, "png": str(png_path), "ocr": str(ocr_path), **ocr}
         self.steps.append(step)
+        self._write({"ok": False, "partial": True, "steps": self.steps})
         logger.info("%s", json.dumps(safe_log_fields(
             {"event": "evidence", "name": name, "header": screen.header, "composer": screen.composer},
             self.secrets,
         ), ensure_ascii=False))
         return step
 
-    def finish(self, report: Dict[str, Any]) -> Dict[str, Any]:
-        report = dict(report)
-        report["steps"] = self.steps
+    def _write(self, report: Dict[str, Any]) -> Dict[str, Any]:
         clean = json.loads(redact_text(json.dumps(report, ensure_ascii=False), self.secrets))
         path = self.dir / "report.json"
         path.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
         clean["report_path"] = str(path)
         return clean
+
+    def checkpoint(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        """每一步都落盘。外层超时或中途崩溃时，报告里至少有已经走完的轮次。"""
+        body = dict(report)
+        body["steps"] = self.steps
+        body["partial"] = body.get("ok") is not True
+        return self._write(body)
+
+    def finish(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        report = dict(report)
+        report["steps"] = self.steps
+        report["partial"] = False
+        return self._write(report)
 
 
 class RecordingDevice:
@@ -1060,6 +1072,30 @@ class SshAdbPhoneDevice:
         deletes = " ".join(["input keyevent 67"] * 100)
         await self._run(["shell", f"input tap {x} {y}; input keyevent 123; {deletes}"])
 
+    async def prefill_text(self, text: str) -> None:
+        """在当前聊天页预填，不打开 wa.me。
+
+        纯英文用 ``input text``。汉字用剪贴板再粘贴，因为 ``input text`` 会丢掉非 ASCII。
+        """
+        import base64
+        import shlex
+
+        await self.clear_composer()
+        body = str(text or "")
+        if not body:
+            return
+        if body.isascii():
+            token = body.replace(" ", "%s")
+            await self._run(["shell", "input", "text", token])
+            return
+        encoded = base64.b64encode(body.encode("utf-8")).decode("ascii")
+        script = (
+            f"echo {shlex.quote(encoded)} | base64 -d | "
+            "cmd clipboard set-primary-clip --user 0 --source clipboard; "
+            "input keyevent 279"
+        )
+        await self._run(["shell", script])
+
     async def _device_size(self) -> tuple:
         code, out, _err = await self._run(["shell", "wm", "size"])
         text = out.decode("utf-8", "replace") if isinstance(out, (bytes, bytearray)) else str(out)
@@ -1145,10 +1181,6 @@ class SshAdbPhoneDevice:
         ])
 
     async def read_screen(self, png: bytes) -> PhoneScreen:
-        try:
-            await self.scroll_to_latest()
-        except Exception:
-            pass
         parsed = screen_from_ui_xml(await self.dump_ui_xml())
         if parsed is not None:
             parsed.ui_dump = self.ui_dump_status
@@ -1255,6 +1287,12 @@ async def read_peer_text(device: Any, peer_phone: str, evidence: EvidenceLog,
             noted = str(note.get("text") or "").strip()
             break
     await open_peer_chat(device, wanted)
+    scroll = getattr(device, "scroll_to_latest", None)
+    if scroll is not None:
+        try:
+            await scroll()
+        except Exception:
+            pass
     from src.integrations.whatsapp_rpa.phone_send import wait_for_chat
     ready = await wait_for_chat(device, wanted, expected="")
     if not ready.get("ready"):
@@ -1509,6 +1547,7 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
     baselines: Dict[str, List[str]] = {"A": [], "B": []}
     await reconcile_visible(loop_a, phone_b)
     await reconcile_visible(loop_b, phone_a)
+    evidence.checkpoint({"command": "pair-chat", "ok": False, "turns": results})
     for index in range(int(turns)):
         loop, own, peer, label = seats[index % 2]
         other = "B" if label == "A" else "A"
@@ -1572,5 +1611,6 @@ async def run_pair_chat(loop_a: Any, loop_b: Any, phone_a: str, phone_b: str,
             "source": heard.get("source"), "status": send.get("status") or item.get("reply"),
             "send": send, "ok": send.get("status") == "sent",
         })
+        evidence.checkpoint({"command": "pair-chat", "ok": False, "turns": results})
     ok = len(results) == int(turns) and all(row.get("status") == "sent" for row in results)
     return evidence.finish({"command": "pair-chat", "ok": ok, "turns": results})

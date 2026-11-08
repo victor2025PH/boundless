@@ -371,6 +371,19 @@ async def _run_command(args, data, locks, *, devices=None, decide_fn=None, ocr_r
     for device in (devices or {}).values():
         device.open_timeout = float(args.open_timeout)
 
+    try:
+        report = await _dispatch(
+            args, data, evidence, inbox, reader, decide, devices=devices,
+        )
+    except Exception as exc:
+        evidence.checkpoint({
+            "ok": False, "command": args.command, "error": type(exc).__name__,
+        })
+        raise
+    return report
+
+
+async def _dispatch(args, data, evidence, inbox, reader, decide, *, devices=None) -> dict:
     if args.command == "dry-run":
         device = (devices or {}).get("a") or build_device(args, evidence, serial=args.serial, label="a", reader=reader)
         loop = make_loop(args, inbox, device, data / "ledger.db", args.account, decide or _unused_decide)

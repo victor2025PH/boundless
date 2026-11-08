@@ -310,15 +310,35 @@ class SendOutcome:
     reason: str = ""
     tapped: bool = False
     url: str = ""
+    timings: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
-        return {
+        data = {
             "status": self.status,
             "reason": self.reason,
             "tapped": self.tapped,
             "url": self.url,
             "delivered": self.status == "sent",
         }
+        if self.timings:
+            data["timings"] = dict(self.timings)
+        return data
+
+
+def _wait_result(ready: bool, status: str, reason: str, polls: int, screen: "PhoneScreen",
+                 profile_confirmed: bool, started: float, clock, stable_tries: int,
+                 match: bool = False) -> Dict[str, Any]:
+    elapsed = max(0.0, float(clock()) - float(started))
+    return {
+        "ready": ready, "status": status, "reason": reason,
+        "polls": polls, "header": screen.header, "composer": screen.composer,
+        "match": match, "profile_confirmed": profile_confirmed,
+        "timings": {
+            "wait_ms": int(elapsed * 1000),
+            "polls": polls,
+            "stability_tries": stable_tries,
+        },
+    }
 
 
 async def wait_for_chat(
@@ -356,6 +376,7 @@ async def wait_for_chat(
     polls = 0
     profile_checked = False
     profile_confirmed = False
+    stable_tries = 0
     while True:
         png = await device.screencap()
         screen = await device.read_screen(png)
@@ -363,10 +384,8 @@ async def wait_for_chat(
             screen = PhoneScreen()
         last = screen
         polls += 1
-        if screen_is_sliding(screen):
-            await sleep(0.4)
-            continue
-        if frame_boxes(screen):
+        jittery = screen_is_sliding(screen)
+        if frame_boxes(screen) and not jittery and stable_tries < 3:
             await sleep(0.4)
             png2 = await device.screencap()
             screen2 = await device.read_screen(png2)
@@ -375,8 +394,17 @@ async def wait_for_chat(
             polls += 1
             last = screen2
             if screen_is_sliding(screen2) or frame_boxes(screen2) != frame_boxes(screen):
+                stable_tries += 1
+                screen = screen2
+                if stable_tries < 3:
+                    continue
+            else:
+                screen = screen2
+        elif jittery:
+            stable_tries += 1
+            if stable_tries < 3:
+                await sleep(0.4)
                 continue
-            screen = screen2
         transient = screen_is_transient(screen)
         header_ok = profile_confirmed or header_matches(screen.header, phone=phone)
         if (
@@ -388,11 +416,10 @@ async def wait_for_chat(
             profile_checked = True
             confirmed = await confirm_phone_on_profile(device, phone)
             if not confirmed:
-                return {
-                    "ready": False, "status": "failed", "reason": "header_mismatch",
-                    "polls": polls, "header": screen.header, "composer": screen.composer,
-                    "match": False, "profile_confirmed": False,
-                }
+                return _wait_result(
+                    False, "failed", "header_mismatch", polls, screen, False,
+                    started, clock, stable_tries,
+                )
             profile_confirmed = True
             png = await device.screencap()
             screen = await device.read_screen(png)
@@ -403,34 +430,29 @@ async def wait_for_chat(
             transient = screen_is_transient(screen)
             header_ok = True
         if not transient and header_ok and screen_is_rate_limited(screen):
-            return {
-                "ready": False, "status": "throttled", "reason": "wa_rate_limit",
-                "polls": polls, "header": screen.header, "composer": screen.composer,
-                "match": False,
-            }
+            return _wait_result(
+                False, "throttled", "wa_rate_limit", polls, screen, profile_confirmed,
+                started, clock, stable_tries,
+            )
         if not transient and header_ok and composer_settled(screen.composer, expected):
             matched = (not expected) or composer_matches(screen.composer, expected)
-            return {
-                "ready": True, "status": "ready", "reason": "",
-                "polls": polls, "header": screen.header, "composer": screen.composer,
-                "match": matched, "profile_confirmed": profile_confirmed,
-            }
+            return _wait_result(
+                True, "ready", "", polls, screen, profile_confirmed,
+                started, clock, stable_tries, match=matched,
+            )
         if (
             not transient and header_ok and expected
             and not _composer_still_arriving(screen.composer, expected)
         ):
-            return {
-                "ready": False, "status": "failed", "reason": "composer_mismatch",
-                "polls": polls, "header": screen.header, "composer": screen.composer,
-                "match": False,
-            }
-        if float(clock()) - started >= limit or polls >= 40:
-            return {
-                "ready": False, "status": "failed",
-                "reason": _wait_timeout_reason(screen, phone, expected),
-                "polls": polls, "header": screen.header, "composer": screen.composer,
-                "match": False,
-            }
+            return _wait_result(
+                False, "failed", "composer_mismatch", polls, screen, profile_confirmed,
+                started, clock, stable_tries,
+            )
+        if float(clock()) - started >= limit or polls >= 12:
+            return _wait_result(
+                False, "failed", _wait_timeout_reason(screen, phone, expected),
+                polls, screen, profile_confirmed, started, clock, stable_tries,
+            )
         await sleep(step)
 
 
@@ -520,27 +542,52 @@ def _wait_timeout_reason(screen: PhoneScreen, phone: str, expected: str) -> str:
     return "chat_not_ready"
 
 
-async def _replace_draft_if_needed(device: Any, url: str, body: str, phone: str) -> str:
-    """预填前先看输入框。已经是这句就不再打开链接，以免叠上一遍。
-
-    框里是别的草稿就先清空，再预填。空框直接预填。
-    """
-    current = ""
+async def _peek(device: Any) -> "PhoneScreen":
     try:
         screen = await device.read_screen(await device.screencap())
     except Exception:
-        screen = None
-    if isinstance(screen, PhoneScreen):
-        from src.integrations.whatsapp_rpa.phone_identity import header_matches
-        if header_matches(screen.header, phone=phone) and send_confirmed(screen, body):
-            return "already"
-        current = str(screen.composer or "")
-    if composer_matches(current, body):
+        return PhoneScreen()
+    return screen if isinstance(screen, PhoneScreen) else PhoneScreen()
+
+
+def _on_chat(screen: "PhoneScreen", phone: str) -> bool:
+    from src.integrations.whatsapp_rpa.phone_identity import header_matches
+    return header_matches(screen.header, phone=phone) and not screen_is_transient(screen)
+
+
+async def _place_text(device: Any, url: str, body: str, phone: str, stay: bool) -> str:
+    """已经在这个聊天页就地预填，不再打开 wa.me。续发必须走这条，避免进联系人选择页。"""
+    screen = await _peek(device)
+    if _on_chat(screen, phone) and send_confirmed(screen, body):
+        return "already"
+    on_chat = _on_chat(screen, phone)
+    if stay and not on_chat:
+        back = getattr(device, "press_back", None)
+        if back is not None:
+            try:
+                await back()
+            except Exception:
+                pass
+        screen = await _peek(device)
+        on_chat = _on_chat(screen, phone)
+        if not on_chat:
+            return "off_chat"
+    current = str(screen.composer or "") if isinstance(screen, PhoneScreen) else ""
+    if composer_matches(current, body) and on_chat:
+        return "held"
+    if composer_matches(current, body) and not stay:
         return ""
-    if composer_body(current):
-        clear = getattr(device, "clear_composer", None)
-        if clear is not None:
-            await clear()
+    if on_chat or stay:
+        if composer_body(current):
+            clear = getattr(device, "clear_composer", None)
+            if clear is not None:
+                await clear()
+        typer = getattr(device, "prefill_text", None)
+        if typer is not None:
+            await typer(body)
+            return "typed"
+        if stay:
+            return "need_type"
     await device.open_url(url)
     return ""
 
@@ -551,8 +598,11 @@ async def deliver_via_wa_me(
     text: str,
     *,
     dry_run: bool = False,
+    stay: bool = False,
 ) -> SendOutcome:
-    """预填、等到聊天页、核对中文、点发送、再核对气泡。选择页上不点。"""
+    """第一段可以打开 wa.me。已经在聊天页，或同一轮的后续段，只在当前页预填。"""
+    import time
+
     from src.integrations.whatsapp_rpa.phone_identity import wa_me_url
 
     body = str(text or "").strip()
@@ -562,34 +612,57 @@ async def deliver_via_wa_me(
     if dry_run:
         return SendOutcome(status="dry_run", reason="dry_run", url=url)
 
-    draft = await _replace_draft_if_needed(device, url, body, phone)
-    if draft == "already":
-        return SendOutcome(status="sent", reason="already_visible", tapped=False, url=url)
+    started = time.monotonic()
+    placed = await _place_text(device, url, body, phone, stay)
+    if placed == "already":
+        return SendOutcome(
+            status="sent", reason="already_visible", tapped=False, url="",
+            timings={"place": placed, "total_ms": int((time.monotonic() - started) * 1000)},
+        )
+    if placed in {"need_type", "off_chat"}:
+        return SendOutcome(
+            status="failed",
+            reason="contact_picker" if placed == "off_chat" else "prefill_missing",
+            tapped=False, url="",
+            timings={"place": placed, "total_ms": int((time.monotonic() - started) * 1000)},
+        )
     dismiss = getattr(device, "dismiss_keyboard", None)
     if dismiss is not None:
         await dismiss()
-    ready = await wait_for_chat(device, phone, expected=body)
+    limit = 8.0 if placed in {"typed", "held"} or stay else None
+    ready = await wait_for_chat(device, phone, expected=body, timeout=limit)
+    timings = dict(ready.get("timings") or {})
+    timings["place"] = placed
+    timings["total_ms"] = int((time.monotonic() - started) * 1000)
+    used_url = "" if placed in {"typed", "held"} else url
     if not ready.get("ready"):
-        try:
-            await device.press_back()
-        except Exception:
-            pass
+        if placed == "":
+            try:
+                await device.press_back()
+            except Exception:
+                pass
         status = "throttled" if ready.get("reason") == "wa_rate_limit" else "failed"
-        return SendOutcome(status=status, reason=str(ready.get("reason") or "chat_not_ready"), url=url)
+        return SendOutcome(
+            status=status, reason=str(ready.get("reason") or "chat_not_ready"),
+            url=used_url, timings=timings,
+        )
 
     await device.tap_send()
     after = await device.read_screen(await device.screencap())
     if send_confirmed(after, body):
-        return SendOutcome(status="sent", reason="", tapped=True, url=url)
+        timings["total_ms"] = int((time.monotonic() - started) * 1000)
+        return SendOutcome(status="sent", reason="", tapped=True, url=used_url, timings=timings)
     # 原文还在输入框、也没有新气泡：这一下没点中发送按钮，重新定位再点一次。
     # 输入框已经空了就绝不补发，气泡可能只是没被读出来。
     if composer_matches(after.composer, body):
         await device.tap_send()
         after = await device.read_screen(await device.screencap())
         if send_confirmed(after, body):
-            return SendOutcome(status="sent", reason="", tapped=True, url=url)
+            timings["total_ms"] = int((time.monotonic() - started) * 1000)
+            return SendOutcome(status="sent", reason="", tapped=True, url=used_url, timings=timings)
+    timings["total_ms"] = int((time.monotonic() - started) * 1000)
     return SendOutcome(
-        status="failed", reason="bubble_missing", tapped=True, url=url,
+        status="failed", reason="bubble_missing", tapped=True, url=used_url, timings=timings,
     )
 
 

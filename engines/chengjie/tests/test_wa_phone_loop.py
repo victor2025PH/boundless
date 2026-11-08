@@ -115,6 +115,8 @@ def test_reply_chunks_split_on_newlines_and_truncate_a_long_line():
     ]
     long = "啊" * 100
     assert reply_chunks(long) == ["啊" * 80]
+    four = "一\n二\n三\n四"
+    assert reply_chunks(four) == ["一", "二", "三"]
 
 
 @pytest.mark.asyncio
@@ -125,11 +127,18 @@ async def test_multiline_reply_is_sent_as_separate_bubbles(tmp_path: Path):
         def __init__(self):
             self.taps = 0
             self.sent = []
+            self.urls = []
             self.screen = PhoneScreen(header=PHONE, composer="")
 
         async def open_url(self, url: str) -> None:
+            self.urls.append(url)
             text = unquote(parse_qs(urlparse(url).query).get("text", [""])[0])
             self.screen = PhoneScreen(header=PHONE, composer=text)
+
+        async def prefill_text(self, text: str) -> None:
+            self.screen = PhoneScreen(
+                header=PHONE, composer=text, outgoing=list(self.screen.outgoing or []),
+            )
 
         async def screencap(self):
             return b"png"
@@ -151,6 +160,7 @@ async def test_multiline_reply_is_sent_as_separate_bubbles(tmp_path: Path):
     loop = _loop(tmp_path, device, reply=reply)
     result = await loop.handle_inbound(phone=PHONE, text="在吗")
     assert device.taps == 3
+    assert device.urls == []
     assert device.sent == [
         "早呀，这个点起得挺早嘛",
         "我在呢，还没吃早饭，先喝口水缓一缓",

@@ -100,10 +100,11 @@ def client_msg_id(source: str, phone: str, text: str, anchor: str = "") -> str:
 
 
 _REPLY_LINE_LIMIT = 80
+_REPLY_PARTS = 3
 
 
-def reply_chunks(text: str, limit: int = _REPLY_LINE_LIMIT) -> List[str]:
-    """按换行拆成多条短消息。一行太长就截断，不从句子中间再拆开。"""
+def reply_chunks(text: str, limit: int = _REPLY_LINE_LIMIT, parts: int = _REPLY_PARTS) -> List[str]:
+    """按换行拆成多条短消息。一行太长就截断。一轮最多 3 段。"""
     chunks: List[str] = []
     cap = max(1, int(limit))
     for raw in str(text or "").splitlines():
@@ -113,6 +114,8 @@ def reply_chunks(text: str, limit: int = _REPLY_LINE_LIMIT) -> List[str]:
         if len(line) > cap:
             line = line[:cap]
         chunks.append(line)
+        if len(chunks) >= max(1, int(parts)):
+            break
     return chunks
 
 
@@ -387,6 +390,7 @@ class WaPhoneLoop:
                 source="reply",
                 client_msg_id=self.scoped_msg_id("reply", e164, chunk, f"{anchor}:{index}"),
                 display_name=display_name,
+                stay=index > 0,
             )
             sends.append(sent)
             if sent.get("status") != "sent":
@@ -413,6 +417,7 @@ class WaPhoneLoop:
         client_msg_id: str,
         display_name: str = "",
         dry_run: Optional[bool] = None,
+        stay: bool = False,
     ) -> Dict[str, Any]:
         """回复、队列、关怀、首触、唤醒都从这里出去。"""
         e164 = normalize_e164(phone)
@@ -471,7 +476,7 @@ class WaPhoneLoop:
             }
         is_dry = self.cfg.get("dry_run") if dry_run is None else dry_run
         outcome = await deliver_via_wa_me(
-            self.device, e164, body, dry_run=bool(is_dry),
+            self.device, e164, body, dry_run=bool(is_dry), stay=stay,
         )
         if outcome.status == "throttled":
             self.ledger.release(client_msg_id)
